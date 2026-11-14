@@ -46,8 +46,49 @@ both `frontend\node_modules` and any `.venv` are gitignored.
 
 ## 2. First-time setup
 
+### 2.1 You already have a clone (the normal case)
+
+`E:\DEPI\AI-Doctor-FollowUp-Agent` is already a working copy, so **do not clone
+again** — `git clone` into an occupied directory fails. Fetch the P1 branch into
+that existing clone instead:
+
 ```powershell
 cd E:\DEPI\AI-Doctor-FollowUp-Agent
+
+# Keep any local work out of the way, then switch to the P1 branch.
+git status
+git stash push -u -m "local work before P1 validation"   # only if the tree is dirty
+git fetch origin
+git switch arena/d86c4f98-ai-doctor-followup-agent        # creates a tracking branch
+git pull --ff-only
+
+# Confirm you are on the reviewed commit.
+git rev-parse HEAD
+git log --oneline -3
+```
+
+If `git switch` reports that the branch already exists locally, use
+`git switch arena/d86c4f98-ai-doctor-followup-agent` and then `git pull --ff-only`.
+
+To go back afterwards: `git switch main`, then `git stash pop` if you stashed.
+
+> A detached checkout is also fine and avoids touching local branches:
+> `git fetch origin && git checkout --detach origin/arena/d86c4f98-ai-doctor-followup-agent`
+
+### 2.2 Optional: a fresh clone somewhere else
+
+Only needed for a from-scratch reproducibility check. Use a **new, empty** path:
+
+```powershell
+git clone --branch arena/d86c4f98-ai-doctor-followup-agent `
+    https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent.git `
+    E:\DEPI\AI-Doctor-FollowUp-Agent-p1-check
+```
+
+### 2.3 Install (both cases)
+
+```powershell
+cd E:\DEPI\AI-Doctor-FollowUp-Agent           # or the fresh-clone path
 
 # 1. Read-only readiness check (changes nothing)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\preflight.ps1
@@ -168,9 +209,14 @@ Run each command, record the real output, and attach it to the P1 PR review.
 # 1. Interpreter selection
 py -3.12 -V                                  # expect: Python 3.12.x
 
-# 2. Clean install from a fresh clone
-git clone https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent.git E:\DEPI\AI-Doctor-FollowUp-Agent
+# 2. Fetch the reviewed branch into the EXISTING clone (see section 2.1;
+#    do not re-clone onto an occupied path)
 cd E:\DEPI\AI-Doctor-FollowUp-Agent
+git fetch origin
+git switch arena/d86c4f98-ai-doctor-followup-agent
+git pull --ff-only
+git rev-parse HEAD
+
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\preflight.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\setup.ps1
 
@@ -194,7 +240,34 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\test_al
 # 7. Stop
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\stop.ps1
 Get-NetTCPConnection -LocalPort 8000,5173 -State Listen -ErrorAction SilentlyContinue
+
+# 8. Command-wrapper regression tests (P1-R06): expect "PASS (N checks)"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\tests\invoke_native.tests.ps1
 ```
+
+### Paths containing spaces (P1-R03)
+
+`start.ps1` returns the correct exit code and renders the page even when the
+repository path contains spaces. To verify, use a copy in a path with a space:
+
+```powershell
+# Copy the checked-out branch to a path containing a space
+$src = 'E:\DEPI\AI-Doctor-FollowUp-Agent'
+$dst = 'E:\DEPI\AI Doctor FollowUp Agent'
+robocopy $src $dst /MIR /XD .venv node_modules data .git /NFL /NDL /NJH /NJS
+
+cd $dst
+$env:APP_VENV_DIR = Join-Path $dst '.venv'
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\setup.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\start.ps1 -NoBrowser
+(Invoke-WebRequest http://127.0.0.1:8000/health).StatusCode    # expect 200
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\stop.ps1
+```
+
+`backend.err.log` must not contain "No module named 'app'" — that is the symptom
+of `--app-dir` being split at the space.
+
+> `robocopy` returns exit codes 0–7 on success; ignore them and check `$LASTEXITCODE -lt 8`.
 
 ---
 

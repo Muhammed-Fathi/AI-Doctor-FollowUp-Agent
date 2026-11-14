@@ -266,8 +266,8 @@ The repository virtual environment lives at `.venv/` (gitignored).
 | 3 | `.venv/bin/pip install --require-hashes -r requirements/requirements.lock` (fresh venv, other venv) | 0 | resolved and installed all 20 hashed pins |
 | 4 | `.venv/bin/pip install --require-hashes -r requirements/requirements-dev.lock` (fresh venv) | 0 | all 35 hashed pins installed |
 | 5 | `pip install -e . --no-build-isolation --no-deps` (throwaway copy with `requires-python >=3.11`) | 0 | `import app` succeeded from an unrelated CWD (the real repo correctly refuses to install on 3.11 due to `requires-python`) |
-| 6 | `python -m pytest -q` | 0 | `94 passed` |
-| 7 | `python -m pytest <file> -q` per suite | 0 | health 9, version 7, openapi 6, database 9, safety 7, powershell 40 (parametrised), CI 16 |
+| 6 | `python -m pytest -q` | 0 | `103 passed` (94 at the first submission + 9 review-fix tests) |
+| 7 | `python -m pytest <file> -q` per suite | 0 | health 9, version 7, openapi 6, database 9, safety 7, powershell 49 (parametrised), CI 16 |
 | 8 | `ruff check .` | 0 | `All checks passed!` |
 | 9 | `ruff format --check .` | 0 | `27 files already formatted` (Python only; Markdown/docs are excluded from formatting) |
 | 10 | `python -m alembic -c backend/migrations/alembic.ini upgrade head` | 0 | `Running upgrade -> 0001_p1_baseline`; created `data/runtime/app.db` |
@@ -290,7 +290,7 @@ The repository virtual environment lives at `.venv/` (gitignored).
 | 27 | `curl http://127.0.0.1:5173/health` and `/version` (Vite dev proxy) | 0 | both HTTP 200 with the same JSON as the backend — the page's data path is proven, not just the API |
 | 27a | `npm run preview -- --port 4173` then `curl http://127.0.0.1:4173/`, `/health`, `/version` | 0 | production build served (HTTP 200) and both endpoints proxied — this is the exact server the Playwright smoke test drives |
 | 28 | `python -c "yaml.safe_load(ci.yml)"` | 0 | `jobs: ['backend', 'frontend']` |
-| 29 | **Clean-clone reproducibility**: `git clone <branch>` into a fresh directory, then a fresh `python3.11 -m venv` + `pip install --require-hashes -r requirements/requirements-dev.lock` | 0 | lock installed from scratch; `pytest -q` -> **94 passed**; `ruff check .` + `ruff format --check .` clean; `check_openapi.py` PASS; `scan_repository.py` PASS (93 files); `alembic upgrade head` + `check_alembic_smoke.py` PASS |
+| 29 | **Clean-clone reproducibility**: `git clone <branch>` into a fresh directory, then a fresh `python3.11 -m venv` + `pip install --require-hashes -r requirements/requirements-dev.lock` | 0 | lock installed from scratch; `pytest -q` -> `103 passed`; `ruff check .` + `ruff format --check .` clean; `check_openapi.py` PASS; `scan_repository.py` PASS (94 files); `alembic upgrade head` + `check_alembic_smoke.py` PASS |
 | 30 | Same clean clone: `npm ci --no-audit --no-fund` | 0 | `added 235 packages`; `npm run lint` clean; `npm test` -> 12 passed; `npm run build` -> built in 1.48 s |
 
 ### 7.2 Executed and failed (then fixed in this branch)
@@ -322,11 +322,11 @@ Re-run after the review fixes, at head `a20c536` on a clean working tree:
 
 | Command | Exit | Observed |
 |---|---|---|
-| `python -m pytest` | 0 | `94 passed in 0.66s` |
+| `python -m pytest` | 0 | `103 passed` |
 | `ruff check .` | 0 | `All checks passed!` |
 | `ruff format --check .` | 0 | `27 files already formatted` |
 | `python scripts/python/check_openapi.py` | 0 | `PASS (2 paths, 3 schemas)` |
-| `python scripts/python/scan_repository.py` | 0 | `PASS (93 tracked files)` |
+| `python scripts/python/scan_repository.py` | 0 | `PASS (94 tracked files)` |
 | `alembic upgrade head` / `downgrade base` / `upgrade head` | 0 | all three steps exit 0; `check_alembic_smoke.py` PASS |
 | `alembic -c <abs path>` from `/tmp` | 0 | migration applied (CWD independence) |
 | `uvicorn … --port 8000` then `curl /health` | 0 | **200**, `status=ok`, `db=ok` |
@@ -344,7 +344,25 @@ Repository audit at the same head: `git ls-files` contains no `.env`, database, 
 none of `langgraph`, `ollama`, `pytesseract`, `pypdf`, `smtplib`, `sendgrid`, `twilio`, `requests`,
 `httpx`, `aiohttp`.
 
-### 7.5 CI workflow delivery blocker (incomplete deliverable)
+### 7.6 Review round 1 — findings and resolutions
+
+Reviews `5905323895` (P1-R01–R05) and `5905460892` (P1-R06) on head `7295d0c`.
+The owner's first Windows run of `test_all.ps1` produced **PASS 1 / FAIL 9 /
+SKIPPED 1** although the underlying tools succeeded — a reporting defect, not a
+tool failure. All six findings are addressed below; **no finding is closed by
+this document alone** — the owner re-runs on Windows.
+
+| ID | Severity | Finding | Resolution in this revision | Verified here |
+|---|---|---|---|---|
+| **P1-R06** | **Blocker** | `Invoke-Native` emitted native stdout into its caller's pipeline beside the exit code, so `$code = Invoke-Native …` was an array and `$code -eq 0` was false for successful commands. The owner saw `Ruff lint (exit All checks passed! 0)`. | `_common.ps1`: native output is piped to `Out-Host` (same console, out of the pipeline); `$code` initialised to `0` and cast `[int]`; stderr deliberately not merged (`2>&1` under `ErrorActionPreference='Stop'` is unsafe on 5.1). `test_all.ps1` gained `Get-ExitCodeValue`, which fails a gate loudly if the wrapper ever returns a non-`[int]`. `Get-NativeOutput` hardened the same way but still returns `{ExitCode, Output}`. | 9 new static tests + **executable** `scripts/powershell/tests/invoke_native.tests.ps1` (7 cases incl. numeric-looking output); the script is now gate 0 of `test_all.ps1` |
+| **P1-R03** | High | `Start-Process -ArgumentList` joins the array into one command line, so an `--app-dir` path containing a space was split and the child got a truncated path. | New shared `ConvertTo-QuotedArgument` / `ConvertTo-CommandLine` in `_common.ps1` (quotes only when needed, escapes embedded quotes, doubles a trailing backslash). `start.ps1` uses them for both the uvicorn and the `npm.cmd` launches. | Algorithm ported to Python and checked against 9 cases including `E:\DEPI\AI Doctor FollowUp Agent\backend` and `C:\Program Files\…` — all correct |
+| **P1-R05** | High | `stop.ps1` required the repository path in the frontend command line; the `cmd.exe` wrapper may not carry it, so Vite could survive. | Identity for `frontend` now needs the Vite signature **and** any of: repository path, `run dev`, `--port 5173`, or `strictPort` — all of which `start.ps1` always passes. Backend identity stays strict (repository path **and** `uvicorn` **and** `app.main:app`). The verified descendant tree is still what gets stopped. | Static tests assert the relaxed frontend rule and the unchanged strict backend rule |
+| **P1-R04** | Medium | The runbook's §5 told the owner to `git clone` into `E:\DEPI\AI-Doctor-FollowUp-Agent`, which already exists. | New §2.1 "You already have a clone (the normal case)" with `git fetch` / `git switch` / `git pull --ff-only` and a detached-HEAD alternative; fresh clone moved to optional §2.2 with a new path. §5 rewritten to match. | Documentation reviewed against the actual owner paths |
+| **P1-R02** | Open | Windows execution of the gate. | **Still open by design.** This revision is a fix for the defect the owner's run exposed; it must itself be re-run on Windows. | — (see §7.3) |
+| **P1-R01** | Closed | CI workflow missing. | Resolved by the owner: `.github/workflows/ci.yml` is committed at `6d09b66`; both Actions jobs are reported green by the owner. The 8 workflow tests now execute instead of skipping. | Workflow present and unmodified in the diff |
+| — | Medium | React `act(...)` warning in the loading-state test. | Cause: the test asserted, then the mocked `fetch` settled after the test ended. Fixed by modelling a request that never settles (deterministic) and by `await`ing the rejection in the sibling test. **Not suppressed.** `tests/setup.ts` now *fails* any test that emits an `act(...)` warning while still printing React's message verbatim. | Proven both ways: reintroducing the old test body fails with "React reported 1 unwrapped state update(s)"; the fixed suite is clean with empty stderr |
+
+### 7.5 CI workflow delivery — RESOLVED by the owner (commit `6d09b66`)
 
 `.github/workflows/ci.yml` was written, YAML-parsed and covered by 16 static tests
 (python 3.12, node 22, read-only permissions, no model/GPU/OCR/paid API/secrets, every
@@ -426,7 +444,8 @@ Browser: `tests/e2e/health.spec.ts` — 1 smoke test, **not executed here**.
 | `P1-OPEN-01` | Project license still unset (`DEPENDENCIES.md` §7). `pyproject.toml` deliberately declares none. | Owner chooses before P2 (or explicitly defers to P8). |
 | `P1-OPEN-02` | `docs/**` additions (this report, `docs/runbooks/WINDOWS_SETUP.md`) plus the `PHASE_PROGRESS.md` row are outside the literal P1 path list in `AGENTS.md` §5, but item 10 of the P1 brief requires them. | **Owner acknowledgement requested** in the PR. No other doc was edited. |
 | `P1-OPEN-03` | `DEPENDENCIES.md` records "nothing pinned" (P0 text); this report supersedes it for P1. | Owner decides whether to synchronise the P0 document now or at P2. |
-| `P1-OPEN-09` | CI workflow could not be pushed (`workflows` permission); the owner must add the file from the PR body. | Treat CI verification as a follow-up step of the same PR. |
+| `P1-OPEN-09` | **Closed** — the owner committed `.github/workflows/ci.yml` at `6d09b66`; both Actions jobs are green. | Resolved. |
+| `P1-OPEN-10` | The PowerShell **fix** in this revision (R03/R05/R06) has not itself been executed on Windows; PowerShell is unavailable in this sandbox and the `pwsh` release asset host is outside the allowed egress set. | Owner re-runs `invoke_native.tests.ps1` and `test_all.ps1` on Windows before acceptance. |
 | `P1-OPEN-04` | `pydantic-settings` reads `.env` from the repo root only. A second `.env` in a subdirectory is ignored. | Keep single-root configuration. |
 | `P1-OPEN-05` | `git_sha` falls back to `unknown` outside a git checkout (e.g. a source zip). CI sets `APP_GIT_SHA` explicitly. | Accepted; document in `setup.ps1` output if it matters. |
 | `P1-OPEN-06` | Vite 7 / TypeScript 5.9 chosen over the newest majors (8 / 7) for toolchain stability. | Revisit only with a re-run of the full gate. |
