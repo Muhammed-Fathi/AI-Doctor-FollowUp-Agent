@@ -14,13 +14,15 @@ ticked by the implementer. Acceptance, merge and any PASS marking are the owner'
 | Authorized exceptions | A1–A3, B1–B2, C1–C2, D1–D2, E1–E2, F1–F2, G1–G3, H1–H3 (19 physical paths) |
 | Executed here | Debian 12 sandbox, **Python 3.11.2** |
 | CI | run [`43625331149`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625331149) at `dbaf938` and run [`43625989736`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625989736) at `6d54ede` — 3.12 **SUCCESS**, Node 22 **SUCCESS** in both (reviewer-verified, §9.2) |
-| Owner-required | Windows PowerShell gate on an isolated worktree, Windows PBKDF2 timing (§10) |
+| Owner Windows gate | **PASS — executed 2026-11-14** on an isolated worktree (PowerShell 5.1, Python 3.12.9); PBKDF2 measured on Windows (§10.11) |
 
 > **This report distinguishes three evidence sources and never mixes them:**
 > sandbox Python 3.11 execution by the implementer (this file's numbers), the
 > GitHub Actions 3.12 + Node 22 run verified independently by the reviewer (§9.2;
 > the implementer's own read was 403 / NOT OBSERVED, §9.1), and owner-side Windows
-> verification (§10, **not executed** — PENDING).
+> verification, **executed by the owner on 2026-11-14 and PASS** (§10.11; the
+> checklist that produced it is §10, and its earlier PENDING state is kept below as
+> historical provenance).
 
 ---
 
@@ -239,7 +241,7 @@ iterations=600000 hash=271ms verify=204ms (CPython 3.11.2, this sandbox)
 
 | Check | Result |
 |---|---|
-| `pytest backend/tests` (355: 125 P1 + 230 P2) | **PASS** |
+| `pytest backend/tests` (355: 125 P1 + 230 P2) | **PASS** — see §11.15 for one intermittently flaky *test assertion* observed separately (test-only, product behaviour correct) |
 | `ruff check` / `ruff format --check` | **PASS** |
 | `check_openapi.py` (11 paths / 12 operations / 22 schemas) | **PASS** |
 | `scan_repository.py` (secrets/artefacts) | **PASS** |
@@ -248,8 +250,8 @@ iterations=600000 hash=271ms verify=204ms (CPython 3.11.2, this sandbox)
 | Two-writer concurrency, both interleavings | **PASS** (and fail without the recovery path) |
 | Migration round trip + ORM/metadata parity | **PASS** (7 tests) |
 | GitHub Actions CI (Python 3.12 + frontend) | **VERIFIED SUCCESS by the independent reviewer** — run `43625331149` at `dbaf938` *and* run `43625989736` at docs-only HEAD `6d54ede`; both jobs SUCCESS in each (§9.2). The implementer's own read attempt was 403 / NOT OBSERVED (§9.1, historical) |
-| Windows `scripts/powershell/test_all.ps1` | **NOT RUN — owner-laptop required** |
-| Windows PBKDF2 timing at 600 000 iterations | **NOT RUN — owner-laptop required** |
+| Windows `scripts/powershell/test_all.ps1` | **PASS — executed by the owner 2026-11-14**: 12 PASS / 0 FAIL / 1 optional SKIP, exit 0 (§10.11). Historical state for this row was `NOT RUN` before owner execution |
+| Windows PBKDF2 timing at 600 000 iterations | **MEASURED 2026-11-14 by the owner**: PBKDF2-HMAC-SHA256 600 000 iterations — hash **550.49 ms**, verify **537.67 ms**; wrong password rejected; `needs_rehash` passed (§10.11). The 3.11 sandbox figure in §7 is not a Windows measurement |
 | Ollama / Tesseract / Playwright | **N/A** (P3+/optional) |
 | `NEG-01` (document extraction) | **NOT APPLICABLE in P2** (P3) |
 | `GET /api/v1/demo/status` | **DEFERRED to P5** (`OQ-P2-01`) |
@@ -307,7 +309,7 @@ Provenance, deliberately never collapsed into one line:
 |---|---|---|
 | Implementer (agent) | `403 Resource not accessible by integration` — **NOT OBSERVED** | An observer permission restriction of the automation credentials, **not** a CI failure |
 | Independent reviewer | run `43625331149` — **VERIFIED SUCCESS** | The 3.12 + Node 22 legs pass at `dbaf938` |
-| Owner Windows gate | **PENDING** | `test_all.ps1` on the owner laptop is still unrun (§10) |
+| Owner Windows gate | **PASS** — 2026-11-14, `test_all.ps1` 12 PASS / 0 FAIL / 1 optional SKIP, exit 0 (§10.11) | This row read `PENDING` when written; it is superseded by the owner run at `9fddb51` |
 
 Because the reviewer resolved this matter, **no `OQ-P2-0x` was opened for it** — an
 open question is not created for a resolved issue.
@@ -324,6 +326,7 @@ open.
 |---|---|---|---|---|
 | [`43625331149`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625331149) | `dbaf938` (implementation) | SUCCESS | SUCCESS | SUCCESS |
 | [`43625989736`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625989736) | `6d54ede` (docs-only) | SUCCESS | SUCCESS | SUCCESS |
+| [`43626628577`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43626628577) | `9fddb51` (**verified code snapshot**) | SUCCESS | SUCCESS | SUCCESS |
 
 Any further documentation commit produced after this one is again docs-only; if
 the owner wants CI confirmation for the final head, it is read on PR #7 → *Checks*
@@ -334,9 +337,10 @@ rather than assumed.
 ## 10. Windows verification checklist (owner) — PowerShell 5.1, Python 3.12, isolated worktree
 
 Revision 2 (2026-11-14), correcting five checklist defects found in mentor review
-`5906330237` before the owner runs anything. These were **checklist errors, not
+`5906330237` **before** the owner ran anything. These were **checklist errors, not
 application defects**; no code, migration, gate script or P1 file was changed to
-fix them. Changes from revision 1:
+fix them. **This checklist was subsequently executed by the owner and passed — the
+results are in §10.11.** Changes from revision 1:
 
 | # | Defect in revision 1 | Fix |
 |---|---|---|
@@ -747,8 +751,73 @@ git -C $Main worktree list
 | Doctor reset `403` (before), `404` for `POST /demo/seed` and `GET /demo/status`, admin reset `200`, old token `401`, re-login ok | 10.8 |
 | Clean shutdown, free ports, tracking files removed, `main` unchanged (hash or absence), Windows PBKDF2 timings, secrets/tokens cleared | 10.9 |
 
-Any deviation is a **blocker to be reported**, not something to work around: this
-report claims no Windows result.
+Any deviation is a **blocker to be reported**, not something to work around: the
+checklist claims no result of its own.
+
+### 10.11 Owner Windows verification — EXECUTED RESULTS, 2026-11-14 (PASS)
+
+The checklist above was executed by the owner, not by the implementer. This is the
+**only** section of this report that records a Windows result, and every number
+below comes from the owner's evidence comment
+[`6882774686`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6882774686).
+
+| Item | Value |
+|---|---|
+| Date | 2026-11-14 |
+| Verified commit (code snapshot) | `9fddb51ba7672efd992c47325ab4883734da3c9a` |
+| Environment | Windows **PowerShell 5.1**, **Python 3.12.9** |
+| Isolated review worktree | `E:\DEPI\P2-Review` (own `.venv`, own `.env`, own SQLite database) |
+| Evidence | owner comment [`6882774686`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6882774686) |
+| Decision | **Owner Windows verification: PASS** — *verification evidence only, not final P2 approval or merge authorization* |
+
+| Verification (owner) | Result |
+|---|---|
+| Isolated Git worktree and installation | PASS |
+| Full `test_all.ps1` quality gate | **12 PASS / 0 FAIL / 1 optional SKIP**, exit 0 |
+| Backend pytest | PASS (exact Windows test count not captured in the console summary) |
+| Frontend tests | 13 passed |
+| Alembic P2 → P1 → P2 round trip | PASS |
+| OpenAPI contract | **11 paths / 12 operations / 22 schemas** — PASS |
+| Synthetic bootstrap | 6 users, 3 patients, 3 encounters, 17 observations — PASS |
+| Backend / frontend startup and health | PASS |
+| Authentication and token rejection | PASS |
+| RBAC and patient isolation | 9 checks PASS |
+| Check-ins and idempotency | 8 checks PASS |
+| Demo reset and session revocation | 7 checks PASS |
+| Identity-safe shutdown | PASS |
+| `main` HEAD and clean working tree | Unchanged |
+| `main` SQLite database SHA-256 | Byte-identical |
+| P2 review working tree | Clean |
+| PBKDF2 security checks | PASS |
+
+**PBKDF2-HMAC-SHA256, 600 000 iterations, measured on Windows** — hash
+**550.49 ms**, verify **537.67 ms**; wrong password rejected; `needs_rehash`
+passed. (The 3.11 sandbox figure in §7 is a different machine and is not a Windows
+measurement.)
+
+**Optional Playwright browser smoke: SKIPPED — not run, not passed.** It stays a
+recorded skip (`test_all.ps1` reports it as `SKIP`), exactly as in §8.
+
+**Two owner-side PowerShell *test-command* errors** were corrected and the affected
+validations rerun successfully: a reserved `$PID` variable name, a Python `-c`
+quoting problem, and one PowerShell interpolation syntax correction. **No
+application code change was required**, and the implementation under test did not
+change.
+
+**Independent CI at the same commit:** run
+[`43626628577`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43626628577) —
+**COMPLETED / SUCCESS**, Backend Python 3.12 **SUCCESS**, Frontend Node 22
+**SUCCESS**.
+
+**What this PASS does not mean.** It is owner-executed verification evidence on one
+machine, with synthetic data, not final P2 approval: **P2 stays `IN_REVIEW`**, no
+approval, no merge SHA and no `PASS` phase marking are recorded here, and P3 is not
+authorized. The known limitations in §11 are unchanged by a successful gate.
+
+**Provenance note.** Earlier revisions of this report said the Windows gate was
+`PENDING` / `NOT RUN`, which was accurate at the time. Those statements were
+superseded by this section rather than deleted; the historical CI and 403 observer
+records in §9.1–§9.2 are untouched.
 
 ## 11. Known limitations and deferred items
 
@@ -807,6 +876,18 @@ report claims no Windows result.
     which is why the owner checklists prove the doctor's `403` *before* the admin
     reset and re-login afterwards (§10.8), and why the check-in idempotency
     evidence is collected earlier (§10.7).
+15. **`test_p2_auth_http.py::test_request_validation_uses_the_contract_envelope`
+    is intermittently flaky (~1 in 10 runs, observed 2026-11-14).** Root cause is in
+    the *test*, not the product: it asserts `"ab" not in response.text` to prove the
+    submitted username is never echoed, but the random `request_id` UUID can itself
+    contain the substring `ab` (e.g. `…-95e4-ab3b42cbc2d9`). The envelope and the
+    `{field, reason}` details are correct in every run. Reproduction:
+    `pytest "backend/tests/p2/test_p2_auth_http.py::test_request_validation_uses_the_contract_envelope"`
+    in a loop; a full-suite run passed 355/355 immediately after the failing run.
+    It is **reported, not fixed here**: the fix would edit a test file, which is
+    outside this documentation-only change. Suggested fix for the follow-up: assert
+    on the parsed `details`/`type` values (or on the absence of the *password*)
+    instead of a two-character substring of the random request id.
 
 ---
 
@@ -840,19 +921,19 @@ report claims no Windows result.
 
 ## 13. Handback
 
-Implementation and sandbox verification are complete. The independent reviewer
-verified CI run `43625331149` (Python 3.12 **SUCCESS**, Node 22 **SUCCESS**) at HEAD
-`dbaf938` and cleared P2 to proceed to **owner Windows verification** subject to
-the documentation corrections in this revision. That is **not** code approval,
-merge authorization or a PASS.
+Implementation, sandbox verification, independent review and owner Windows
+verification are complete. None of that is code approval, merge authorization or a
+phase PASS.
 
 | Gate | State at this revision |
 |---|---|
 | Implementer sandbox evidence (3.11) | **complete** (§7) |
-| Independent reviewer technical review | **proceed to owner Windows verification** — review `5906286395` |
-| CI (3.12 + Node 22), runs `43625331149` (`dbaf938`) and `43625989736` (`6d54ede`) | **SUCCESS** in both (reviewer-verified, §9.2) |
-| Owner Windows quality gate (`test_all.ps1`) | **PENDING** (§10) |
-| Owner approval / merge / P2 PASS | **NOT GIVEN** — PR #7 stays **draft** |
+| Independent reviewer technical reviews | `5906194976`, `5906286395`, `5906330237` addressed; final review `5906680401` **COMMENT** — asked for this ledger synchronization |
+| CI (3.12 + Node 22), runs `43625331149` (`dbaf938`), `43625989736` (`6d54ede`), `43626628577` (`9fddb51`) | **SUCCESS** in all three (reviewer-verified, §9.2) |
+| Owner Windows quality gate (`test_all.ps1`) at `9fddb51` | **PASS** — 12 PASS / 0 FAIL / 1 optional SKIP, exit 0; PBKDF2 550.49 ms hash / 537.67 ms verify (§10.11) |
+| Optional Playwright smoke | **SKIPPED** — not run, not passed (§8, §10.11) |
+| Owner approval / merge / P2 PASS | **NOT GIVEN** — PR #7 stays **draft**, P2 **IN_REVIEW** |
+| P2 phase status | **IN REVIEW** — no approval, no merge SHA, no `PASS` |
 | P3 | **NOT STARTED** |
 
 No approval, merge, PASS marking or P3 work is performed by the implementer.
@@ -866,5 +947,6 @@ No approval, merge, PASS marking or P3 work is performed by the implementer.
 | 2026-11-14 | Initial report at implementation handback `dbaf938`. |
 | 2026-11-14 | Reviewer-driven documentation synchronization (mentor review `5906286395`), **docs-only**: §9.2 adds the independently verified CI run `43625331149` (3.12 SUCCESS, Node 22 SUCCESS) while §9.1 keeps the implementer's 403/NOT-OBSERVED evidence as a historical observer limitation; §8 ledger row updated accordingly, no `OQ` opened for the resolved CI question; §10 replaced with a PowerShell 5.1 / Python 3.12 checklist on an isolated review worktree with its own venv, `.env` and fresh SQLite database, covering full quality gates, migrations, bootstrap, auth, role-based access, idempotency, startup and clean shutdown; §11 adds the SQLite `database is locked` caveat and the unchanged `test_all.ps1` banner; no code, migration, gate script or P1 file changed. |
 | 2026-11-14 | **§10 revision 2** (mentor review `5906330237`), **docs-only**: the reset secret is re-supplied to the backend at launch and cleared from the parent shell (the previous order would have ended in `500 E_INTERNAL`); reset denials are proven **before** the admin reset because reset deletes all sessions; §10.7 now actually issues the new-key duplicate request and asserts `409 E_DUPLICATE_CHECKIN` plus the first response's `201`; `POST /demo/seed` (not `GET`) is probed; `APP_VENV_DIR`, a pre-existing review directory, a dirty worktree and both states of `main/data/runtime/app.db` are guarded, with tokens/password cleared at the end. §9.2 records the second reviewer-verified CI run `43625989736` on docs-only HEAD `6d54ede`, which supersedes the earlier "docs commits lack CI" caveat. No code changed; P2 stays IN_REVIEW. |
+| 2026-11-14 | **Final acceptance-ledger synchronization** (independent final review `5906680401`), **docs-only**: §10.11 records the owner's executed Windows verification at the verified code snapshot `9fddb51` — 12 PASS / 0 FAIL / 1 optional SKIP, Alembic P2→P1→P2, 11 paths / 12 operations / 22 schemas, 6 users / 3 patients / 3 encounters / 17 observations, 9 RBAC checks, 8 idempotency checks, 7 demo-reset checks, identity-safe shutdown, `main` HEAD unchanged and its database byte-identical, plus Windows-measured PBKDF2 550.49 ms hash / 537.67 ms verify — with the evidence comment `6882774686` linked. §8, §9.2, §13 and the header now show the gate as **PASS** at that commit and cite CI run `43626628577`; the former `PENDING` / `NOT RUN` wording is retained as historical provenance. Optional Playwright stays a recorded **SKIP**. No code, migration, gate, test or configuration change; no approval, merge SHA or P2 `PASS` recorded; P2 remains **IN_REVIEW**, P3 not started. |
 
 **NOT FOR CLINICAL USE — educational, synthetic-data demo only.**
