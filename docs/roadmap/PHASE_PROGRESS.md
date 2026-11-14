@@ -9,7 +9,7 @@
 
 | Phase | Topic | Status | PR | Merge SHA | Test Evidence | Owner Approval |
 |---|---|---|---|---|---|---|
-| P0 | Governance / specifications | **IN_REVIEW** | _pending — PR linked in this branch's PR body; update on creation_ | — | Documentation checks only (see `docs/phase-reports/PHASE_0_REPORT.md`); no application tests exist | Pending |
+| P0 | Governance / specifications | **IN_REVIEW** | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) | — | Documentation checks only (see `docs/phase-reports/PHASE_0_REPORT.md`); no application tests exist | Pending |
 | P1 | Foundation / reproducible startup | TODO | — | — | Not run | Pending |
 | P2 | Patient data + role-based API | TODO | — | — | Not run | Pending |
 | P3 | Document ingestion + OCR verification | TODO | — | — | Not run | Pending |
@@ -28,6 +28,7 @@
 | Executed checks | Cross-file reference resolution, requirement-ID coverage, OpenAPI structural validation, prohibited-claim scan, secret/runtime-artifact scan |
 | Not executed | Any backend/frontend test, OCR, model call, benchmark, browser E2E, Windows PowerShell gate, migration |
 | Owner-laptop required | Windows PowerShell scripts, Tesseract/Poppler install, Ollama model benchmark, offline demo |
+| PR | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) — opened 2026-11-14, base `main` @ `7d2ef73`, not merged |
 | Blocks P1 until | Owner reviews wording/safety, confirms the six ADRs, approves the demo rule parameters, and merges the PR |
 
 Do not prefill future pass results, test counts, or metrics. When a phase completes, record the PR URL,

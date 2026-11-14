@@ -7,9 +7,9 @@
 | Status | **IN_REVIEW — not accepted, not merged, P1 not started** |
 | Branch | `arena/ee7d211b-ai-doctor-followup-agent` |
 | Base commit | `7d2ef73dae50c7404b46f653942eb99351053059` |
-| Head commit | recorded in the PR body (this report is updated by a follow-up commit when the PR is opened) |
-| Pull request | linked in `docs/roadmap/PHASE_PROGRESS.md` and the PR itself; targeting `main`, **not merged** |
-| Tracking issue | GitHub issue #1 (referenced by number only — see §8 for an access limitation) |
+| Head commit | `543e116d57579feba903169c8135d8f0cf32cb64` (baseline) plus the follow-up linkage commit; the exact PR head is listed at the top of the PR |
+| Pull request | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) — targeting `main`, **not merged** |
+| Tracking issue | GitHub issue #1 (referenced by number only — see §4.7 for an access limitation) |
 | Author | Arena agent (implementer) |
 | Reviewer | Project owner (pending) |
 
@@ -182,7 +182,7 @@ $ gh api repos/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/issues/1
 ```
 
 The GitHub integration token available in this session cannot read issues. Issue **#1** is therefore
-referenced as the tracking issue by number in the PR body, and **its content was not read or assumed**.
+referenced as the tracking issue by number in [PR #2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2), and **its content was not read or assumed**.
 If #1 is not the Phase 0 tracking issue, the owner should say so in the PR.
 
 ## 5. What was **not** executed (and why)
