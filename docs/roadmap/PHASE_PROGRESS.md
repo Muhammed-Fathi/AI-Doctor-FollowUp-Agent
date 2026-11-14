@@ -29,7 +29,7 @@ The implementing agent never self-approves, marks phases `PASS` or merges pull r
 | Phase | Topic | Status | PR | Merge SHA | Test Evidence | Owner Approval |
 |---|---|---|---|---|---|---|
 | P0 | Governance / specifications | **PASS** | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) | `442256606fd2465439409cc9b4d42f1bec09a723` | Documentation consistency, traceability, OpenAPI validation and targeted contract checks completed. No runtime implementation tests applicable to P0. | **Approved — 2026-11-14** |
-| P1 | Foundation / reproducible startup | **IN_REVIEW** | open against `main` | — | Backend 103 tests, frontend 13 tests, Ruff, Alembic smoke, OpenAPI contract, repository scan, live `/health` + `/version`, Vite build all executed on Linux (Python 3.11.2). PowerShell scripts, Windows gate, Playwright smoke **not executed**; GitHub CI workflow is committed by the owner at `6d09b66` with both jobs green — see `docs/phase-reports/PHASE_1_REPORT.md` §7. | Pending |
+| P1 | Foundation / reproducible startup | **IN_REVIEW** | open against `main` | — | Backend 114 tests, frontend 13 tests, Ruff, Alembic smoke, OpenAPI contract, repository scan, live `/health` + `/version`, Vite build all executed on Linux (Python 3.11.2). PowerShell scripts, Windows gate, Playwright smoke **not executed**; GitHub CI workflow is committed by the owner at `6d09b66` with both jobs green — see `docs/phase-reports/PHASE_1_REPORT.md` §7. | Pending |
 | P2 | Patient data + role-based API | TODO | — | — | Not run | Pending |
 | P3 | Document ingestion + OCR verification | TODO | — | — | Not run | Pending |
 | P4 | Monitoring + demo review rules | TODO | — | — | Not run | Pending |
@@ -310,7 +310,7 @@ The implementation agent must use a dedicated P1 branch and PR.
 | Branch | `arena/d86c4f98-ai-doctor-followup-agent` |
 | Base commit | `a33e693ba16560836312351787769ec5ee18b469` |
 | Deliverables | 10/10 addressed; see `docs/phase-reports/PHASE_1_REPORT.md` §3 |
-| Backend tests | `python -m pytest -q` -> 103 passed (exit 0) |
+| Backend tests | `python -m pytest -q` -> 114 passed (exit 0) |
 | Frontend tests | `npm test` -> 12 passed (exit 0) |
 | Lint / format | `ruff check .` and `ruff format --check .` -> clean (exit 0) |
 | Frontend build | `npm run build` -> built in 1.20 s (exit 0) |

@@ -266,8 +266,8 @@ The repository virtual environment lives at `.venv/` (gitignored).
 | 3 | `.venv/bin/pip install --require-hashes -r requirements/requirements.lock` (fresh venv, other venv) | 0 | resolved and installed all 20 hashed pins |
 | 4 | `.venv/bin/pip install --require-hashes -r requirements/requirements-dev.lock` (fresh venv) | 0 | all 35 hashed pins installed |
 | 5 | `pip install -e . --no-build-isolation --no-deps` (throwaway copy with `requires-python >=3.11`) | 0 | `import app` succeeded from an unrelated CWD (the real repo correctly refuses to install on 3.11 due to `requires-python`) |
-| 6 | `python -m pytest -q` | 0 | `103 passed` (94 at the first submission + 9 review-fix tests) |
-| 7 | `python -m pytest <file> -q` per suite | 0 | health 9, version 7, openapi 6, database 9, safety 7, powershell 49 (parametrised), CI 16 |
+| 6 | `python -m pytest -q` | 0 | `114 passed` (94 at the first submission + 20 review-fix tests) |
+| 7 | `python -m pytest <file> -q` per suite | 0 | health 9, version 7, openapi 6, database 9, safety 7, powershell 60 (parametrised), CI 16 |
 | 8 | `ruff check .` | 0 | `All checks passed!` |
 | 9 | `ruff format --check .` | 0 | `27 files already formatted` (Python only; Markdown/docs are excluded from formatting) |
 | 10 | `python -m alembic -c backend/migrations/alembic.ini upgrade head` | 0 | `Running upgrade -> 0001_p1_baseline`; created `data/runtime/app.db` |
@@ -290,7 +290,7 @@ The repository virtual environment lives at `.venv/` (gitignored).
 | 27 | `curl http://127.0.0.1:5173/health` and `/version` (Vite dev proxy) | 0 | both HTTP 200 with the same JSON as the backend — the page's data path is proven, not just the API |
 | 27a | `npm run preview -- --port 4173` then `curl http://127.0.0.1:4173/`, `/health`, `/version` | 0 | production build served (HTTP 200) and both endpoints proxied — this is the exact server the Playwright smoke test drives |
 | 28 | `python -c "yaml.safe_load(ci.yml)"` | 0 | `jobs: ['backend', 'frontend']` |
-| 29 | **Clean-clone reproducibility**: `git clone <branch>` into a fresh directory, then a fresh `python3.11 -m venv` + `pip install --require-hashes -r requirements/requirements-dev.lock` | 0 | lock installed from scratch; `pytest -q` -> `103 passed`; `ruff check .` + `ruff format --check .` clean; `check_openapi.py` PASS; `scan_repository.py` PASS (94 files); `alembic upgrade head` + `check_alembic_smoke.py` PASS |
+| 29 | **Clean-clone reproducibility**: `git clone <branch>` into a fresh directory, then a fresh `python3.11 -m venv` + `pip install --require-hashes -r requirements/requirements-dev.lock` | 0 | lock installed from scratch; `pytest -q` -> `114 passed`; `ruff check .` + `ruff format --check .` clean; `check_openapi.py` PASS; `scan_repository.py` PASS (94 files); `alembic upgrade head` + `check_alembic_smoke.py` PASS |
 | 30 | Same clean clone: `npm ci --no-audit --no-fund` | 0 | `added 235 packages`; `npm run lint` clean; `npm test` -> 12 passed; `npm run build` -> built in 1.48 s |
 
 ### 7.2 Executed and failed (then fixed in this branch)
@@ -322,7 +322,7 @@ Re-run after the review fixes, at head `a20c536` on a clean working tree:
 
 | Command | Exit | Observed |
 |---|---|---|
-| `python -m pytest` | 0 | `103 passed` |
+| `python -m pytest` | 0 | `114 passed` |
 | `ruff check .` | 0 | `All checks passed!` |
 | `ruff format --check .` | 0 | `27 files already formatted` |
 | `python scripts/python/check_openapi.py` | 0 | `PASS (2 paths, 3 schemas)` |
@@ -343,6 +343,63 @@ Repository audit at the same head: `git ls-files` contains no `.env`, database, 
 `node_modules`, `.venv` or `dist`; the secret/artefact scan reports 0 findings; the backend contains
 none of `langgraph`, `ollama`, `pytesseract`, `pypdf`, `smtplib`, `sendgrid`, `twilio`, `requests`,
 `httpx`, `aiohttp`.
+
+### 7.7 Review round 2 — P1-R07 shutdown blocker, and its resolution
+
+The owner's live Windows run (head `6693108`) stopped the backend correctly
+(port 8000 freed) but **left Vite running on port 5173**, reporting
+`Stop result: 1 stopped, 1 not stopped`.
+
+**Evidence from the owner's machine (`Get-CimInstance Win32_Process`):**
+
+| PID | Image | Command line | Note |
+|---|---|---|---|
+| 4400 | `cmd.exe` | `cmd.exe /c ""C:\Program Files\nodejs\npm.cmd" run dev -- --host 127.0.0.1 --port 5173 --strictPort "` | the recorded root |
+| 5744 | `node.exe` | `"node" "<repo>\frontend\node_modules\\.bin\\..\vite\\bin\\vite.js" --host 127.0.0.1 --port 5173 --strictPort` | the actual Vite server |
+
+**Root cause.** Round 1 required the frontend command line to contain `vite`
+**or** `node_modules`. The recorded PID is the `cmd.exe`/`npm.cmd` **wrapper**,
+whose command line contains neither, so the ownership test rejected a process
+that was genuinely ours. Two further defects made it worse: the state files were
+deleted even after a refusal (destroying the identity information needed for a
+retry), and the script exited `0` while an owned process was still running.
+
+**The fix.**
+
+1. **Records real identity at startup.** `start.ps1` stores PID, image name,
+   **process creation time** and command line. Creation time is what defeats PID
+   recycling; a reused PID fails the check and is left alone.
+2. **Classifies by role, not by one keyword.** `_common.ps1` now exposes
+   `Test-NpmWrapperCommandLine` (npm + `run dev` + our port), `Test-ViteCommandLine`
+   (a vite entry point *under this repository's frontend*) and
+   `Test-UvicornCommandLine`. The wrapper is matched by source 1 + 2; each
+   descendant is matched by its own command line (source 3).
+3. **Stops children before the wrapper**, so Vite cannot be re-parented
+   mid-shutdown. If the wrapper is already gone, an orphaned Vite child is
+   adopted **only** on the repository Vite command line — never because it holds
+   the port.
+4. **Preserves tracking state** on partial failure: `Save-StopState` rewrites
+   `run-state.json` and the PID files with whatever is still running, and only
+   deletes them after a fully clean stop.
+5. **Honest exit status**: `0` clean, `1` an owned process survived, `2` a port is
+   still occupied. A missing state file with a busy port is `2`, not a silent `0`.
+6. **Same fix in startup rollback**: `Stop-StartedProcesses` now stops the whole
+   verified child tree of a failed start, with the same PID-reuse guard.
+7. **PS 5.1 trap closed**: `ConvertFrom-Json` adds a falsy `PSComputerName`
+   property to every object, so a bare `if (-not $entry)` would have skipped
+   **every** state entry and reported a clean stop without acting. The entry
+   filter is now an explicit `$null -ne $_`.
+
+**Executable regression coverage** — `scripts/powershell/tests/stop_identity.tests.ps1`
+(11 checks, gate 0b of `test_all.ps1`), built from the owner's verbatim command
+lines: the wrapper and the Vite process are each recognised, a foreign project's
+Vite is rejected, plain `node.exe` is rejected, `npm run build` is rejected,
+`app.main:app` is accepted while `other.app:app` is rejected, forward-slash paths
+work, the descendant walk finds a real child, a wrong image name or creation time
+is rejected, and a falsy JSON property does not hide a state entry.
+
+The classifier was additionally ported to Python and checked against the
+owner's exact command lines plus seven look-alikes — all 9 cases correct.
 
 ### 7.6 Review round 1 — findings and resolutions
 
@@ -445,7 +502,8 @@ Browser: `tests/e2e/health.spec.ts` — 1 smoke test, **not executed here**.
 | `P1-OPEN-02` | `docs/**` additions (this report, `docs/runbooks/WINDOWS_SETUP.md`) plus the `PHASE_PROGRESS.md` row are outside the literal P1 path list in `AGENTS.md` §5, but item 10 of the P1 brief requires them. | **Owner acknowledgement requested** in the PR. No other doc was edited. |
 | `P1-OPEN-03` | `DEPENDENCIES.md` records "nothing pinned" (P0 text); this report supersedes it for P1. | Owner decides whether to synchronise the P0 document now or at P2. |
 | `P1-OPEN-09` | **Closed** — the owner committed `.github/workflows/ci.yml` at `6d09b66`; both Actions jobs are green. | Resolved. |
-| `P1-OPEN-10` | The PowerShell **fix** in this revision (R03/R05/R06) has not itself been executed on Windows; PowerShell is unavailable in this sandbox and the `pwsh` release asset host is outside the allowed egress set. | Owner re-runs `invoke_native.tests.ps1` and `test_all.ps1` on Windows before acceptance. |
+| `P1-OPEN-10` | Every PowerShell **fix** (R03/R05/R06/R07) is validated only statically here: PowerShell is absent from this sandbox and both PowerShell download routes are blocked (`release-assets.githubusercontent.com` -> `SSL_ERROR_SYSCALL`; no `powershell` wheel on PyPI). | Owner re-runs `invoke_native.tests.ps1`, `stop_identity.tests.ps1`, `test_all.ps1` and the live start/stop cycle on Windows before acceptance. |
+| `P1-OPEN-11` | The shutdown fix is proven against the owner's **recorded** command lines and a Python port of the classifier, not against a live Windows process tree. | The runbook's shutdown checklist (§5) captures the tree so any remaining lineage difference is visible. |
 | `P1-OPEN-04` | `pydantic-settings` reads `.env` from the repo root only. A second `.env` in a subdirectory is ignored. | Keep single-root configuration. |
 | `P1-OPEN-05` | `git_sha` falls back to `unknown` outside a git checkout (e.g. a source zip). CI sets `APP_GIT_SHA` explicitly. | Accepted; document in `setup.ps1` output if it matters. |
 | `P1-OPEN-06` | Vite 7 / TypeScript 5.9 chosen over the newest majors (8 / 7) for toolchain stability. | Revisit only with a re-run of the full gate. |

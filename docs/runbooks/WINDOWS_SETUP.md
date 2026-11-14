@@ -134,18 +134,64 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\start.p
 | `http://127.0.0.1:8000/docs` | Generated OpenAPI UI |
 | `http://127.0.0.1:5173/` | React status page (proxies `/health`, `/version`) |
 
-`start.ps1` writes `data\runtime\run-state.json` (PIDs + verified command lines)
-and refuses to start when the application is already running or when port 8000 /
-5173 belongs to another process. It never terminates a process it did not start.
+`start.ps1` writes `data\runtime\run-state.json` and refuses to start when the
+application is already running or when port 8000 / 5173 belongs to another
+process. It never terminates a process it did not start.
+
+For each process it launches, the state file records **PID, image name, process
+creation time and command line**. The creation time matters: Windows recycles
+PIDs, and without it a later `stop.ps1` could stop an unrelated process that
+happens to reuse the number.
 
 ```powershell
 # Stop only the processes start.ps1 recorded
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\stop.ps1
+
+# If a stop is reported as FAILED, retry without the graceful wait
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\stop.ps1 -Force
 ```
 
-`stop.ps1` re-reads each PID's command line and stops it only when it still
-belongs to this repository's uvicorn/vite process. Without
-`data\runtime\run-state.json` it stops **nothing** and says so.
+### How `stop.ps1` decides what is ours
+
+`start.ps1` launches the frontend through `npm.cmd`, which produces a tree:
+
+```text
+powershell -> npm.cmd (cmd.exe) -> cmd.exe -> node.exe (vite)
+```
+
+The recorded PID is the **wrapper**, whose command line does *not* contain
+`vite` or `node_modules`. Identity is therefore proved from three sources:
+
+1. the recorded PID still has the recorded image name **and** creation time;
+2. the wrapper's own command line is an npm `run dev` invocation for port 5173;
+3. each descendant is accepted only when its **own** command line is this
+   repository's Vite entry point (`<repo>\frontend\node_modules\...\vite.js`).
+
+Children are stopped before the wrapper. Nothing is ever stopped because it
+merely listens on port 8000 or 5173, and nothing is stopped by image name.
+
+If the wrapper already exited but its Vite child survived and was re-parented,
+the child is adopted **only** on the repository Vite command line — never on the
+port.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Every recorded process is gone **and** ports 8000/5173 are free |
+| `1` | A recorded application process could not be stopped |
+| `2` | Processes were stopped, but a port is still occupied |
+
+On a non-zero code the tracking files are **kept** (with whatever is still
+running) so a retry has the same identity information; they are removed only
+after a fully clean stop. Always confirm both ports are free:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8000,5173 -State Listen -ErrorAction SilentlyContinue
+```
+
+A start that fails midway also rolls back the **whole** child tree, not just the
+recorded wrapper, so a failed start cannot leave Vite on 5173.
 
 Logs (gitignored): `data\runtime\backend.out.log`, `backend.err.log`,
 `frontend.out.log`, `frontend.err.log`.
@@ -243,6 +289,35 @@ Get-NetTCPConnection -LocalPort 8000,5173 -State Listen -ErrorAction SilentlyCon
 
 # 8. Command-wrapper regression tests (P1-R06): expect "PASS (N checks)"
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\tests\invoke_native.tests.ps1
+
+# 9. Shutdown identity regression tests (P1-R07): expect "PASS (N checks)"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\tests\stop_identity.tests.ps1
+```
+
+### Shutdown checklist (P1-R07)
+
+Run this sequence and paste the real output:
+
+```powershell
+# Start, confirm both ports are held, then stop and confirm both are free.
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\start.ps1
+Get-NetTCPConnection -LocalPort 8000,5173 -State Listen | Select-Object LocalPort, OwningProcess
+$LASTEXITCODE                                                    # stop.ps1 status
+
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\stop.ps1
+"stop.ps1 exit code: $LASTEXITCODE"                               # expect 0
+Get-NetTCPConnection -LocalPort 8000,5173 -State Listen -ErrorAction SilentlyContinue
+# expect no output at all
+```
+
+Also record, before stopping, the process tree so the wrapper/child relationship
+is documented:
+
+```powershell
+$state = Get-Content .\data\runtime\run-state.json -Raw | ConvertFrom-Json
+$state.processes | Format-List name, pid, imageName, startedAt, commandLine
+Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'vite' } |
+    Select-Object ProcessId, ParentProcessId, Name, CommandLine
 ```
 
 ### Paths containing spaces (P1-R03)
