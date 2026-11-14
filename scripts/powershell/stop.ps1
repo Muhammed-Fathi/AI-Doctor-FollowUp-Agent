@@ -55,15 +55,30 @@ function Test-OwnedProcess {
         return $false
     }
 
-    $rootEscaped = [Regex]::Escape($script:RepoRoot)
-    $belongsToRepo = $commandLine -match $rootEscaped
-    $looksLikeBackend = $commandLine -match 'uvicorn' -and $commandLine -match 'app\.main:app'
-    $looksLikeFrontend = $commandLine -match 'vite' -or $commandLine -match 'node_modules'
+    $isOwned = $false
 
-    $isOwned = $belongsToRepo -and (
-        ($Name -eq 'backend' -and $looksLikeBackend) -or
-        ($Name -eq 'frontend' -and $looksLikeFrontend)
-    )
+    if ($Name -eq 'backend') {
+        # uvicorn is launched directly by this script, so its command line always
+        # carries both the repository path and the app target.
+        $rootEscaped = [Regex]::Escape($script:RepoRoot)
+        $belongsToRepo = $commandLine -match $rootEscaped
+        $looksLikeBackend = $commandLine -match 'uvicorn' -and $commandLine -match 'app\.main:app'
+        $isOwned = $belongsToRepo -and $looksLikeBackend
+    }
+    elseif ($Name -eq 'frontend') {
+        # npm.cmd -> cmd.exe -> node.exe. The intermediate cmd.exe wrapper often
+        # carries only the npm invocation, without the repository path (P1-R05),
+        # so identity is established by the Vite signature of this project plus
+        # ANY of: the repository path, the dev-script invocation, or the
+        # frontend port flag that start.ps1 always passes.
+        $looksLikeFrontend = $commandLine -match 'vite' -or $commandLine -match 'node_modules'
+        $rootEscaped = [Regex]::Escape($script:RepoRoot)
+        $referencesRepo = ($commandLine -match $rootEscaped) -or
+            ($commandLine -match 'run\s+dev') -or
+            ($commandLine -match "--port\s+$($script:FrontendPort)\b") -or
+            ($commandLine -match 'strictPort')
+        $isOwned = $looksLikeFrontend -and $referencesRepo
+    }
 
     if (-not $isOwned) {
         Write-Warn "PID $ProcessId ($Name): command line does not match this repository. Not stopping it."

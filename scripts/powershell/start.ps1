@@ -109,8 +109,11 @@ try {
         '--log-level', 'info'
     )
 
+    # -ArgumentList is joined into one command line string by Start-Process, so
+    # every element is quoted here; otherwise a repository path containing a
+    # space (e.g. `E:\My Projects\...`) breaks --app-dir (P1-R03).
     $backendProcess = Start-Process -FilePath $venvPython `
-        -ArgumentList $backendArgs `
+        -ArgumentList (ConvertTo-CommandLine -Arguments $backendArgs) `
         -WorkingDirectory $script:RepoRoot `
         -RedirectStandardOutput $backendLog `
         -RedirectStandardError $backendErrLog `
@@ -142,8 +145,15 @@ try {
         $frontendErrLog = Join-Path $script:RuntimeDir 'frontend.err.log'
 
         # npm.cmd, because npm.ps1 may be blocked by the execution policy.
+        $frontendArgs = @(
+            'run', 'dev', '--',
+            '--host', '127.0.0.1',
+            '--port', "$($script:FrontendPort)",
+            '--strictPort'
+        )
+
         $frontendProcess = Start-Process -FilePath 'npm.cmd' `
-            -ArgumentList @('run', 'dev', '--', '--host', '127.0.0.1', '--port', "$($script:FrontendPort)", '--strictPort') `
+            -ArgumentList (ConvertTo-CommandLine -Arguments $frontendArgs) `
             -WorkingDirectory $script:FrontendDir `
             -RedirectStandardOutput $frontendLog `
             -RedirectStandardError $frontendErrLog `
