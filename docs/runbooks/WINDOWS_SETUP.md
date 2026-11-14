@@ -149,6 +149,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\test_al
 Without the binaries, or without the backend running, `test_all.ps1` reports the
 browser gate as `SKIP` with the reason — it never reports a false pass.
 
+The spec guards both preconditions itself (`backend reachable`,
+`chromium.executablePath()` exists), so running it directly has the same honest
+behaviour:
+
+```powershell
+cd frontend
+npm.cmd run test:e2e      # -> "1 skipped" with the missing prerequisite named
+```
+
 ---
 
 ## 5. Manual verification checklist (owner laptop)

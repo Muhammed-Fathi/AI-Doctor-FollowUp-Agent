@@ -1,20 +1,34 @@
 import { expect, test } from "@playwright/test";
+import { chromium } from "@playwright/test";
+import { existsSync } from "node:fs";
 
 /**
  * Phase 1 browser smoke test (`REQ-OPS-02`).
  *
  * Preconditions, checked explicitly so a missing environment is reported as
- * "not executed" rather than as a false pass:
+ * "skipped, not executed" rather than as a false pass or a confusing launch
+ * error:
  *   1. the backend is running on http://127.0.0.1:8000 (`start.ps1`),
  *   2. the frontend production build exists (`npm run build`),
  *   3. Playwright's chromium browser is installed (`npx playwright install chromium`).
  */
 test.describe("foundation health page", () => {
   test.beforeAll(async ({ request }) => {
-    const response = await request.get("http://127.0.0.1:8000/health").catch(() => null);
+    // 1. Backend reachable?
+    const response = await request
+      .get("http://127.0.0.1:8000/health")
+      .catch(() => null);
     test.skip(
       response === null || !response.ok(),
       "Backend is not running on 127.0.0.1:8000 - start it with scripts/powershell/start.ps1",
+    );
+
+    // 3. Browser binary actually present? Checking the executable path keeps the
+    //    failure mode honest instead of surfacing `browserType.launch`.
+    const executablePath = chromium.executablePath();
+    test.skip(
+      !executablePath || !existsSync(executablePath),
+      "Playwright chromium is not installed - run `npx playwright install chromium`",
     );
   });
 

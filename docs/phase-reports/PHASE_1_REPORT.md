@@ -301,6 +301,7 @@ The repository virtual environment lives at `.venv/` (gitignored).
 | `alembic -c backend/migrations/alembic.ini` from `/tmp` | `ModuleNotFoundError: No module named 'app'` | `prepend_sys_path = %(here)s/..` |
 | `npm install` with the first pinned set | `npm error Cannot read properties of null (reading 'edgesOut')` (npm 10.9.8 arborist crash) | installed with `--legacy-peer-deps` to prove the tree, then bisected the offender and adjusted the pinned versions; final set installs cleanly **without** flags |
 | `npx playwright install chromium` | `Download failure, code=1` (release-assets host unreachable) | browser smoke reported as **not executed**; not simulated (§7.3) |
+| `npx playwright test` on the first spec revision | `browserType.launch: Executable doesn't exist …` — reported as **1 failed** instead of a skip, because the spec only guarded the backend precondition | added a browser-executable presence guard: `chromium.executablePath()` + `existsSync` before the test body. Re-run now reports `1 skipped` with the prerequisite named, which is the documented behaviour |
 | ESLint `react-hooks/set-state-in-effect` | `Calling setState synchronously within an effect` | loading state moved out of the effect body |
 | `pip install -e .` in the sandbox | `invalid command 'bdist_wheel'` | `wheel` + `setuptools` added to the dev lock with hashes; verified in a throwaway copy (real repo correctly refuses 3.11) |
 | Real `.venv` editable install | `requires a different Python: 3.11.2 not in '<3.13,>=3.12'` | **not a defect** — the guard works; the sandbox simply is not 3.12 |
@@ -312,8 +313,36 @@ The repository virtual environment lives at `.venv/` (gitignored).
 | **All five PowerShell scripts** (`preflight`, `setup`, `start`, `stop`, `test_all`) | No PowerShell and no Windows in this environment. Only static properties are tested (`test_powershell_scripts.py`). **Linux results are not evidence that these scripts work.** |
 | **The Python suite on Python 3.12** | The sandbox has Python 3.11.2; obtaining 3.12 was impossible (the python-build-standalone release host is not in the allowed egress set). CI runs the same suite on 3.12 and is the first 3.12 execution. |
 | **GitHub Actions run** | The workflow file could not be pushed at all (§7.5). No run exists yet; the owner must add the file (copy from the PR body) and then the run is observable. |
-| **Playwright browser smoke** | Browser binary download failed (§7.2). Spec exists (`frontend/tests/e2e/health.spec.ts`), gate is `SKIP` by design. |
+| **Playwright browser smoke** | `npx playwright install chromium` fails (`Download failure, code=1`) because the browser CDN is outside the allowed egress set. The spec now self-guards both preconditions and the run reports `1 skipped` (verified: `npx playwright test` -> `1 skipped`), so it never fakes a pass or a failure. `test_all.ps1` reports the gate as `SKIP` with the reason. |
 | **`test_all.ps1` end-to-end** | Same reason as the PowerShell row; each underlying command it calls was executed individually here. |
+
+### 7.4b Re-verification at the submitted head
+
+Re-run after the review fixes, at head `a20c536` on a clean working tree:
+
+| Command | Exit | Observed |
+|---|---|---|
+| `python -m pytest` | 0 | `94 passed in 0.66s` |
+| `ruff check .` | 0 | `All checks passed!` |
+| `ruff format --check .` | 0 | `27 files already formatted` |
+| `python scripts/python/check_openapi.py` | 0 | `PASS (2 paths, 3 schemas)` |
+| `python scripts/python/scan_repository.py` | 0 | `PASS (93 tracked files)` |
+| `alembic upgrade head` / `downgrade base` / `upgrade head` | 0 | all three steps exit 0; `check_alembic_smoke.py` PASS |
+| `alembic -c <abs path>` from `/tmp` | 0 | migration applied (CWD independence) |
+| `uvicorn … --port 8000` then `curl /health` | 0 | **200**, `status=ok`, `db=ok` |
+| `curl /version` | 0 | `api_version=v1`, `git_sha=a20c536…` (the real head) |
+| `curl /openapi.json`, `/docs` | 0 | only `/health` + `/version`; notice present; docs UI 200 |
+| `npm run lint` / `npx tsc --noEmit` | 0 | clean |
+| `npm test` | 0 | `12 passed` (2 files) |
+| `npm run build` | 0 | built in 1.31 s |
+| dev server `:5173` -> `/`, `/health`, `/version` | 0 | 200, 200, 200 (proxy proven) |
+| preview server `:4173` -> `/`, `/health`, `/version` | 0 | 200, 200, 200 (production build + proxy) |
+| `npx playwright test` | skipped | `1 skipped` — chromium not installed (honest, not a failure) |
+
+Repository audit at the same head: `git ls-files` contains no `.env`, database, log, PID file,
+`node_modules`, `.venv` or `dist`; the secret/artefact scan reports 0 findings; the backend contains
+none of `langgraph`, `ollama`, `pytesseract`, `pypdf`, `smtplib`, `sendgrid`, `twilio`, `requests`,
+`httpx`, `aiohttp`.
 
 ### 7.5 CI workflow delivery blocker (incomplete deliverable)
 
