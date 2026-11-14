@@ -4,13 +4,15 @@
 |---|---|
 | Report ID | `REPORT-P1-001` |
 | Phase | **P1 only** — repository foundation, reproducible startup, `/health` + `/version`, frontend status page, SQLite + Alembic baseline, Windows scripts, CI |
-| Status | **IN_REVIEW — submitted for owner review; not accepted, not merged, not `PASS`** |
+| Status | **IN_REVIEW — owner Windows verification complete; owner approval and merge still pending. Not `PASS`, not merged.** |
 | Branch | `arena/d86c4f98-ai-doctor-followup-agent` |
 | Base commit | `a33e693ba16560836312351787769ec5ee18b469` (verified `main` HEAD before any change) |
-| Head commit | recorded in the PR description (this file is committed with it) |
-| Pull request | open against `main`, title `P1: Foundation and reproducible local startup` |
+| Head commit | `eec6642ba700be25f8be1d645bb099f51a665441` — the commit the owner verified on Windows |
+| Merge SHA | **unset — the phase is not merged** |
+| Pull request | [#4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4) against `main`, title `P1: Foundation and reproducible local startup` |
+| GitHub Actions | run [`43615782079`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43615782079) — **SUCCESS** |
 | Author | Arena agent (implementer) |
-| Reviewer | Project owner (pending) |
+| Reviewer | Project owner — Windows verification complete; **sign-off pending** |
 
 > **EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE.** This report describes infrastructure
 > work. No clinical feature, no patient data and no model integration exists. Nothing here was
@@ -121,10 +123,10 @@ were added under `docs/**` — see §11 for the scope note the owner should ackn
 | 3 | React + TypeScript + Vite minimal professional page | **Complete** | `frontend/` — one health/status route, no clinical screen |
 | 4 | SQLite + SQLAlchemy + Alembic minimal reversible baseline | **Complete** | `backend/app/db/**`, `backend/migrations/**` (one table, `schema_meta`) |
 | 5 | Dependency declarations + locks + `package-lock.json` | **Complete** | `pyproject.toml`, `requirements/*.lock` (uv, universal, hashed), `frontend/package-lock.json` |
-| 6 | Five Windows PowerShell scripts | **Implemented — not executed** | `scripts/powershell/` (see §7) |
+| 6 | Five Windows PowerShell scripts | **Implemented and executed on the owner's Windows laptop** (PASS; see §13) | `scripts/powershell/` |
 | 7 | `.env.example`, strict `.gitignore`, no committed secrets/artifacts | **Complete and scanned** | `.env.example`, `.gitignore`, `scripts/python/scan_repository.py` |
 | 8 | Deterministic tests, Ruff, build validation, Alembic smoke | **Complete and executed** | `backend/tests/`, `frontend/tests/`, `test_all.ps1` gates |
-| 9 | Minimal GitHub Actions CI, no model/GPU/paid API | **INCOMPLETE — workflow prepared but could not be pushed** (GitHub App token lacks the `workflows` permission). Full file included in the PR description for the owner to add. | workflow content in the PR body; not present on the branch |
+| 9 | Minimal GitHub Actions CI, no model/GPU/paid API | **Complete and green** — the agent could not push workflow files, so the owner committed it at `6d09b66`; run [`43615782079`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43615782079) SUCCESS | `.github/workflows/ci.yml` |
 | 10 | Reproducible Windows guide + truthful P1 report | **Complete** | `docs/runbooks/WINDOWS_SETUP.md`, this report |
 
 ### 3.1 `/health` — a live response (not an expectation)
@@ -254,10 +256,19 @@ contract silently.
 
 ## 7. Commands executed — actual results
 
+> **How to read §7.** Everything in §7.1–§7.4 was executed by the *implementing agent*
+> in a **Linux authoring sandbox** (Python 3.11.2, Node 22.22.3). Those numbers are kept
+> as the **historical record of the authoring environment** and have not been rewritten.
+> The **current** cross-platform state — the owner's Windows verification, the passing
+> GitHub Actions run, and what remains genuinely unexecuted — is in **§8**.
+> Where §7.3 says a check was "not executed", read it as *not executed in the authoring
+> sandbox*; §8 records whether the owner has since executed it.
+
+
 Environment: Linux sandbox, Debian 12, Python **3.11.2**, Node **22.22.3**, npm 10.9.8, git 2.39.5.
 The repository virtual environment lives at `.venv/` (gitignored).
 
-### 7.1 Executed and passed
+### 7.1 Executed and passed (Linux authoring sandbox — historical)
 
 | # | Command | Exit | Observed result |
 |---|---|---|---|
@@ -284,14 +295,14 @@ The repository virtual environment lives at `.venv/` (gitignored).
 | 21 | `npm ci --no-audit --no-fund` (equivalent clean install in CI config) | 0 | see #20 procedure |
 | 22 | `npm run lint` (eslint 10 + typescript-eslint) | 0 | no errors |
 | 23 | `npx tsc --noEmit` | 0 | typecheck clean under `strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` |
-| 24 | `npm test` (vitest + jsdom) | 0 | `2 passed (2)` files, `12 passed (12)` tests |
+| 24 | `npm test` (vitest + jsdom) | 0 | `2 passed (2)` files, `12 passed (12)` tests (12 at that time; now 13) |
 | 25 | `npm run build` (`tsc --noEmit && vite build`) | 0 | `34 modules transformed`; `dist/index.html 0.75 kB`, `index-*.css 4.25 kB`, `index-*.js 228.22 kB (gzip 71.43 kB)` |
 | 26 | `npm run dev -- --host 127.0.0.1 --port 5173` then `curl http://127.0.0.1:5173/` | 0 | dev server ready in 168 ms; HTML served |
 | 27 | `curl http://127.0.0.1:5173/health` and `/version` (Vite dev proxy) | 0 | both HTTP 200 with the same JSON as the backend — the page's data path is proven, not just the API |
 | 27a | `npm run preview -- --port 4173` then `curl http://127.0.0.1:4173/`, `/health`, `/version` | 0 | production build served (HTTP 200) and both endpoints proxied — this is the exact server the Playwright smoke test drives |
 | 28 | `python -c "yaml.safe_load(ci.yml)"` | 0 | `jobs: ['backend', 'frontend']` |
-| 29 | **Clean-clone reproducibility**: `git clone <branch>` into a fresh directory, then a fresh `python3.11 -m venv` + `pip install --require-hashes -r requirements/requirements-dev.lock` | 0 | lock installed from scratch; `pytest -q` -> `121 passed`; `ruff check .` + `ruff format --check .` clean; `check_openapi.py` PASS; `scan_repository.py` PASS (94 files); `alembic upgrade head` + `check_alembic_smoke.py` PASS |
-| 30 | Same clean clone: `npm ci --no-audit --no-fund` | 0 | `added 235 packages`; `npm run lint` clean; `npm test` -> 12 passed; `npm run build` -> built in 1.48 s |
+| 29 | **Clean-clone reproducibility**: `git clone <branch>` into a fresh directory, then a fresh `python3.11 -m venv` + `pip install --require-hashes -r requirements/requirements-dev.lock` | 0 | lock installed from scratch; `pytest -q` -> `121 passed`; `ruff check .` + `ruff format --check .` clean; `check_openapi.py` PASS; `scan_repository.py` PASS (94 files at the time of that run); `alembic upgrade head` + `check_alembic_smoke.py` PASS |
+| 30 | Same clean clone: `npm ci --no-audit --no-fund` | 0 | `added 235 packages`; `npm run lint` clean; `npm test` -> 12 passed (12 at that time; now 13); `npm run build` -> built in 1.48 s |
 
 ### 7.2 Executed and failed (then fixed in this branch)
 
@@ -306,19 +317,35 @@ The repository virtual environment lives at `.venv/` (gitignored).
 | `pip install -e .` in the sandbox | `invalid command 'bdist_wheel'` | `wheel` + `setuptools` added to the dev lock with hashes; verified in a throwaway copy (real repo correctly refuses 3.11) |
 | Real `.venv` editable install | `requires a different Python: 3.11.2 not in '<3.13,>=3.12'` | **not a defect** — the guard works; the sandbox simply is not 3.12 |
 
-### 7.3 Not executed — and why
+### 7.3 Not executed in the authoring sandbox — and why
 
 | Check | Reason |
 |---|---|
-| **All five PowerShell scripts** (`preflight`, `setup`, `start`, `stop`, `test_all`) | No PowerShell and no Windows in this environment. Only static properties are tested (`test_powershell_scripts.py`). **Linux results are not evidence that these scripts work.** |
-| **The Python suite on Python 3.12** | The sandbox has Python 3.11.2; obtaining 3.12 was impossible (the python-build-standalone release host is not in the allowed egress set). CI runs the same suite on 3.12 and is the first 3.12 execution. |
-| **GitHub Actions run** | The workflow file could not be pushed at all (§7.5). No run exists yet; the owner must add the file (copy from the PR body) and then the run is observable. |
+| **All five PowerShell scripts** (`preflight`, `setup`, `start`, `stop`, `test_all`) | No PowerShell and no Windows in the authoring sandbox. Only static properties were tested there (`test_powershell_scripts.py`). **Linux results are not evidence that these scripts work.** *Since executed by the owner on Windows — §13.1–§13.3.* |
+| **The Python suite on Python 3.12** | The sandbox has Python 3.11.2; obtaining 3.12 was impossible (the python-build-standalone release host is not in the allowed egress set). *Since executed on 3.12 by CI run `43615782079` and by the owner on Python 3.12.9 — §13.* |
+| **GitHub Actions run** | The workflow file could not be pushed by the agent at the time (§7.5). *Since resolved: the owner committed it at `6d09b66` and run `43615782079` completed SUCCESS.* |
 | **Playwright browser smoke** | `npx playwright install chromium` fails (`Download failure, code=1`) because the browser CDN is outside the allowed egress set. The spec now self-guards both preconditions and the run reports `1 skipped` (verified: `npx playwright test` -> `1 skipped`), so it never fakes a pass or a failure. `test_all.ps1` reports the gate as `SKIP` with the reason. |
 | **`test_all.ps1` end-to-end** | Same reason as the PowerShell row; each underlying command it calls was executed individually here. |
 
-### 7.4b Re-verification at the submitted head
+### 7.4 Requires the owner's Windows laptop — **now executed (§13)**
 
-Re-run after the review fixes, at head `a20c536` on a clean working tree:
+In the authoring sandbox none of the PowerShell scripts could run, so the whole
+Windows gate was listed here as owner-only work. **The owner has since executed all of
+it** at head `eec6642`; the full record is the appendix in **§13**. Summary:
+`preflight.ps1` PASS, `setup.ps1` PASS (including from a path containing spaces),
+`start.ps1` + `/health` HTTP 200, the status page rendered, `test_all.ps1` 12 PASS /
+0 FAIL / 1 optional SKIP, and `stop.ps1` PASS leaving ports 8000 and 5173 free with all
+three tracking files removed.
+
+---
+
+### 7.4a Re-verification at an earlier review head (historical)
+
+> Historical record: this re-run was made at head `a20c536`, **before** the P1-R06/R07/R08
+> fixes. Its numbers are kept as-is. The current head is `eec6642`; the current state is
+> §13.
+
+Re-run after the round-1 review fixes, at head `a20c536` on a clean working tree:
 
 | Command | Exit | Observed |
 |---|---|---|
@@ -326,14 +353,14 @@ Re-run after the review fixes, at head `a20c536` on a clean working tree:
 | `ruff check .` | 0 | `All checks passed!` |
 | `ruff format --check .` | 0 | `27 files already formatted` |
 | `python scripts/python/check_openapi.py` | 0 | `PASS (2 paths, 3 schemas)` |
-| `python scripts/python/scan_repository.py` | 0 | `PASS (94 tracked files)` |
+| `python scripts/python/scan_repository.py` | 0 | `PASS (94 tracked files at that head; 95 now)` |
 | `alembic upgrade head` / `downgrade base` / `upgrade head` | 0 | all three steps exit 0; `check_alembic_smoke.py` PASS |
 | `alembic -c <abs path>` from `/tmp` | 0 | migration applied (CWD independence) |
 | `uvicorn … --port 8000` then `curl /health` | 0 | **200**, `status=ok`, `db=ok` |
 | `curl /version` | 0 | `api_version=v1`, `git_sha=a20c536…` (the real head) |
 | `curl /openapi.json`, `/docs` | 0 | only `/health` + `/version`; notice present; docs UI 200 |
 | `npm run lint` / `npx tsc --noEmit` | 0 | clean |
-| `npm test` | 0 | `12 passed` (2 files) |
+| `npm test` | 0 | `12 passed` (2 files) — count at that earlier head |
 | `npm run build` | 0 | built in 1.31 s |
 | dev server `:5173` -> `/`, `/health`, `/version` | 0 | 200, 200, 200 (proxy proven) |
 | preview server `:4173` -> `/`, `/health`, `/version` | 0 | 200, 200, 200 (production build + proxy) |
@@ -343,6 +370,52 @@ Repository audit at the same head: `git ls-files` contains no `.env`, database, 
 `node_modules`, `.venv` or `dist`; the secret/artefact scan reports 0 findings; the backend contains
 none of `langgraph`, `ollama`, `pytesseract`, `pypdf`, `smtplib`, `sendgrid`, `twilio`, `requests`,
 `httpx`, `aiohttp`.
+
+### 7.5 CI workflow delivery — resolved by the owner (commit `6d09b66`)
+
+`.github/workflows/ci.yml` was written, YAML-parsed and covered by 16 static tests
+(python 3.12, node 22, read-only permissions, no model/GPU/OCR/paid API/secrets, every
+gate invoked, short timeouts). Pushing it failed:
+
+```text
+! [remote rejected] arena/d86c4f98-ai-doctor-followup-agent -> ... (refusing to allow a
+  GitHub App to create or update workflow `.github/workflows/ci.yml` without `workflows`
+  permission)
+```
+
+A direct API attempt to create a test workflow returned
+`403 Resource not accessible by integration`. This is a permission boundary on the
+agent's GitHub App token, not a code defect.
+
+**Resolved.** The owner committed the workflow at `6d09b66` and both jobs now run on
+every push. Current state:
+
+* **GitHub Actions run [`43615782079`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43615782079)
+  completed SUCCESS** (backend Python 3.12 + frontend Node 22) — the CI acceptance
+  criterion is met;
+* the 16 static workflow tests now execute instead of skipping when the file is absent;
+* `test_all.ps1` remains the local equivalent gate for the owner's laptop.
+
+The history above is kept because the permission boundary is a real constraint on what
+this session could deliver, not a defect that was fixed in code.
+
+### 7.6 Review round 1 — findings and resolutions
+
+Reviews `5905323895` (P1-R01–R05) and `5905460892` (P1-R06) on head `7295d0c`.
+The owner's first Windows run of `test_all.ps1` produced **PASS 1 / FAIL 9 /
+SKIPPED 1** although the underlying tools succeeded — a reporting defect, not a
+tool failure. All six findings are addressed below; **no finding is closed by
+this document alone** — the owner re-runs on Windows.
+
+| ID | Severity | Finding | Resolution in this revision | Verified here |
+|---|---|---|---|---|
+| **P1-R06** | **Blocker** | `Invoke-Native` emitted native stdout into its caller's pipeline beside the exit code, so `$code = Invoke-Native …` was an array and `$code -eq 0` was false for successful commands. The owner saw `Ruff lint (exit All checks passed! 0)`. | `_common.ps1`: native output is piped to `Out-Host` (same console, out of the pipeline); `$code` initialised to `0` and cast `[int]`; stderr deliberately not merged (`2>&1` under `ErrorActionPreference='Stop'` is unsafe on 5.1). `test_all.ps1` gained `Get-ExitCodeValue`, which fails a gate loudly if the wrapper ever returns a non-`[int]`. `Get-NativeOutput` hardened the same way but still returns `{ExitCode, Output}`. | 9 new static tests + **executable** `scripts/powershell/tests/invoke_native.tests.ps1` (7 cases incl. numeric-looking output); the script is now gate 0 of `test_all.ps1` |
+| **P1-R03** | High | `Start-Process -ArgumentList` joins the array into one command line, so an `--app-dir` path containing a space was split and the child got a truncated path. | New shared `ConvertTo-QuotedArgument` / `ConvertTo-CommandLine` in `_common.ps1` (quotes only when needed, escapes embedded quotes, doubles a trailing backslash). `start.ps1` uses them for both the uvicorn and the `npm.cmd` launches. | Algorithm ported to Python and checked against 9 cases including `E:\DEPI\AI Doctor FollowUp Agent\backend` and `C:\Program Files\…` — all correct |
+| **P1-R05** | High | `stop.ps1` required the repository path in the frontend command line; the `cmd.exe` wrapper may not carry it, so Vite could survive. | Identity for `frontend` now needs the Vite signature **and** any of: repository path, `run dev`, `--port 5173`, or `strictPort` — all of which `start.ps1` always passes. Backend identity stays strict (repository path **and** `uvicorn` **and** `app.main:app`). The verified descendant tree is still what gets stopped. | Static tests assert the relaxed frontend rule and the unchanged strict backend rule |
+| **P1-R04** | Medium | The runbook's §5 told the owner to `git clone` into `E:\DEPI\AI-Doctor-FollowUp-Agent`, which already exists. | New §2.1 "You already have a clone (the normal case)" with `git fetch` / `git switch` / `git pull --ff-only` and a detached-HEAD alternative; fresh clone moved to optional §2.2 with a new path. §5 rewritten to match. | Documentation reviewed against the actual owner paths |
+| **P1-R02** | Open | Windows execution of the gate. | **Still open by design.** This revision is a fix for the defect the owner's run exposed; it must itself be re-run on Windows. | — (see §7.3) |
+| **P1-R01** | Closed | CI workflow missing. | Resolved by the owner: `.github/workflows/ci.yml` is committed at `6d09b66`; both Actions jobs are reported green by the owner. The 8 workflow tests now execute instead of skipping. | Workflow present and unmodified in the diff |
+| — | Medium | React `act(...)` warning in the loading-state test. | Cause: the test asserted, then the mocked `fetch` settled after the test ended. Fixed by modelling a request that never settles (deterministic) and by `await`ing the rejection in the sibling test. **Not suppressed.** `tests/setup.ts` now *fails* any test that emits an `act(...)` warning while still printing React's message verbatim. | Proven both ways: reintroducing the old test body fails with "React reported 1 unwrapped state update(s)"; the fixed suite is clean with empty stderr |
 
 ### 7.7 Review round 2 — P1-R07 shutdown blocker, and its resolution
 
@@ -446,57 +519,31 @@ survivor, keeps the tracking files, and exits `1` with
 - The verdict and state logic were ported to Python and run against the
   counterexample plus four other outcomes — all 21 assertions correct.
 
-### 7.6 Review round 1 — findings and resolutions
-
-Reviews `5905323895` (P1-R01–R05) and `5905460892` (P1-R06) on head `7295d0c`.
-The owner's first Windows run of `test_all.ps1` produced **PASS 1 / FAIL 9 /
-SKIPPED 1** although the underlying tools succeeded — a reporting defect, not a
-tool failure. All six findings are addressed below; **no finding is closed by
-this document alone** — the owner re-runs on Windows.
-
-| ID | Severity | Finding | Resolution in this revision | Verified here |
-|---|---|---|---|---|
-| **P1-R06** | **Blocker** | `Invoke-Native` emitted native stdout into its caller's pipeline beside the exit code, so `$code = Invoke-Native …` was an array and `$code -eq 0` was false for successful commands. The owner saw `Ruff lint (exit All checks passed! 0)`. | `_common.ps1`: native output is piped to `Out-Host` (same console, out of the pipeline); `$code` initialised to `0` and cast `[int]`; stderr deliberately not merged (`2>&1` under `ErrorActionPreference='Stop'` is unsafe on 5.1). `test_all.ps1` gained `Get-ExitCodeValue`, which fails a gate loudly if the wrapper ever returns a non-`[int]`. `Get-NativeOutput` hardened the same way but still returns `{ExitCode, Output}`. | 9 new static tests + **executable** `scripts/powershell/tests/invoke_native.tests.ps1` (7 cases incl. numeric-looking output); the script is now gate 0 of `test_all.ps1` |
-| **P1-R03** | High | `Start-Process -ArgumentList` joins the array into one command line, so an `--app-dir` path containing a space was split and the child got a truncated path. | New shared `ConvertTo-QuotedArgument` / `ConvertTo-CommandLine` in `_common.ps1` (quotes only when needed, escapes embedded quotes, doubles a trailing backslash). `start.ps1` uses them for both the uvicorn and the `npm.cmd` launches. | Algorithm ported to Python and checked against 9 cases including `E:\DEPI\AI Doctor FollowUp Agent\backend` and `C:\Program Files\…` — all correct |
-| **P1-R05** | High | `stop.ps1` required the repository path in the frontend command line; the `cmd.exe` wrapper may not carry it, so Vite could survive. | Identity for `frontend` now needs the Vite signature **and** any of: repository path, `run dev`, `--port 5173`, or `strictPort` — all of which `start.ps1` always passes. Backend identity stays strict (repository path **and** `uvicorn` **and** `app.main:app`). The verified descendant tree is still what gets stopped. | Static tests assert the relaxed frontend rule and the unchanged strict backend rule |
-| **P1-R04** | Medium | The runbook's §5 told the owner to `git clone` into `E:\DEPI\AI-Doctor-FollowUp-Agent`, which already exists. | New §2.1 "You already have a clone (the normal case)" with `git fetch` / `git switch` / `git pull --ff-only` and a detached-HEAD alternative; fresh clone moved to optional §2.2 with a new path. §5 rewritten to match. | Documentation reviewed against the actual owner paths |
-| **P1-R02** | Open | Windows execution of the gate. | **Still open by design.** This revision is a fix for the defect the owner's run exposed; it must itself be re-run on Windows. | — (see §7.3) |
-| **P1-R01** | Closed | CI workflow missing. | Resolved by the owner: `.github/workflows/ci.yml` is committed at `6d09b66`; both Actions jobs are reported green by the owner. The 8 workflow tests now execute instead of skipping. | Workflow present and unmodified in the diff |
-| — | Medium | React `act(...)` warning in the loading-state test. | Cause: the test asserted, then the mocked `fetch` settled after the test ended. Fixed by modelling a request that never settles (deterministic) and by `await`ing the rejection in the sibling test. **Not suppressed.** `tests/setup.ts` now *fails* any test that emits an `act(...)` warning while still printing React's message verbatim. | Proven both ways: reintroducing the old test body fails with "React reported 1 unwrapped state update(s)"; the fixed suite is clean with empty stderr |
-
-### 7.5 CI workflow delivery — RESOLVED by the owner (commit `6d09b66`)
-
-`.github/workflows/ci.yml` was written, YAML-parsed and covered by 16 static tests
-(python 3.12, node 22, read-only permissions, no model/GPU/OCR/paid API/secrets, every
-gate invoked, short timeouts). Pushing it failed:
-
-```text
-! [remote rejected] arena/d86c4f98-ai-doctor-followup-agent -> ... (refusing to allow a
-  GitHub App to create or update workflow `.github/workflows/ci.yml` without `workflows`
-  permission)
-```
-
-A direct API attempt to create a test workflow returned
-`403 Resource not accessible by integration`. This is a permission boundary on the
-agent's GitHub App token, not a code defect.
-
-**Resolution for the owner (one minute):** the complete workflow file is included verbatim
-in the PR description. Add it at `.github/workflows/ci.yml` on the branch (GitHub's web
-editor is enough) or grant the session app the `workflows` permission and re-run the agent.
-Until then:
-
-* **no GitHub Actions run exists** — the CI acceptance criterion is *not* met,
-* every command the workflow would run was executed manually (§7.1 items 3–10, 20–25),
-* `test_all.ps1` is the local equivalent gate for the owner's laptop.
-
-### 7.4 Requires owner Windows laptop
-
-See `docs/runbooks/WINDOWS_SETUP.md` §5 for the exact command list. Summary: `preflight.ps1`,
-`setup.ps1` (clean install reproduciblity), `start.ps1` + `/health` HTTP 200, browser load of
-`http://127.0.0.1:5173/`, Alembic `current`/`history`, `test_all.ps1`, and `stop.ps1` leaving
-ports 8000/5173 free.
-
 ---
+
+### 7.9 Review round 4 — P1-R09 documentation synchronization (docs-only)
+
+Finding: after the owner's successful Windows verification, `PHASE_PROGRESS.md` still
+described the Windows gate as "NOT EXECUTED", CI as undelivered/never run, and older
+frontend counts; `PHASE_1_REPORT.md` still carried "owner review pending / Windows not
+executed" wording in several places.
+
+**Fixed in this round — documentation only, no application or script change:**
+
+| Was | Now |
+|---|---|
+| `PHASE_PROGRESS.md` P1 row: "PowerShell scripts, Windows gate, Playwright smoke **not executed**" | Owner Windows gate **PASSED** with the exact counts, both start/stop paths, CI run link, and the optional Playwright SKIP |
+| P1 deliverables: "PowerShell … **not executed** — requires the owner laptop", "3.12 execution pending in CI", "93 passing"/"8 passing" | Executed on Windows and in CI; counts corrected to 121 backend / 13 frontend; CI **delivered and green** |
+| Status block: "owner review and the local Windows quality gate are pending" | Windows verification complete; **owner approval and merge still pending** |
+| Report header: "Head commit: recorded in the PR description / Reviewer: pending" | Head `eec6642`, merge SHA **unset**, CI run URL, reviewer "sign-off pending" |
+| Report §7 read as current state | §7 explicitly labelled the **historical** authoring-sandbox record; current state moved to §13 |
+| Report §7.4/§7.5 described the Windows gate as owner-only and CI as "not met" | §7.4 points to the executed evidence; §7.5 records CI as resolved and green |
+| §7.5–7.8 physically out of order | Renumbered into document order |
+
+**History is preserved, not rewritten.** §7.1–§7.3 and the round-by-round findings
+(§7.5–§7.8) keep their original numbers, commands and outcomes — including the failures
+that were fixed. They are now clearly labelled as what the *implementing agent* observed
+in a Linux sandbox, so they cannot be mistaken for the current cross-platform state.
 
 ## 8. Safety and security review
 
@@ -528,14 +575,22 @@ authentication surface and therefore no privilege boundary to break in P1.
 | `test_openapi.py` | 6 | Only `/health` + `/version`; served schema; `Health`/`VersionInfo`/`DependencyState` parity with P0; notice; public ops |
 | `test_database.py` | 9 | Baseline table + revision, no P2 tables, upgrade/downgrade/upgrade, `schema_meta` roundtrip, CHECK constraint, `PRAGMA foreign_keys`, directory creation, `:memory:` untouched, relative URL anchored to repo root |
 | `test_safety_guards.py` | 7 | Forbidden imports and clinical vocabulary absent, route surface, notice constant, no tracked artifacts, `.env.example` has no secret values, honest dependencies |
-| `test_powershell_scripts.py` | 40 (parametrised) | Script presence, helper dot-sourcing, root anchoring, no unsafe kill idioms, no policy weakening, `npm.cmd` only, ownership-checked stop with verified child-tree collection, state file, helper scripts exist, ASCII-only, no TODO markers |
+| `test_powershell_scripts.py` | 67 (parametrised) | Script presence, helper dot-sourcing, root anchoring, no unsafe kill idioms, no policy weakening, `npm.cmd` only, ownership-checked stop with verified child-tree collection, state file, helper scripts exist, ASCII-only, no TODO markers; plus the P1-R06 exit-code pipeline, P1-R07 role classifiers, and P1-R08 verdict-before-deletion ordering |
 | `test_ci_workflow.py` | 16 | YAML/jobs/triggers, Python 3.12 + Node 22, no model/GPU/secrets/services, read-only permissions, every gate invoked, timeouts, lock pins + hashes, no wildcards, runtime/dev separation, pyproject↔lock parity, no npm ranges, lockfile v3 |
 
-Frontend: `tests/HealthPage.test.tsx` — 8 tests (loading, dependency render, versions, notice,
-degraded badge, unreachable-backend error card, retry recovery, no clinical vocabulary);
-`tests/config.test.ts` — 4 tests (dev + preview proxy entries, loopback binding/ports, backend
-default).
-Browser: `tests/e2e/health.spec.ts` — 1 smoke test, **not executed here**.
+Backend total: **121 passed**.
+
+Frontend: `tests/HealthPage.test.tsx` — 9 tests (loading with a never-settling request,
+loading→error transition, dependency render, versions, notice, degraded badge,
+unreachable-backend error card, retry recovery, no clinical vocabulary);
+`tests/config.test.ts` — 4 tests (dev + preview proxy entries, loopback binding/ports,
+backend default). Frontend total: **13 passed**, zero `act(...)` warnings.
+
+Browser: `tests/e2e/health.spec.ts` — 1 smoke test, **never executed anywhere** (§13.4);
+it reports `1 skipped` with the missing prerequisite rather than a false result.
+
+PowerShell regression scripts (executed by the owner on Windows, §13.1):
+`invoke_native.tests.ps1` — **14 checks**; `stop_identity.tests.ps1` — **38 checks**.
 
 ---
 
@@ -547,9 +602,9 @@ Browser: `tests/e2e/health.spec.ts` — 1 smoke test, **not executed here**.
 | `P1-OPEN-02` | `docs/**` additions (this report, `docs/runbooks/WINDOWS_SETUP.md`) plus the `PHASE_PROGRESS.md` row are outside the literal P1 path list in `AGENTS.md` §5, but item 10 of the P1 brief requires them. | **Owner acknowledgement requested** in the PR. No other doc was edited. |
 | `P1-OPEN-03` | `DEPENDENCIES.md` records "nothing pinned" (P0 text); this report supersedes it for P1. | Owner decides whether to synchronise the P0 document now or at P2. |
 | `P1-OPEN-09` | **Closed** — the owner committed `.github/workflows/ci.yml` at `6d09b66`; both Actions jobs are green. | Resolved. |
-| `P1-OPEN-10` | Every PowerShell **fix** (R03/R05/R06/R07) is validated only statically here: PowerShell is absent from this sandbox and both PowerShell download routes are blocked (`release-assets.githubusercontent.com` -> `SSL_ERROR_SYSCALL`; no `powershell` wheel on PyPI). | Owner re-runs `invoke_native.tests.ps1`, `stop_identity.tests.ps1`, `test_all.ps1` and the live start/stop cycle on Windows before acceptance. |
-| `P1-OPEN-11` | The shutdown fix is proven against the owner's **recorded** command lines and a Python port of the classifier, not against a live Windows process tree. | The runbook's shutdown checklist (§5) captures the tree so any remaining lineage difference is visible. |
-| `P1-OPEN-12` | The incomplete-shutdown path (`exit 2`, tracking kept) is verified by the executable script and a Python port; it has not been exercised on Windows. | Owner may reproduce it deliberately with the `http.server` squatter recipe in `WINDOWS_SETUP.md` §5. |
+| `P1-OPEN-10` | **Closed** — the owner executed every PowerShell fix on Windows at `eec6642`: 14/14 and 38/38 regression checks, `test_all.ps1` 12 PASS / 0 FAIL / 1 SKIP, and live start/stop on both the normal and space-containing paths (§13). | Resolved. |
+| `P1-OPEN-11` | **Closed** — the shutdown fix was exercised against a live Windows process tree: backend PID 13516 plus frontend root PID 11860 and verified descendant PID 7156 stopped, both ports free, all three tracking files removed (§13.3). | Resolved. |
+| `P1-OPEN-12` | The **incomplete**-shutdown path (`exit 2`, tracking kept) is verified by the executable script cases 12–15 and a Python port, but was not reproduced on Windows — the owner's runs all ended cleanly. | Optional: reproduce with the `http.server` squatter recipe in `WINDOWS_SETUP.md` §5. Non-blocking. |
 | `P1-OPEN-04` | `pydantic-settings` reads `.env` from the repo root only. A second `.env` in a subdirectory is ignored. | Keep single-root configuration. |
 | `P1-OPEN-05` | `git_sha` falls back to `unknown` outside a git checkout (e.g. a source zip). CI sets `APP_GIT_SHA` explicitly. | Accepted; document in `setup.ps1` output if it matters. |
 | `P1-OPEN-06` | Vite 7 / TypeScript 5.9 chosen over the newest majors (8 / 7) for toolchain stability. | Revisit only with a re-run of the full gate. |
@@ -572,18 +627,134 @@ Browser: `tests/e2e/health.spec.ts` — 1 smoke test, **not executed here**.
 
 ## 12. Owner review checklist
 
-- [ ] Base commit is `a33e693ba16560836312351787769ec5ee18b469` and the branch is `arena/d86c4f98-ai-doctor-followup-agent`.
-- [ ] Changed-file list (§2) matches the PR diff; no file outside the P1 scope (plus `P1-OPEN-02`).
-- [ ] `git diff main -- .gitignore .env.example` reviewed: no secret, no path outside the repo.
-- [ ] `preflight.ps1` → `setup.ps1` → `test_all.ps1` run on the laptop; paste real output into the PR.
-- [ ] `/health` returns 200 with `db=ok`; `/version` shows `api_version=v1` and a real SHA.
-- [ ] `http://127.0.0.1:5173/` loads the status page, shows the notice banner and no error card.
-- [ ] `alembic current` → `0001_p1_baseline`; `data\runtime\app.db` exists and is gitignored.
-- [ ] `stop.ps1` leaves ports 8000/5173 free and stops nothing else.
-- [ ] CI workflow added by the owner (§7.5) and the resulting run is green (paste the run URL).
-- [ ] `git ls-files | Select-String -Pattern '\.env$|\.db$|node_modules'` returns nothing.
-- [ ] Scope question `P1-OPEN-02` explicitly accepted or rejected.
-- [ ] Decide `P1-OPEN-01` (license) before P2.
+Items marked **[x]** were verified by the owner on Windows at `eec6642` (§13);
+the tick reflects the owner's own reported evidence, not an agent claim.
 
-**Phase status: `IN_REVIEW`.** The agent did not merge, did not self-approve and did not start P2.
-Merging and phase acceptance are owner decisions (`AGENTS.md` §2).
+- [x] Base commit is `a33e693ba16560836312351787769ec5ee18b469` and the branch is `arena/d86c4f98-ai-doctor-followup-agent`.
+- [x] Changed-file list (§2) matches the PR diff; no file outside the P1 scope (plus `P1-OPEN-02`).
+- [x] `git diff main -- .gitignore .env.example` reviewed: no secret, no path outside the repo.
+- [x] `preflight.ps1` → `setup.ps1` → `test_all.ps1` run on the laptop — `test_all.ps1` **12 PASS / 0 FAIL / 1 SKIP**.
+- [x] `/health` returns 200 with `db=ok`; `/version` shows `api_version=v1` and a real SHA.
+- [x] `http://127.0.0.1:5173/` loads the status page, shows the notice banner and no error card.
+- [x] `alembic current` → `0001_p1_baseline`; `data\runtime\app.db` exists and is gitignored.
+- [x] `stop.ps1` leaves ports 8000/5173 free and stops nothing else — on **both** the normal and the space-containing path.
+- [x] CI workflow added by the owner (§7.5); run [`43615782079`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43615782079) is green.
+- [x] `git ls-files | Select-String -Pattern '\.env$|\.db$|node_modules'` returns nothing.
+- [ ] **Open:** scope question `P1-OPEN-02` explicitly accepted or rejected.
+- [ ] **Open:** decide `P1-OPEN-01` (license) before P2.
+- [ ] **Open:** explicit owner approval of P1 and the merge itself.
+- [ ] **Open (optional):** run the Playwright smoke with `-IncludeE2E` if you want that gate executed (§13.4).
+
+**Phase status: `IN_REVIEW`. Owner approval is pending and the merge SHA is unset.**
+The agent did not merge, did not self-approve and did not start P2. Merging and phase
+acceptance are owner decisions (`AGENTS.md` §2).
+
+---
+
+## 13. Owner Windows verification — final appendix
+
+This appendix records evidence **produced by the project owner on Windows**, reported in
+PR #4 review `5905950006` and the accompanying owner notes. The agent did not execute any
+of it and did not synthesize any figure below. Everything is at head
+**`eec6642ba700be25f8be1d645bb099f51a665441`**.
+
+**Environment:** Windows PowerShell **5.1.22621.4249**, Python **3.12.9**, Node
+**24.15.0**, npm 11.17.0.
+
+### 13.1 Quality gate and regression suites
+
+| Check | Result |
+|---|---|
+| `scripts\powershell\test_all.ps1` | **12 PASS / 0 FAIL / 1 SKIP** — `test_all result: PASS` |
+| `scripts\powershell\tests\invoke_native.tests.ps1` | **14 checks PASS** — `Invoke-Native tests: PASS (14 checks)` |
+| `scripts\powershell\tests\stop_identity.tests.ps1` | **38 checks PASS** — `Stop identity tests: PASS (38 checks)` |
+| `scripts\powershell\preflight.ps1` | **PASS** |
+| `scripts\powershell\setup.ps1` | **PASS** (86.4 s from the space-containing path; clean Python 3.12.9 `.venv`, hash-locked dependencies, editable backend import, Alembic baseline, `npm ci`) |
+
+The single `SKIP` is the **optional** Playwright browser smoke test — see §13.4.
+
+The 14-check total is the sum of the executable assertions in `invoke_native.tests.ps1`
+(10 direct `Assert-True` calls, 4 of them reached through the `Test-SingleInteger` helper).
+The 38 are the direct assertions in `stop_identity.tests.ps1`. Both match the committed
+sources.
+
+### 13.2 Live lifecycle — normal repository path
+
+| Step | Result |
+|---|---|
+| `start.ps1` | **Start result: PASS** |
+| `GET /health` | HTTP **200**, `status=ok`, `db=ok`, `ollama=not_configured`, `tesseract=not_configured` |
+| `GET /version` | `app_version=0.1.0`, `api_version=v1`, real git SHA |
+| Frontend page | Rendered with Database OK, correct versions and the educational notice |
+| `stop.ps1` | **PASS** — backend and frontend stopped, both ports free |
+| Tracking files after stop | `run-state.json`, `backend.pid`, `frontend.pid` all **removed** |
+
+### 13.3 Live lifecycle — path containing spaces
+
+A separate detached worktree at `E:\DEPI\AI Doctor FollowUp Agent Space Test` was used,
+so the primary checkout was not touched.
+
+| Step | Result |
+|---|---|
+| `setup.ps1` from the spaced path | **PASS**, exit **0** (86.4 s). The npm `esbuild` allow-scripts warning was non-fatal |
+| Ports before start | Free |
+| `start.ps1 -NoBrowser` | **Start result: PASS**; backend PID **13516**, frontend PID **11860**; GET `/health` HTTP **200**; GET `/` HTTP **200**; the exact space-containing root appeared in the logs and there was **no `--app-dir` splitting or import error** |
+| `stop.ps1` | **Stop result: PASS — 2 stopped, ports 8000 and 5173 are free**, exit **0**. Backend PID 13516 stopped; frontend root PID 11860 **and verified descendant PID 7156** stopped |
+| `Get-NetTCPConnection -LocalPort 8000,5173 -State Listen` afterwards | **No listeners** |
+| `run-state.json`, `backend.pid`, `frontend.pid` afterwards | Each verified **absent** |
+
+This closes **P1-R03** (argument quoting for spaced paths), **P1-R06** (exit-code
+pipeline), **P1-R07** (wrapper/descendant identity) and **P1-R08** (tracking preserved
+until the outcome is decided) with real Windows runtime evidence rather than static
+analysis.
+
+> The owner's testing worktree should be removed only after confirming it holds no data
+> worth retaining. This does not affect the primary checkout or any git ref.
+
+### 13.4 Optional Playwright smoke test — **NOT EXECUTED**
+
+The browser smoke test remains the **one** check in P1 that was never executed anywhere.
+
+- Browsers are not installed by `setup.ps1` and are not committed (≈ 150 MB download).
+- Installation failed in the authoring sandbox (`Download failure, code=1`; the browser
+  CDN is outside the allowed egress set), and binaries were not installed for the owner's
+  run, so `test_all.ps1` reported the gate as `SKIP`.
+- The behaviour is honest by construction: `tests/e2e/health.spec.ts` checks the backend
+  precondition and the presence of `chromium.executablePath()` before running, and reports
+  **`1 skipped`** with the reason rather than a false pass or a confusing launch error.
+
+**This is not a blocker.** The gate is explicitly optional (`-IncludeE2E`), and the page
+it would verify was confirmed rendering on the owner's laptop by direct browser load
+(§13.2). To execute it: `cd frontend; npx playwright install chromium; cd ..;
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\test_all.ps1 -IncludeE2E`.
+
+### 13.5 Remaining non-blocking limitations
+
+| # | Limitation | Impact |
+|---|---|---|
+| 1 | Playwright browser smoke never executed (§13.4) | None for acceptance — optional gate; page verified manually |
+| 2 | Python locks are **universal** resolutions; the installed wheel set is platform-specific and hash-verified, but there is no offline mirror | A future install needs network access |
+| 3 | `pydantic-settings` reads `.env` from the repository root only | Documented; no multi-env requirement in P1 |
+| 4 | `git_sha` reports `unknown` outside a git checkout; CI sets `APP_GIT_SHA` | Cosmetic in exported tarballs |
+| 5 | Vite 7 / TypeScript 5.9 are deliberate choices over the newest majors (Vite 8 pulls the rolldown toolchain; `typescript-eslint` 8 does not support TypeScript 7) | None in P1; revisit in a later phase |
+| 6 | Project licence still undecided (`P1-OPEN-01`) | Owner decision, does not block P1 acceptance |
+| 7 | `docs/contracts/DEPENDENCIES.md` still says "nothing pinned" (`P1-OPEN-03`) | P0 document left untouched on purpose; this report supersedes it for the P1 set |
+| 8 | Documentation additions outside the literal P1 path list in `AGENTS.md` §5 (`P1-OPEN-02`) | Requires explicit owner acknowledgement |
+| 9 | Node 24.15.0 on the owner's machine vs Node 22 in CI | Both satisfy Vite 7's `^20.19.0 \|\| >=22.12.0`; the gate passed on 24.15.0 |
+
+### 13.6 Phase disposition
+
+**`IN_REVIEW`. Owner approval is PENDING. The merge SHA is deliberately unset.**
+
+| Item | State |
+|---|---|
+| Implementation | Complete — 13/13 deliverables |
+| Functional findings P1-R01…R09 | Addressed |
+| Windows runtime validation | **Passed** (§13.1–§13.3) |
+| GitHub Actions | **Green** — run `43615782079` |
+| Owner approval | **Pending** |
+| Merge | **Not merged**; `main` is unchanged at `a33e693` |
+| P2 | **Not started** |
+
+Nothing in this appendix may be read as an approval, and no future result has been
+claimed: the merge SHA does not exist yet.
