@@ -1,6 +1,6 @@
 # Phase Progress Tracker
 
-> **Current status: P0 PASS; P1 PASS (owner-approved and merged 2026-11-14). P2 TODO — not started.**
+> **Current status: P0 PASS; P1 PASS (owner-approved and merged 2026-11-14). P2 IN REVIEW — implemented, scope-authorized, awaiting independent review and owner Windows verification.**
 >
 > Phase 0 (Governance and Specifications) completed its documentation review process and was merged into `main` through [PR #2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2).
 >
@@ -16,7 +16,7 @@
 >
 > **Last accepted phase:** P1 — Foundation and Reproducible Startup, PR [#4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4), status `PASS`. Windows verification at `eec6642`, final docs-only PR head `58a0652`; merge commit `2c85db4d9fe9f17080146d12adfbd030a05cc75d`. Owner approved on 2026-11-14.
 >
-> **Next phase:** P2 — Patient data and role-based API. **TODO — not started.** P1 acceptance prerequisites are now satisfied; P2 requires its own scoped implementation branch and review.
+> **Current phase:** P2 — Patient data and role-based API, PR [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) (draft), status **IN REVIEW**. File-scope authorization recorded verbatim below. P2 is **not** PASS and is **not** merged.
 >
 > **Important:** P0 approval applies to the architecture, requirements, contracts, documentation and synthetic-demo scope. It does not represent completed application implementation, clinical validation or successful runtime testing.
 
@@ -32,7 +32,7 @@ The implementing agent never self-approves, marks phases `PASS` or merges pull r
 |---|---|---|---|---|---|---|
 | P0 | Governance / specifications | **PASS** | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) | `442256606fd2465439409cc9b4d42f1bec09a723` | Documentation consistency, traceability, OpenAPI validation and targeted contract checks completed. No runtime implementation tests applicable to P0. | **Approved — 2026-11-14** |
 | P1 | Foundation / reproducible startup | **PASS** | [#4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4) | `2c85db4d9fe9f17080146d12adfbd030a05cc75d` | **Owner Windows gate PASSED at `eec6642`:** `test_all.ps1` 12 PASS / 0 FAIL / 1 optional SKIP; `invoke_native.tests.ps1` 14 checks; `stop_identity.tests.ps1` 38 checks; live setup/start/stop PASS on both the normal path and the space-containing path (`E:\DEPI\AI Doctor FollowUp Agent Space Test`); ports 8000/5173 free and all three tracking files removed. GitHub Actions run [`43615782079`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43615782079) SUCCESS. Backend 121 tests, frontend 13, Ruff, Alembic, OpenAPI, scan, Vite build also pass locally. Optional Playwright smoke NOT EXECUTED. | **Approved — 2026-11-14; license and DEPENDENCIES sync deferred; Playwright SKIP acknowledged** |
-| P2 | Patient data + role-based API | TODO | — | — | Not run | Pending |
+| P2 | Patient data + role-based API | **IN REVIEW** | [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) (draft) | — | Sandbox Python 3.11: `355 passed` (125 P1 + 230 P2), `ruff check`/`format` clean, OpenAPI gate `PASS (11 paths / 12 operations, 22 schemas)`, `check_alembic_smoke` PASS in states `head`/`p1`/`base`, secret scan PASS. Windows PowerShell gate and the Python 3.12 CI leg: **not executed by the implementer** — see the phase report. | Pending |
 | P3 | Document ingestion + OCR verification | TODO | — | — | Not run | Pending |
 | P4 | Monitoring + demo review rules | TODO | — | — | Not run | Pending |
 | P5 | LangGraph agents + Ollama + approval | TODO | — | — | Not run | Pending |
@@ -380,6 +380,66 @@ Do not prefill future pass results, test counts, benchmarks or model metrics.
 
 ---
 
+## P2 Scope Authorization Record
+
+### Owner authorization — file-scope exceptions only (2026-11-14)
+
+Recorded **verbatim** from the owner's comment on PR #7:
+<https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6881832444>
+
+> **Owner Authorization — P2 File-Scope Exceptions**
+>
+> Approved: P2 scope exceptions A1–A3, B1–B2, C1–C2, D1–D2, E1–E2, F1–F2, G1–G3, H1–H3.
+>
+> I explicitly authorize modifications to the exact 19 physical file paths in the revised PR #7 scope matrix at head `58b60f83f50f77e6cd1c30b00019cf5c4f1de267`.
+>
+> This authorization is limited to completing P2 implementation and testing.
+>
+> I accept the following P2 design decisions:
+> - PBKDF2-HMAC-SHA256 with 600,000 iterations and unique salts.
+> - The bounded `session` and `checkin_idempotency` tables.
+> - The restored database-enforced `user.patient_id` foreign key.
+> - `DEMO_MODE=false` by default and operator-provided demo credentials.
+> - Local CLI bootstrap without a new HTTP seed endpoint.
+> - Deferral of `GET /api/v1/demo/status` to P5, without fabricating provider functionality.
+>
+> **Mandatory:** Address all findings in mentor review #5906194976 before requesting final P2 acceptance, including OpenAPI path counting, Alembic downgrade semantics, actual concurrent check-in handling, password rehash claims, requirement-to-test mapping and migration foreign-key safety.
+>
+> Record this authorization verbatim in `docs/roadmap/PHASE_PROGRESS.md`.
+>
+> Continue on the SAME P2 branch and draft PR #7. Preserve P1 behavior and all approved safety boundaries.
+>
+> **This is FILE-SCOPE AUTHORIZATION ONLY. It is NOT code approval, merge authorization, phase PASS acceptance or permission to begin P3.**
+>
+> Complete the implementation, run the full quality gates, report exact results and stop for independent review and owner Windows verification.
+
+### The authorized 19 paths (8 groups)
+
+| Group | Paths |
+|---|---|
+| A — assembly | `backend/app/main.py`; `backend/app/api/v1/__init__.py`; `backend/app/api/v1/router.py` |
+| B — doctor routes | `backend/app/api/v1/doctor/__init__.py`; `backend/app/api/v1/doctor/patients.py` |
+| C — patient routes | `backend/app/api/v1/patient/__init__.py`; `backend/app/api/v1/patient/checkins.py` |
+| D — demo reset | `backend/app/api/v1/demo/__init__.py`; `backend/app/api/v1/demo/router.py` |
+| E — migration | `backend/migrations/versions/0002_p2_patient_domain.py`; `backend/migrations/env.py` |
+| F — gates | `scripts/python/check_openapi.py`; `scripts/python/check_alembic_smoke.py` |
+| G — P1 gate tests | `backend/tests/test_openapi.py`; `backend/tests/test_safety_guards.py`; `backend/tests/test_database.py` |
+| H — docs/config | `.env.example`; `docs/phase-reports/PHASE_2_REPORT.md`; `docs/roadmap/PHASE_PROGRESS.md` |
+
+No path outside this list (plus the `AGENTS.md` §5 P2 allowlist:
+`backend/app/{api/v1/auth,core,db,schemas,services}/**`, `data/synthetic/**`,
+`backend/tests/p2/**`) was modified. `main` was never touched.
+
+### P2 status
+
+**IN REVIEW — not PASS, not merged, not approved.** Acceptance requires
+independent technical review, the owner's Windows gate and a separate owner
+decision after the PR is ready.
+
+See `docs/phase-reports/PHASE_2_REPORT.md` for evidence, limitations and rollback.
+
+---
+
 ## Next Authorized Workflow
 
 1. P0 and P1 accepted; preserve the verified merge SHAs and owner decision records.
@@ -390,7 +450,7 @@ Do not prefill future pass results, test counts, benchmarks or model metrics.
 
 **Current accepted baseline:** P0 governance plus **P1 foundation (PASS)**.
 
-**Next implementation milestone (not started):** P2 — Patient data domain and role-scoped API.
+**Current implementation milestone (IN REVIEW):** P2 — Patient data domain and role-scoped API, PR [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7).
 
 **Project classification:** Educational, synthetic-data, local-first multi-agent workflow assistant.
 
