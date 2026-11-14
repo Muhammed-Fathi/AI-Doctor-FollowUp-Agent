@@ -9,6 +9,26 @@ The database URL precedence is:
 
 Using application settings keeps a single source of truth for the SQLite path,
 so ``setup.ps1``, ``start.ps1``, pytest and Alembic always agree.
+
+Foreign keys during migrations
+------------------------------
+``app.db.session.create_db_engine`` enables ``PRAGMA foreign_keys=ON`` for every
+*runtime* connection, and that stays on — it is what makes the P2 foreign keys
+(including the ``user <-> patient`` cycle) meaningful.
+
+The **migration engine created below is a different engine**, and it disables
+enforcement deliberately:
+
+* ``PRAGMA foreign_keys`` is a no-op inside a transaction, so it cannot be toggled
+  per statement within a revision;
+* ``0002``'s ``downgrade`` has to ``DROP TABLE`` a parent that existing rows
+  reference (``patient`` referenced by ``user``), which fails while enforcement
+  is on.
+
+Scope: the listener is attached to the engine in this module only. No
+application code imports this module, ``app.db.session`` is untouched, and the
+smoke gate re-checks ``PRAGMA foreign_key_check`` on a *runtime* engine after
+migrating, so integrity is verified rather than assumed.
 """
 
 from __future__ import annotations
@@ -17,13 +37,17 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import Connection, create_engine
+from sqlalchemy import Connection, Engine, create_engine, event
+
+# Importing the models module registers every P2 table in ``Base.metadata`` so
+# autogenerate and the offline SQL render see them. Import the module, not a
+# single name: a narrower import silently drops tables if it is refactored.
+import app.db.models  # noqa: F401  (import after app.* helpers on purpose)
 
 # ``prepend_sys_path = %(here)s/..`` in alembic.ini makes ``import app`` work
 # regardless of the working directory.
 from app.core.config import get_settings
 from app.db.base import Base
-from app.db.models import SchemaMeta  # noqa: F401 - imported for autogenerate metadata
 from app.db.session import ensure_sqlite_directory
 
 config = context.config
@@ -34,6 +58,23 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
+
+
+def _disable_foreign_keys(engine: Engine) -> None:
+    """Turn enforcement off on *migration* connections only.
+
+    See the module docstring: DDL-time ``DROP TABLE`` of a referenced parent is
+    impossible with enforcement on, and the pragma cannot be changed inside the
+    transaction Alembic already opened. Runtime connections are unaffected.
+    """
+
+    @event.listens_for(engine, "connect")
+    def _off(dbapi_connection: object, _record: object) -> None:
+        cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
+        try:
+            cursor.execute("PRAGMA foreign_keys=OFF")
+        finally:
+            cursor.close()
 
 
 def _resolve_database_url() -> str:
@@ -88,6 +129,8 @@ def run_migrations_online() -> None:
     ensure_sqlite_directory(database_url)
 
     engine = create_engine(database_url, future=True)
+    if database_url.startswith("sqlite"):
+        _disable_foreign_keys(engine)
     try:
         with engine.connect() as connection:
             _run_migrations(connection)

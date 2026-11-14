@@ -18,8 +18,20 @@ RUNTIME_DIR: Path = REPO_ROOT / "data" / "runtime"
 #: Gitignored directory for uploaded synthetic documents (used from P3).
 UPLOAD_DIR: Path = RUNTIME_DIR / "uploads"
 
+#: Tracked synthetic fixture directory: the only patient-shaped data in git.
+SYNTHETIC_DATA_DIR: Path = REPO_ROOT / "data" / "synthetic"
+
 
 def ensure_runtime_dir() -> Path:
     """Create the runtime directory if it is missing and return it."""
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     return RUNTIME_DIR
+
+
+__all__ = [
+    "REPO_ROOT",
+    "RUNTIME_DIR",
+    "SYNTHETIC_DATA_DIR",
+    "UPLOAD_DIR",
+    "ensure_runtime_dir",
+]

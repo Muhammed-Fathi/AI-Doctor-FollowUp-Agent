@@ -1,0 +1,55 @@
+{
+  "notice": "SYNTHETIC DEMO DATA — NOT A REAL MEDICAL RECORD",
+  "disclaimer": "EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE",
+  "fixture_version": "p2-1.0.0",
+  "users": [
+    {
+      "id": "2dba488a-1af9-5ce5-941c-d02af58fd501",
+      "username": "demo_doctor",
+      "display_name": "Demo Doctor (Dr. Hana)",
+      "role": "doctor",
+      "patient_id": null,
+      "timezone": "Africa/Cairo"
+    },
+    {
+      "id": "cc6a049d-3a3e-55da-ab09-4a6d715ce43e",
+      "username": "demo_doctor_unassigned",
+      "display_name": "Demo Doctor (Dr. Karim — no assignments)",
+      "role": "doctor",
+      "patient_id": null,
+      "timezone": "Africa/Cairo"
+    },
+    {
+      "id": "ab84d3ce-366e-5442-882b-743914311298",
+      "username": "demo_admin",
+      "display_name": "Demo Administrator",
+      "role": "demo_admin",
+      "patient_id": null,
+      "timezone": "Africa/Cairo"
+    },
+    {
+      "id": "e07fe07c-cdfb-58cc-be2a-cd84cc00e92b",
+      "username": "demo_patient_a",
+      "display_name": "Demo Patient A (Sara)",
+      "role": "patient",
+      "patient_id": "11111111-1111-4111-8111-111111111111",
+      "timezone": "Africa/Cairo"
+    },
+    {
+      "id": "6a4ebca3-e4fd-5eda-9389-2526dde48974",
+      "username": "demo_patient_b",
+      "display_name": "Demo Patient B (Omar)",
+      "role": "patient",
+      "patient_id": "22222222-2222-4222-8222-222222222222",
+      "timezone": "Africa/Cairo"
+    },
+    {
+      "id": "298e95aa-6a18-5cc2-a77b-dd974d59d751",
+      "username": "demo_patient_c",
+      "display_name": "Demo Patient C (Nour)",
+      "role": "patient",
+      "patient_id": "33333333-3333-4333-8333-333333333333",
+      "timezone": "Africa/Cairo"
+    }
+  ]
+}

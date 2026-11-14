@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +83,35 @@ def session_scope(factory: sessionmaker[Session] | None = None) -> Iterator[Sess
         session.close()
 
 
+@lru_cache(maxsize=4)
+def _engine_for_url(database_url: str) -> Engine:
+    """Return a cached engine per URL so requests share one connection pool."""
+    return create_db_engine(database_url)
+
+
+def get_engine() -> Engine:
+    """Return the engine for the current settings (cache key = resolved URL)."""
+    return _engine_for_url(get_settings().database_url)
+
+
+def get_db_session() -> Iterator[Session]:
+    """Yield a request-scoped session; commit on success, roll back on error.
+
+    Used as a FastAPI dependency. The session is closed in every case, so a
+    raised ``ApiError`` cannot leak a connection or leave a half-applied
+    transaction behind.
+    """
+    session = get_session_factory(get_engine())()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
 def check_database(database_url: str | None = None) -> bool:
     """Return ``True`` when the database answers a trivial ``SELECT 1``.
 
@@ -105,6 +135,8 @@ __all__ = [
     "check_database",
     "create_db_engine",
     "ensure_sqlite_directory",
+    "get_db_session",
+    "get_engine",
     "get_session_factory",
     "session_scope",
 ]
