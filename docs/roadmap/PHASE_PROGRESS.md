@@ -32,7 +32,7 @@ The implementing agent never self-approves, marks phases `PASS` or merges pull r
 |---|---|---|---|---|---|---|
 | P0 | Governance / specifications | **PASS** | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) | `442256606fd2465439409cc9b4d42f1bec09a723` | Documentation consistency, traceability, OpenAPI validation and targeted contract checks completed. No runtime implementation tests applicable to P0. | **Approved — 2026-11-14** |
 | P1 | Foundation / reproducible startup | **PASS** | [#4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4) | `2c85db4d9fe9f17080146d12adfbd030a05cc75d` | **Owner Windows gate PASSED at `eec6642`:** `test_all.ps1` 12 PASS / 0 FAIL / 1 optional SKIP; `invoke_native.tests.ps1` 14 checks; `stop_identity.tests.ps1` 38 checks; live setup/start/stop PASS on both the normal path and the space-containing path (`E:\DEPI\AI Doctor FollowUp Agent Space Test`); ports 8000/5173 free and all three tracking files removed. GitHub Actions run [`43615782079`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43615782079) SUCCESS. Backend 121 tests, frontend 13, Ruff, Alembic, OpenAPI, scan, Vite build also pass locally. Optional Playwright smoke NOT EXECUTED. | **Approved — 2026-11-14; license and DEPENDENCIES sync deferred; Playwright SKIP acknowledged** |
-| P2 | Patient data + role-based API | **IN REVIEW** | [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) (draft) | — | Sandbox Python 3.11: `355 passed` (125 P1 + 230 P2), `ruff check`/`format` clean, OpenAPI gate `PASS (11 paths / 12 operations, 22 schemas)`, `check_alembic_smoke` PASS in states `head`/`p1`/`base`, secret scan PASS. **CI run [`43625331149`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625331149) at `dbaf938`: Backend Python 3.12 SUCCESS, Frontend Node 22 SUCCESS — independently verified by the reviewer** (the implementer's own Actions/Checks read returned 403 *Resource not accessible by integration*, retained as an observer limitation, **not** a CI failure). **Windows PowerShell gate: PENDING — owner.** | Pending |
+| P2 | Patient data + role-based API | **IN REVIEW** | [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) (draft) | — | Sandbox Python 3.11: `355 passed` (125 P1 + 230 P2), `ruff check`/`format` clean, OpenAPI gate `PASS (11 paths / 12 operations, 22 schemas)`, `check_alembic_smoke` PASS in states `head`/`p1`/`base`, secret scan PASS. **CI independently verified by the reviewer on two heads:** run [`43625331149`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625331149) at `dbaf938` and run [`43625989736`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625989736) at docs-only head `6d54ede` — Backend Python 3.12 SUCCESS and Frontend Node 22 SUCCESS in both (the implementer's own Actions/Checks read returned 403 *Resource not accessible by integration*, retained as an observer limitation, **not** a CI failure). **Windows PowerShell gate: PENDING — owner.** | Pending |
 | P3 | Document ingestion + OCR verification | TODO | — | — | Not run | Pending |
 | P4 | Monitoring + demo review rules | TODO | — | — | Not run | Pending |
 | P5 | LangGraph agents + Ollama + approval | TODO | — | — | Not run | Pending |
@@ -439,12 +439,14 @@ two observations are not merged:
 |---|---|---|
 | Implementer (agent) | `403 Resource not accessible by integration` on every Actions/Checks read — **NOT OBSERVED** | Permission limitation of the automation credentials; **not** a CI failure |
 | Independent reviewer | workflow run `43625331149` at HEAD `dbaf938ecb2e8abd39759f7856f083d2efe11cad` — **COMPLETED / SUCCESS**; Backend Python 3.12 **SUCCESS**; Frontend Node 22 **SUCCESS** | The 3.12 and Node 22 legs pass at that head |
+| Independent reviewer | workflow run `43625989736` at docs-only HEAD `6d54edeb65b31c437537010329027f6ea33d0aa1` — **COMPLETED / SUCCESS**; Backend Python 3.12 **SUCCESS**; Frontend Node 22 **SUCCESS** | The 3.12 and Node 22 legs also pass on the documentation-only commit (two Markdown files), which supersedes the earlier "docs commits lack CI" caveat |
 | Owner Windows gate | **PENDING** | `test_all.ps1`, migrations, bootstrap, API smoke on an isolated worktree — see `PHASE_2_REPORT.md` §10 |
 
 Because the reviewer resolved the CI question, **no Open Question was opened for
 it**. P2 remains **IN REVIEW**: CI success is not code approval, not merge
-authorization and not a phase PASS. The follow-up documentation commit(s) after
-`dbaf938` are docs-only and are not covered by run `43625331149`.
+authorization and not a phase PASS. The later documentation commits
+(review-driven §10 corrections) are docs-only; their CI, if wanted, is read on
+PR #7 → *Checks* and is not assumed here.
 
 ### P2 status
 

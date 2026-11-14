@@ -13,7 +13,7 @@ ticked by the implementer. Acceptance, merge and any PASS marking are the owner'
 | Scope authorization | [owner comment 6881832444](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6881832444) — recorded verbatim in `docs/roadmap/PHASE_PROGRESS.md` |
 | Authorized exceptions | A1–A3, B1–B2, C1–C2, D1–D2, E1–E2, F1–F2, G1–G3, H1–H3 (19 physical paths) |
 | Executed here | Debian 12 sandbox, **Python 3.11.2** |
-| CI | run [`43625331149`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625331149) at `dbaf938` — 3.12 **SUCCESS**, Node 22 **SUCCESS** (reviewer-verified, §9.2) |
+| CI | run [`43625331149`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625331149) at `dbaf938` and run [`43625989736`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625989736) at `6d54ede` — 3.12 **SUCCESS**, Node 22 **SUCCESS** in both (reviewer-verified, §9.2) |
 | Owner-required | Windows PowerShell gate on an isolated worktree, Windows PBKDF2 timing (§10) |
 
 > **This report distinguishes three evidence sources and never mixes them:**
@@ -247,7 +247,7 @@ iterations=600000 hash=271ms verify=204ms (CPython 3.11.2, this sandbox)
 | P2 HTTP lifecycle (auth, doctor, patient, demo) through the production app | **PASS** (29 tests) |
 | Two-writer concurrency, both interleavings | **PASS** (and fail without the recovery path) |
 | Migration round trip + ORM/metadata parity | **PASS** (7 tests) |
-| GitHub Actions CI (Python 3.12 + frontend) | **VERIFIED SUCCESS by the independent reviewer** — run `43625331149` at HEAD `dbaf938`, both jobs SUCCESS (§9.2). The implementer's own read attempt was 403 / NOT OBSERVED (§9.1, historical) |
+| GitHub Actions CI (Python 3.12 + frontend) | **VERIFIED SUCCESS by the independent reviewer** — run `43625331149` at `dbaf938` *and* run `43625989736` at docs-only HEAD `6d54ede`; both jobs SUCCESS in each (§9.2). The implementer's own read attempt was 403 / NOT OBSERVED (§9.1, historical) |
 | Windows `scripts/powershell/test_all.ps1` | **NOT RUN — owner-laptop required** |
 | Windows PBKDF2 timing at 600 000 iterations | **NOT RUN — owner-laptop required** |
 | Ollama / Tesseract / Playwright | **N/A** (P3+/optional) |
@@ -312,76 +312,104 @@ Provenance, deliberately never collapsed into one line:
 Because the reviewer resolved this matter, **no `OQ-P2-0x` was opened for it** — an
 open question is not created for a resolved issue.
 
-**Caveat, stated plainly:** run `43625331149` belongs to HEAD `dbaf938`. The
-documentation commits that follow this report (docs-only, `docs/**` + PR body) are
-not covered by that run; if the owner wants CI evidence for the final head, that
-run must be read on PR #7 → *Checks*.
+**Second verification, same reviewer, docs-only HEAD (supersedes the earlier caveat).**
+Run [`43625989736`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625989736)
+on HEAD `6d54edeb65b31c437537010329027f6ea33d0aa1` — the documentation commit whose
+diff is exactly two Markdown files — is **COMPLETED / SUCCESS**, with Backend
+Python 3.12 **SUCCESS** and Frontend Node 22 **SUCCESS**. That removes the earlier
+caveat that post-`dbaf938` docs commits lacked CI confirmation. No CI question is
+open.
+
+| Run | HEAD | Backend 3.12 | Frontend Node 22 | Overall |
+|---|---|---|---|---|
+| [`43625331149`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625331149) | `dbaf938` (implementation) | SUCCESS | SUCCESS | SUCCESS |
+| [`43625989736`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625989736) | `6d54ede` (docs-only) | SUCCESS | SUCCESS | SUCCESS |
+
+Any further documentation commit produced after this one is again docs-only; if
+the owner wants CI confirmation for the final head, it is read on PR #7 → *Checks*
+rather than assumed.
 
 ---
 
 ## 10. Windows verification checklist (owner) — PowerShell 5.1, Python 3.12, isolated worktree
 
-Supersedes the earlier draft of this section, which assumed `pwsh` 7, an
-unquoted placeholder password and the `main` checkout. Everything below is
-**Windows PowerShell 5.1 compatible** (no `&&`, no ternary, no `??`), runs from a
-**separate review worktree with its own virtual environment and its own fresh
-SQLite database**, and leaves the accepted `main` checkout and its
-`data/runtime/app.db` untouched.
+Revision 2 (2026-11-14), correcting five checklist defects found in mentor review
+`5906330237` before the owner runs anything. These were **checklist errors, not
+application defects**; no code, migration, gate script or P1 file was changed to
+fix them. Changes from revision 1:
 
-**What must not be touched:** `main`, `E:\…\AI-Doctor-FollowUp-Agent\data\runtime\app.db`,
-its `.env`, its `.venv`, and any path outside the authorized scope. No file in
-this repository is edited by the checklist; only environment variables, the new
-worktree and its own database are used.
+| # | Defect in revision 1 | Fix |
+|---|---|---|
+| 1 | `DEMO_SEED_PASSWORD` was cleared after bootstrap, so the running backend had `None` and `POST /demo/reset` would answer **500 E_INTERNAL** (`services/demo.py` refuses when the secret is absent) | §10.5 re-supplies the **same** password to the parent environment immediately before `start.ps1`, lets the backend inherit it at process start, then clears the parent shell |
+| 2 | Admin reset ran before the doctor's denial check, but reset deletes every `session` row → the doctor token would answer **401**, not `403` | §10.8 tests the doctor's **403 E_FORBIDDEN first**, the admin's `200` last, then proves the old tokens are dead |
+| 3 | `409 E_DUPLICATE_CHECKIN` was expected but never requested, and `201` was never asserted | §10.7 asserts the first `StatusCode = 201`, replays the same key, **then** submits the same measurement with a **new** key and asserts `409` + code |
+| 4 | Absence of `/demo/seed` was probed with `GET`, while the forbidden route would be a `POST` | §10.8 probes **`POST /api/v1/demo/seed`** (and `GET /demo/status`) |
+| 5 | `APP_VENV_DIR`, a pre-existing review folder, a dirty worktree and a missing `main` database were assumed rather than checked | §10.0 guards all four; §10.9 compares a captured hash **or** asserts continued non-existence; tokens/headers/password are cleared at the end |
 
-### 10.0 Preparation (once per review)
+**What must not be touched:** `main`, its `data/runtime/app.db` (existing **or**
+absent), its `.env`, its `.venv`, and any path outside the authorized scope. The
+checklist edits no repository file — only environment variables, the new worktree
+and that worktree's own database are used.
+
+### 10.0 Preparation and isolation guards (once per review)
 
 ```powershell
-# PowerShell 5.1, from the existing main checkout. Nothing is modified in it.
-$Main = 'E:\DEPI\AI-Doctor-FollowUp-Agent'          # accepted main working copy
-$Review = 'E:\DEPI\P2-Review'                        # empty/absent: a NEW directory
+# PowerShell 5.1. Run from anywhere; nothing in the main checkout is modified.
+$Main   = 'E:\DEPI\AI-Doctor-FollowUp-Agent'          # accepted main working copy
+$Review = 'E:\DEPI\P2-Review'                          # must NOT exist yet
 $Branch = 'arena/a8844cc2-ai-doctor-followup-agent'
 
-# a) Record the accepted database fingerprint so you can prove it was not touched.
-$MainDb = Join-Path $Main 'data\runtime\app.db'
-if (Test-Path -LiteralPath $MainDb) {
-    Get-FileHash -LiteralPath $MainDb -Algorithm SHA256 | Format-List
-    Get-Item  -LiteralPath $MainDb | Select-Object FullName, Length, LastWriteTime
-} else { 'main has no data/runtime/app.db yet' }
+# Guard 1: no inherited venv override, or setup.ps1 would install into main's venv.
+if ($env:APP_VENV_DIR) {
+    "APP_VENV_DIR was set to '$env:APP_VENV_DIR' - clearing it to keep the worktree isolated"
+    Remove-Item Env:APP_VENV_DIR
+}
+if (Test-Path Env:APP_VENV_DIR) { throw 'APP_VENV_DIR still set - stop and report' }
 
-# b) Fetch the branch and create an isolated worktree at the reviewed commit.
+# Guard 2: the review directory must not already exist.
+if (Test-Path -LiteralPath $Review) { throw "$Review already exists - choose an empty path or remove it manually" }
+
+# Guard 3: the main checkout must be clean and untouched.
+git -C $Main status --porcelain        # must print nothing; otherwise stop and report
+git -C $Main rev-parse HEAD            # record this: $MainHeadBefore
+$MainHeadBefore = (git -C $Main rev-parse HEAD)
+
+# Guard 4: main's database - handle BOTH states, remember which one applied.
+$MainDb = Join-Path $Main 'data\runtime\app.db'
+$MainDbExisted = Test-Path -LiteralPath $MainDb
+if ($MainDbExisted) {
+    $MainDbHashBefore = (Get-FileHash -LiteralPath $MainDb -Algorithm SHA256).Hash
+    "main app.db EXISTS  hash=$MainDbHashBefore"
+    Get-Item -LiteralPath $MainDb | Select-Object FullName, Length, LastWriteTime
+} else {
+    $MainDbHashBefore = $null
+    'main app.db does NOT exist - it must still not exist at the end of 10.9'
+}
+
+# Create the isolated worktree at the exact reviewed commit.
 git -C $Main fetch origin $Branch
-$Head = (git -C $Main rev-parse "origin/$Branch")   # the SHA under review, exact
+$Head = (git -C $Main rev-parse "origin/$Branch")
 $Head
 git -C $Main worktree add $Review $Head
-
-# c) Confirm isolation before installing anything.
-git -C $Review rev-parse HEAD                        # must equal $Head
-git -C $Review status --porcelain                    # must print nothing
+git -C $Review rev-parse HEAD          # must equal $Head
+git -C $Review status --porcelain      # must print nothing
 ```
-
-> `$env:APP_VENV_DIR` must stay **unset** here. If it points at the `main`
-> checkout's `.venv`, `setup.ps1` would install P2 into that environment instead
-> of the worktree's own. The worktree gets `<worktree>\.venv`.
 
 ### 10.1 Install inside the worktree (own venv, own `.env`, own database)
 
 ```powershell
 Set-Location $Review
-
-# setup.ps1 is idempotent: creates .env from .env.example when missing,
-# creates <worktree>\.venv with Python 3.12, installs the pinned lock files,
-# creates data\runtime\ and applies the Alembic migration (now head = 0002).
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\setup.ps1
 
-# Prove the worktree owns its environment and its database:
-& "$Review\.venv\Scripts\python.exe" -c "import sys; print(sys.version); print(sys.executable)"
-Test-Path -LiteralPath (Join-Path $Review 'data\runtime\app.db')      # expected: True (fresh)
-Test-Path -LiteralPath (Join-Path $Main   'data\runtime\app.db')      # main's own file, untouched
+# The worktree must own its interpreter and its database.
+$Python = Join-Path $Review '.venv\Scripts\python.exe'
+& $Python -c "import sys; print(sys.version); print(sys.executable)"   # 3.12.x under $Review\.venv
+Test-Path -LiteralPath (Join-Path $Review 'data\runtime\app.db')       # expected True (fresh)
 ```
 
-Expected: `3.12.x` and a path under `E:\DEPI\P2-Review\.venv`. If the Python
-version is not 3.12, stop and report it — the P2 gates are pinned to 3.12 on
-Windows.
+If the reported interpreter is not `$Review\.venv\...`, stop: it means an
+environment override leaked and the run is not isolated. If the Python version is
+not 3.12, stop and report (the Windows gates are pinned to 3.12).
 
 ### 10.2 Full quality gate (backend + frontend + migration + OpenAPI + scan)
 
@@ -391,85 +419,96 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\test_al
 "exit code: $LASTEXITCODE"
 ```
 
-Expected: the summary block reports **PASS** for Ruff lint, Ruff format check,
-Backend pytest, Alembic migration smoke (upgrade → downgrade base → upgrade),
-OpenAPI surface check, Frontend typecheck / lint / tests / build, Secret scan, and
-`$LASTEXITCODE = 0`. Playwright is reported `SKIP` unless `-IncludeE2E` is passed;
-a SKIP is **not** a pass.
+Expected: **PASS** for Ruff lint, Ruff format check, Backend pytest, Alembic
+migration smoke (`upgrade head → downgrade base → upgrade head` on a throwaway
+temporary database), OpenAPI surface check, Frontend typecheck/lint/tests/build,
+Secret scan; exit code `0`. Playwright `SKIP` unless `-IncludeE2E`; a SKIP is not
+a pass.
 
-Two documented details about this script (it is **unchanged by P2** — editing it
-was outside the authorized scope):
+Two documented properties of this **unchanged** script (editing it was outside the
+authorized scope):
 
-- Its OpenAPI gate banner still reads `/health, /version only`. That banner is a
-  historical P1 *comment*, not the behaviour: the line it invokes is the P2
-  strict gate, whose own output states `PASS (11 paths / 12 operations, 22 schemas)`.
-  Read the produced line, not the banner.
-- It runs `pytest` from the repository root with `PYTHONPATH=backend` and
-  `APP_ENV=test`, so the worktree's own sources are what get tested.
+- Its OpenAPI gate banner still reads `/health, /version only` from P1. That is a
+  historical comment: the script invokes `check_openapi.py`, the P2 strict gate,
+  whose own line reads `PASS (11 paths / 12 operations, 22 schemas)`. Judge the
+  produced line, not the banner.
+- It is where the `base` migration state is exercised, on a temporary database —
+  which is why §10.3 keeps the worktree database at `head` (reviewer decision
+  `5906330237`: no standalone owner `--state base` run is required).
 
-### 10.3 Migration round trip on the worktree's own database
+### 10.3 Migration round trip on the worktree's own database (ends at `head`)
 
 ```powershell
 Set-Location $Review
 $Alembic = Join-Path $Review 'backend\migrations\alembic.ini'
 $Python  = Join-Path $Review '.venv\Scripts\python.exe'
 $DbPath  = Join-Path $Review 'data\runtime\app.db'
+$Smoke   = Join-Path $Review 'scripts\python\check_alembic_smoke.py'
 
 & $Python -m alembic -c $Alembic upgrade head
-& $Python (Join-Path $Review 'scripts\python\check_alembic_smoke.py') $DbPath --state head
+& $Python $Smoke $DbPath --state head
 
-# P1 retention: 0002 -> 0001 must keep schema_meta; then back up to head.
+# P1 retention: 0002 -> 0001 must keep schema_meta, then return to head.
 & $Python -m alembic -c $Alembic downgrade 0001_p1_baseline
-& $Python (Join-Path $Review 'scripts\python\check_alembic_smoke.py') $DbPath --state p1
+& $Python $Smoke $DbPath --state p1
 & $Python -m alembic -c $Alembic upgrade head
-& $Python (Join-Path $Review 'scripts\python\check_alembic_smoke.py') $DbPath --state head
+& $Python $Smoke $DbPath --state head
 ```
 
-Expected: three `PASS` lines with revisions `0002_p2_patient_domain`,
-`0001_p1_baseline`, `0002_p2_patient_domain`. `--state base` is exercised by
-`test_all.ps1` on a temporary database; do not run `downgrade base` against the
-worktree database that the smoke tests below need.
+Expected: three `PASS` lines at revisions `0002_p2_patient_domain`,
+`0001_p1_baseline`, `0002_p2_patient_domain`. **Do not** run `downgrade base`
+against this database — it would drop the schema the smoke tests below need (and
+it is already covered in §10.2 and by `test_p2_migration.py`).
 
-### 10.4 Synthetic account bootstrap (no password is ever printed or committed)
+### 10.4 Synthetic account bootstrap — the password is entered **once** here
 
-Choose a password of at least 12 characters when prompted. It is typed, held only
-in the session, passed through the environment and stored only as a salted
-PBKDF2 hash. It is not written to `.env`, so it must be supplied again for any
-later reseed.
+The password is typed at the prompt (never in a command, never in `.env`, never in
+a file, never printed). It is kept in the shell session as `$Plain` and re-used in
+§10.5/§10.6 because `/demo/reset` and every login need the **same** secret that
+`seed` hashed.
 
 ```powershell
 Set-Location $Review
-$env:PYTHONPATH   = Join-Path $Review 'backend'
-$env:DEMO_MODE    = 'true'
+$env:PYTHONPATH = Join-Path $Review 'backend'
+$env:DEMO_MODE  = 'true'
 
 $secure = Read-Host -AsSecureString 'Local demo password (>= 12 chars, not reused anywhere)'
 $bstr   = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-$env:DEMO_SEED_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+$Plain  = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
 [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
 Remove-Variable bstr, secure
 
+$env:DEMO_SEED_PASSWORD = $Plain          # environment only; Settings prefers env over .env
 & "$Review\.venv\Scripts\python.exe" -m app.services.seed
 "seed exit code: $LASTEXITCODE"
-
-# The password must not survive in the session after seeding.
-Remove-Item Env:DEMO_SEED_PASSWORD
-if (Test-Path Env:DEMO_SEED_PASSWORD) { 'FAIL: password still in the environment' } else { 'OK: password cleared' }
+Remove-Item Env:DEMO_SEED_PASSWORD        # the seed has finished with it
+if (Test-Path Env:DEMO_SEED_PASSWORD) { 'FAIL: secret still in the environment' } else { 'OK: seed secret cleared' }
 ```
 
-Expected: exit code `0`; counts of users/patients/encounters/observations and the
-account list (`demo_admin (demo_admin)`, `demo_doctor (doctor)`,
-`demo_doctor_unassigned (doctor)`, `demo_patient_a|b|c (patient)`); the line
-`password: supplied via DEMO_SEED_PASSWORD (not displayed)`. Re-running must be
-idempotent (no duplicates), and running with `DEMO_MODE=false` must exit `2` with
-a refusal and write nothing.
+Expected: exit code `0`; counts of users/patients/encounters/observations; the
+account list (`demo_admin`, `demo_doctor`, `demo_doctor_unassigned`,
+`demo_patient_a|b|c`); the line `password: supplied via DEMO_SEED_PASSWORD (not
+displayed)`. Re-running is idempotent; with `DEMO_MODE=false` it must exit `2` and
+write nothing.
 
-### 10.5 Start the demo (backend + frontend) and check health
+### 10.5 Start the demo **with the reset secret available to the backend process**
+
+`POST /api/v1/demo/reset` re-seeds from the fixtures and therefore needs the seed
+secret **inside the backend process**: `services/demo.py` answers `500 E_INTERNAL`
+when `Settings.demo_seed_password` is empty. `Settings` is read **once per process**
+(env takes precedence over `.env`) and `Start-Process` in PowerShell 5.1 inherits
+the parent environment, so the variable must be present *at launch* — and can be
+cleared in the parent immediately afterwards.
 
 ```powershell
 Set-Location $Review
-$env:DEMO_MODE = 'true'      # inherited by the processes start.ps1 creates
+$env:DEMO_MODE           = 'true'   # inherited by the backend start.ps1 launches
+$env:DEMO_SEED_PASSWORD  = $Plain   # inherited at process start, needed only for reset
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\start.ps1 -NoBrowser
 "start exit code: $LASTEXITCODE"
+
+Remove-Item Env:DEMO_SEED_PASSWORD   # parent shell no longer carries it
+if (Test-Path Env:DEMO_SEED_PASSWORD) { 'FAIL: secret still in the environment' } else { 'OK: reset secret cleared from the parent shell' }
 
 $Api = 'http://127.0.0.1:8000'
 Invoke-RestMethod -Uri "$Api/health"  | ConvertTo-Json -Depth 6
@@ -479,19 +518,20 @@ Get-NetTCPConnection -LocalPort 8000, 5173 -State Listen |
     Select-Object LocalAddress, LocalPort, OwningProcess
 ```
 
+Documented limitation to be aware of: the secret now lives **only in the
+already-running backend process's memory**. Restarting the backend (without
+repeating the two lines above) would make `/demo/reset` answer `500 E_INTERNAL`.
+It is never written to `.env`, a script, a log or git, and `$Plain` is cleared in
+§10.9.
+
 Expected: `/health` → `status = "ok"` with database/migrations `ok`; `/version` →
-the P2 version string; the Vite page answers `200`; both ports listen on
-`127.0.0.1` only, and the owning processes are the ones `start.ps1` recorded in
-`data/runtime/`.
+the P2 version string; the Vite page `200`; ports 8000/5173 listening on
+`127.0.0.1` only, owned by the processes `start.ps1` recorded in `data/runtime/`.
 
 ### 10.6 Authentication and role-based API smoke
 
 ```powershell
 $Api = 'http://127.0.0.1:8000'
-$Pwd = Read-Host -AsSecureString 'Same demo password used in 10.4'
-$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Pwd)
-$Plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
 
 function Get-Token([string]$User) {
     $body = @{ username = $User; password = $Plain } | ConvertTo-Json
@@ -499,52 +539,52 @@ function Get-Token([string]$User) {
         -ContentType 'application/json' -Body $body).access_token
 }
 
-$DocToken       = Get-Token 'demo_doctor'
-$UnassignedTok  = Get-Token 'demo_doctor_unassigned'
-$PatToken       = Get-Token 'demo_patient_a'
-$AdminToken     = Get-Token 'demo_admin'
-Remove-Variable Plain, Pwd, bstr
+$DocToken      = Get-Token 'demo_doctor'
+$UnassignedTok = Get-Token 'demo_doctor_unassigned'
+$PatToken      = Get-Token 'demo_patient_a'
+$AdminToken    = Get-Token 'demo_admin'
 
 $H  = @{ Authorization = "Bearer $DocToken" }
 $HU = @{ Authorization = "Bearer $UnassignedTok" }
 $HP = @{ Authorization = "Bearer $PatToken" }
 $HA = @{ Authorization = "Bearer $AdminToken" }
 
-# identity
 Invoke-RestMethod -Uri "$Api/api/v1/auth/me" -Headers $H  | ConvertTo-Json -Depth 5
 Invoke-RestMethod -Uri "$Api/api/v1/auth/me" -Headers $HP | ConvertTo-Json -Depth 5   # patient_id present
 
-# unauthorized: no token must be 401 E_UNAUTHENTICATED (never 403, never HTML)
+# no token -> 401 E_UNAUTHENTICATED (never 403, never HTML)
 try { Invoke-RestMethod -Uri "$Api/api/v1/doctor/patients" -ErrorAction Stop | Out-Null }
-catch { "no token     -> " + [int]$_.Exception.Response.StatusCode + " " + $_.ErrorDetails.Message }
+catch { "no token       -> " + [int]$_.Exception.Response.StatusCode + " " + $_.ErrorDetails.Message }
 
-# a doctor cannot read an unassigned patient (403 E_SCOPE_VIOLATION, no content)
+# unassigned doctor -> 403 E_SCOPE_VIOLATION, no patient content
 $Pid = '11111111-1111-4111-8111-111111111111'
 try { Invoke-RestMethod -Uri "$Api/api/v1/doctor/patients/$Pid/timeline" -Headers $HU -ErrorAction Stop | Out-Null }
-catch { "unassigned   -> " + [int]$_.Exception.Response.StatusCode + " " + $_.ErrorDetails.Message }
+catch { "unassigned     -> " + [int]$_.Exception.Response.StatusCode + " " + $_.ErrorDetails.Message }
 
-# the assigned doctor reads the assigned patient
+# assigned doctor reads
 Invoke-RestMethod -Uri "$Api/api/v1/doctor/patients?limit=5" -Headers $H | ConvertTo-Json -Depth 4
 Invoke-RestMethod -Uri "$Api/api/v1/doctor/patients/$Pid" -Headers $H | ConvertTo-Json -Depth 4
 Invoke-RestMethod -Uri "$Api/api/v1/doctor/patients/$Pid/timeline?limit=5" -Headers $H | ConvertTo-Json -Depth 5
 Invoke-RestMethod -Uri "$Api/api/v1/doctor/patients/$Pid/observations?measure_type=glucose&limit=5" -Headers $H |
     ConvertTo-Json -Depth 5
 
-# a patient cannot use the doctor surface (403 E_FORBIDDEN) and cannot read someone else
+# patient on the doctor surface -> 403 E_FORBIDDEN; unknown id -> 404 E_NOT_FOUND
 try { Invoke-RestMethod -Uri "$Api/api/v1/doctor/patients" -Headers $HP -ErrorAction Stop | Out-Null }
-catch { "patient→doctor -> " + [int]$_.Exception.Response.StatusCode }
+catch { "patient→doctor -> " + [int]$_.Exception.Response.StatusCode + " " + $_.ErrorDetails.Message }
+try { Invoke-RestMethod -Uri "$Api/api/v1/doctor/patients/not-a-uuid/timeline" -Headers $H -ErrorAction Stop | Out-Null }
+catch { "malformed id   -> " + [int]$_.Exception.Response.StatusCode + " " + $_.ErrorDetails.Message }
 ```
 
-Expected: `401 E_UNAUTHENTICATED`; `403 E_SCOPE_VIOLATION` for the unassigned
-doctor with **no** patient content; populated-assignment reads for `demo_doctor`;
-`403 E_FORBIDDEN` for the patient on the doctor surface; every error body is the
-problem envelope (`type`, `title`, `status`, `code`, `request_id`), never HTML.
+Expected: `401 E_UNAUTHENTICATED`; `403 E_SCOPE_VIOLATION` with no patient content;
+populated reads for `demo_doctor`; `403 E_FORBIDDEN`; `400 E_VALIDATION` for the
+malformed id. Every error body is the problem envelope (`type`, `title`, `status`,
+`code`, `request_id`), never HTML.
 
-### 10.7 Check-in idempotency
+### 10.7 Check-in lifecycle: `201`, replay, and `409`
 
 ```powershell
-$Api = 'http://127.0.0.1:8000'
-$Now = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+$Api  = 'http://127.0.0.1:8000'
+$Now  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 $Key  = [guid]::NewGuid().ToString()
 $Body = @{ measured_at = $Now; measure_type = 'heart_rate'; value = 78; unit = 'bpm';
            note = 'owner Windows smoke' } | ConvertTo-Json
@@ -552,107 +592,160 @@ $Body = @{ measured_at = $Now; measure_type = 'heart_rate'; value = 78; unit = '
 $Hdr = @{ Authorization = "Bearer $PatToken"; 'Idempotency-Key' = $Key;
           'Content-Type' = 'application/json' }
 
-$first  = Invoke-RestMethod -Method Post -Uri "$Api/api/v1/patient/check-ins" -Headers $Hdr -Body $Body
-$second = Invoke-WebRequest -Method Post -Uri "$Api/api/v1/patient/check-ins" -Headers $Hdr -Body $Body
-$secondJson = $second.Content | ConvertFrom-Json
+# 1. first write must be HTTP 201
+$firstResp = Invoke-WebRequest -Method Post -Uri "$Api/api/v1/patient/check-ins" -Headers $Hdr -Body $Body
+"first status   : " + [int]$firstResp.StatusCode
+$first = $firstResp.Content | ConvertFrom-Json
+"trust_level    : $($first.trust_level) / source: $($first.source) / id: $($first.id)"
 
-"first  id: $($first.id) / trust_level: $($first.trust_level) / source: $($first.source)"
-"replay id: $($secondJson.id)  equal: $($first.id -eq $secondJson.id)"
-"Idempotent-Replay header: $($second.Headers['Idempotent-Replay'])"
+# 2. same key + same payload -> replay of the SAME row, header Idempotent-Replay: true
+$replayResp = Invoke-WebRequest -Method Post -Uri "$Api/api/v1/patient/check-ins" -Headers $Hdr -Body $Body
+$replay     = $replayResp.Content | ConvertFrom-Json
+"replay status  : " + [int]$replayResp.StatusCode
+"replay header  : " + $replayResp.Headers['Idempotent-Replay']
+"same id        : " + ($first.id -eq $replay.id)
 
-# engine-derived provenance cannot be forged: an extra field must be a 400
+# 3. NEW key + SAME measurement -> 409 E_DUPLICATE_CHECKIN (not 500, no second row)
+$DupHdr = @{ Authorization = "Bearer $PatToken"; 'Idempotency-Key' = [guid]::NewGuid().ToString();
+             'Content-Type' = 'application/json' }
+try {
+    Invoke-WebRequest -Method Post -Uri "$Api/api/v1/patient/check-ins" -Headers $DupHdr -Body $Body -ErrorAction Stop | Out-Null
+    'FAIL: duplicate measurement was accepted'
+} catch {
+    "duplicate      -> " + [int]$_.Exception.Response.StatusCode + " " + $_.ErrorDetails.Message
+}
+
+# 4. exactly one row with this value exists
+$mine = Invoke-RestMethod -Uri "$Api/api/v1/patient/check-ins?limit=20" -Headers $HP
+"rows with 78   : " + (@($mine.items | Where-Object { $_.value -eq 78 }).Count)
+
+# 5. engine-derived provenance cannot be forged, and mmol/L is never converted
 $Forge = @{ measured_at = $Now; measure_type = 'heart_rate'; value = 79; unit = 'bpm';
             trust_level = 'doctor_verified' } | ConvertTo-Json
 try {
     Invoke-RestMethod -Method Post -Uri "$Api/api/v1/patient/check-ins" `
         -Headers @{ Authorization = "Bearer $PatToken"; 'Content-Type' = 'application/json' } `
         -Body $Forge -ErrorAction Stop | Out-Null
-} catch { "forged field -> " + [int]$_.Exception.Response.StatusCode }
+} catch { "forged field   -> " + [int]$_.Exception.Response.StatusCode + " " + $_.ErrorDetails.Message }
 
-# unit allowlist: mmol/L glucose is refused, it is never converted
 $Bad = @{ measured_at = $Now; measure_type = 'glucose'; value = 6.1; unit = 'mmol/L' } | ConvertTo-Json
 try {
     Invoke-RestMethod -Method Post -Uri "$Api/api/v1/patient/check-ins" `
         -Headers @{ Authorization = "Bearer $PatToken"; 'Content-Type' = 'application/json' } `
         -Body $Bad -ErrorAction Stop | Out-Null
-} catch { "mmol/L       -> " + [int]$_.Exception.Response.StatusCode + " " + $_.ErrorDetails.Message }
-
-# self-scoped read-back
-Invoke-RestMethod -Uri "$Api/api/v1/patient/check-ins?limit=5" -Headers $HP | ConvertTo-Json -Depth 5
+} catch { "mmol/L         -> " + [int]$_.Exception.Response.StatusCode + " " + $_.ErrorDetails.Message }
 ```
 
-Expected: first `201` with `trust_level = self_reported_validated` and
-`source = patient_checkin`; the replay returns the **same** `id` with header
-`Idempotent-Replay: true` and creates no second row; a new key with an identical
-measurement is `409 E_DUPLICATE_CHECKIN` (not a 500); the forged field is `400
-E_VALIDATION`; `mmol/L` is `400 E_UNIT_NOT_ALLOWED`; the patient sees only their
-own check-ins.
+Expected: `first status = 201`, `trust_level = self_reported_validated`,
+`source = patient_checkin`; replay `201` with `Idempotent-Replay: true` and the
+**same** id; the new-key duplicate → **`409` with `E_DUPLICATE_CHECKIN`** and
+`rows with 78 = 1`; forged field → `400 E_VALIDATION`; `mmol/L` →
+`400 E_UNIT_NOT_ALLOWED`.
 
-### 10.8 Demo reset, then clean shutdown
+### 10.8 Demo administration — denial **first**, successful reset **last**
+
+`POST /demo/reset` deletes **every** row in `session`, so any token captured in
+§10.6 is invalid afterwards. The denial therefore has to be proven **before** the
+successful reset; the reset is the last authenticated call of the run.
 
 ```powershell
 $Api = 'http://127.0.0.1:8000'
-Invoke-RestMethod -Method Post -Uri "$Api/api/v1/demo/reset" -Headers $HA | ConvertTo-Json -Depth 4
-try { Invoke-RestMethod -Method Post -Uri "$Api/api/v1/demo/reset" -Headers $H -ErrorAction Stop | Out-Null }
-catch { "doctor → reset -> " + [int]$_.Exception.Response.StatusCode }   # 403 E_FORBIDDEN
 
-# the removed/deferred surface must stay absent
-foreach ($path in @('/api/v1/demo/status', '/api/v1/demo/seed')) {
-    try { Invoke-RestMethod -Uri "$Api$path" -Headers $HA -ErrorAction Stop | Out-Null }
-    catch { "$path -> " + [int]$_.Exception.Response.StatusCode }        # expected 404
-}
+# 1. a doctor must be refused: 403 E_FORBIDDEN (checked while tokens are still valid)
+try {
+    Invoke-RestMethod -Method Post -Uri "$Api/api/v1/demo/reset" -Headers $H -ErrorAction Stop | Out-Null
+    'FAIL: doctor was allowed to reset'
+} catch { "doctor reset   -> " + [int]$_.Exception.Response.StatusCode + " " + $_.ErrorDetails.Message }
 
+# 2. the forbidden / deferred surfaces must not exist, probed with the REAL method
+try {
+    Invoke-RestMethod -Method Post -Uri "$Api/api/v1/demo/seed" -Headers $HA -ErrorAction Stop | Out-Null
+    'FAIL: POST /demo/seed answered'
+} catch { "POST /demo/seed  -> " + [int]$_.Exception.Response.StatusCode }
+try {
+    Invoke-RestMethod -Method Get -Uri "$Api/api/v1/demo/status" -Headers $HA -ErrorAction Stop | Out-Null
+    'FAIL: GET /demo/status answered'
+} catch { "GET /demo/status -> " + [int]$_.Exception.Response.StatusCode }
+
+# 3. the administrator's reset — LAST authenticated call of the run
+$reset = Invoke-RestMethod -Method Post -Uri "$Api/api/v1/demo/reset" -Headers $HA
+$reset | ConvertTo-Json -Depth 4
+"cases_loaded   : " + ($reset.cases_loaded -join ', ')
+
+# 4. every pre-reset token is now dead (sessions were deleted) -> 401
+try { Invoke-RestMethod -Uri "$Api/api/v1/auth/me" -Headers $HA -ErrorAction Stop | Out-Null }
+catch { "admin token    -> " + [int]$_.Exception.Response.StatusCode + " (expected 401: session deleted by reset)" }
+
+# 5. the reseed used the SAME password: logging in again must work
+$Relogin = Get-Token 'demo_admin'
+"relogin ok     : " + [bool]$Relogin
+```
+
+Expected: doctor → `403 E_FORBIDDEN`; `POST /demo/seed` → `404`;
+`GET /demo/status` → `404`; admin reset → `200` with
+`cases_loaded = [A_stable, B_changed, C_ambiguous_ocr]` and the audit trail
+retained; the old admin token → `401`; re-login succeeds with the same password
+(proof that the reset re-hashed the same secret).
+
+### 10.9 Clean shutdown, isolation proof, and secret/token cleanup
+
+```powershell
 Set-Location $Review
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\stop.ps1
 "stop exit code: $LASTEXITCODE"
-Get-NetTCPConnection -LocalPort 8000, 5173 -State Listen -ErrorAction SilentlyContinue   # expected: none
+Get-NetTCPConnection -LocalPort 8000, 5173 -State Listen -ErrorAction SilentlyContinue   # expected: nothing
 Get-ChildItem -LiteralPath (Join-Path $Review 'data\runtime') -Filter *.json |
-    Select-Object Name                                                   # expected: no run-state/PID files
-```
+    Select-Object Name                                                                  # expected: no run-state/PID files
 
-Expected: reset returns `cases_loaded = [A_stable, B_changed, C_ambiguous_ocr]`
-and keeps the audit trail; the doctor is `403`; `/demo/status` and `/demo/seed`
-are `404`; `stop.ps1` exits `0`, both ports are free and the tracking files are
-gone.
-
-### 10.9 Prove isolation and record the measured numbers
-
-```powershell
-# main must be byte-identical to 10.0
+# main must be exactly as it was in 10.0
 git -C $Main status --porcelain
-git -C $Main rev-parse HEAD
-Get-FileHash -LiteralPath (Join-Path $Main 'data\runtime\app.db') -Algorithm SHA256
+$MainHeadAfter = (git -C $Main rev-parse HEAD)
+"main HEAD unchanged: " + ($MainHeadAfter -eq $MainHeadBefore)
+if ($MainDbExisted) {
+    $after = (Get-FileHash -LiteralPath $MainDb -Algorithm SHA256).Hash
+    "main app.db unchanged: " + ($after -eq $MainDbHashBefore) + " ($after)"
+} else {
+    "main app.db still absent: " + (-not (Test-Path -LiteralPath $MainDb))
+}
 
-# PBKDF2 timing at the shipped work factor, measured ON WINDOWS (do not reuse
-# the 3.11 sandbox figure from §7 — it is not a Windows measurement)
+# PBKDF2 timing at the shipped work factor, measured ON WINDOWS
 & "$Review\.venv\Scripts\python.exe" -c "import sys,time; sys.path.insert(0,'backend'); from app.core.security import hash_password, verify_password; t=time.perf_counter(); h=hash_password('benchmark-only-not-a-credential'); t1=time.perf_counter(); ok=verify_password('benchmark-only-not-a-credential',h); print('python', sys.version.split()[0]); print('hash %.0f ms, verify %.0f ms, ok=%s' % ((t1-t)*1000,(time.perf_counter()-t1)*1000,ok))"
 
-# remove the review worktree when finished (its database goes with it)
-git -C $Main worktree remove $Review --force
+# clear secrets and tokens from the session
+Remove-Item Env:DEMO_MODE, Env:DEMO_SEED_PASSWORD, Env:PYTHONPATH -ErrorAction SilentlyContinue
+Remove-Variable Plain, DocToken, UnassignedTok, PatToken, AdminToken, Relogin `
+    -ErrorAction SilentlyContinue
+Remove-Variable H, HU, HP, HA, Hdr, DupHdr, first, firstResp, replay, replayResp, reset, mine, Forge, Bad `
+    -ErrorAction SilentlyContinue
+if (Get-Variable -Name Plain -ErrorAction SilentlyContinue) { 'FAIL: password still in session' } else { 'OK: password cleared' }
+if (Get-Variable -Name PatToken -ErrorAction SilentlyContinue) { 'FAIL: token still in session' } else { 'OK: tokens cleared' }
 ```
 
-Record: Windows build, `python --version`, the `test_all.ps1` summary table verbatim,
-the measured hash/verify timings, every status code printed above, and the
-`main` fingerprint before/after (they must match). Then clean up the session
-environment:
+Expected: `stop` exit `0`, no listeners on 8000/5173, no tracking files; `main`
+HEAD and `git status` unchanged; `main/data/runtime/app.db` byte-identical **or**
+still absent; Windows-measured PBKDF2 timings recorded; `OK` for both cleanup
+checks.
+
+**Only after every output above has been captured** may the worktree be removed —
+it holds the evidence database:
 
 ```powershell
-Remove-Item Env:DEMO_MODE, Env:PYTHONPATH -ErrorAction SilentlyContinue
+git -C $Main worktree remove $Review --force
+git -C $Main worktree list
 ```
 
 ### 10.10 What the owner must report back
 
-| Evidence | Where it comes from |
+| Evidence | Step |
 |---|---|
 | `test_all.ps1` PASS/FAIL/SKIP summary + exit code | 10.2 |
-| Migration state at `head` / `p1` / back to `head` | 10.3 |
-| Seed counts, refusal paths, password cleared | 10.4 |
-| `/health`, `/version`, Vite `200`, listening ports | 10.5 |
-| Login, `me`, 401/403/404/400 status codes | 10.6, 10.8 |
-| Check-in `201` + replay `Idempotent-Replay: true` + `409` duplicate | 10.7 |
-| Clean shutdown, ports free, tracking files removed | 10.8 |
-| Windows PBKDF2 timings (measured, not copied) | 10.9 |
-| Confirmation `main` is unchanged | 10.9 |
+| Migration `head` → `p1` → `head` PASS lines | 10.3 |
+| Seed counts, refusal paths, seed secret cleared | 10.4 |
+| `/health`, `/version`, Vite `200`, ports, reset secret cleared after launch | 10.5 |
+| Login, `me` (role + patient_id), `401`, `403 E_SCOPE_VIOLATION`, `403 E_FORBIDDEN`, `400` malformed id | 10.6 |
+| Check-in `201`, replay `Idempotent-Replay: true` + same id, `409 E_DUPLICATE_CHECKIN`, single row, forged `400`, `mmol/L` `400` | 10.7 |
+| Doctor reset `403` (before), `404` for `POST /demo/seed` and `GET /demo/status`, admin reset `200`, old token `401`, re-login ok | 10.8 |
+| Clean shutdown, free ports, tracking files removed, `main` unchanged (hash or absence), Windows PBKDF2 timings, secrets/tokens cleared | 10.9 |
 
 Any deviation is a **blocker to be reported**, not something to work around: this
 report claims no Windows result.
@@ -702,6 +795,18 @@ report claims no Windows result.
     P2 strict gate and prints `PASS (11 paths / 12 operations, 22 schemas)`. The
     banner must not be read as evidence that the P1-only check still runs, and
     silently editing that unapproved file was deliberately avoided.
+13. **`POST /api/v1/demo/reset` needs the seed secret inside the backend
+    process.** It re-seeds from the fixtures, so `services/demo.py` answers
+    `500 E_INTERNAL` when `DEMO_SEED_PASSWORD` is empty at process start
+    (`Settings` is read once per process; the environment wins over `.env`). This
+    is an operator configuration matter, not a client error: the owner checklist
+    re-supplies the same password at launch and clears it from the parent shell
+    afterwards (§10.5). Nothing is ever written to `.env`, a script, a log or git.
+14. **A successful reset invalidates every session.** `clear_demo_data()` deletes
+    the whole `session` table before reseeding, so all bearer tokens die with it —
+    which is why the owner checklists prove the doctor's `403` *before* the admin
+    reset and re-login afterwards (§10.8), and why the check-in idempotency
+    evidence is collected earlier (§10.7).
 
 ---
 
@@ -745,7 +850,7 @@ merge authorization or a PASS.
 |---|---|
 | Implementer sandbox evidence (3.11) | **complete** (§7) |
 | Independent reviewer technical review | **proceed to owner Windows verification** — review `5906286395` |
-| CI (3.12 + Node 22), run `43625331149` at `dbaf938` | **SUCCESS** (reviewer-verified, §9.2) |
+| CI (3.12 + Node 22), runs `43625331149` (`dbaf938`) and `43625989736` (`6d54ede`) | **SUCCESS** in both (reviewer-verified, §9.2) |
 | Owner Windows quality gate (`test_all.ps1`) | **PENDING** (§10) |
 | Owner approval / merge / P2 PASS | **NOT GIVEN** — PR #7 stays **draft** |
 | P3 | **NOT STARTED** |
@@ -760,5 +865,6 @@ No approval, merge, PASS marking or P3 work is performed by the implementer.
 |---|---|
 | 2026-11-14 | Initial report at implementation handback `dbaf938`. |
 | 2026-11-14 | Reviewer-driven documentation synchronization (mentor review `5906286395`), **docs-only**: §9.2 adds the independently verified CI run `43625331149` (3.12 SUCCESS, Node 22 SUCCESS) while §9.1 keeps the implementer's 403/NOT-OBSERVED evidence as a historical observer limitation; §8 ledger row updated accordingly, no `OQ` opened for the resolved CI question; §10 replaced with a PowerShell 5.1 / Python 3.12 checklist on an isolated review worktree with its own venv, `.env` and fresh SQLite database, covering full quality gates, migrations, bootstrap, auth, role-based access, idempotency, startup and clean shutdown; §11 adds the SQLite `database is locked` caveat and the unchanged `test_all.ps1` banner; no code, migration, gate script or P1 file changed. |
+| 2026-11-14 | **§10 revision 2** (mentor review `5906330237`), **docs-only**: the reset secret is re-supplied to the backend at launch and cleared from the parent shell (the previous order would have ended in `500 E_INTERNAL`); reset denials are proven **before** the admin reset because reset deletes all sessions; §10.7 now actually issues the new-key duplicate request and asserts `409 E_DUPLICATE_CHECKIN` plus the first response's `201`; `POST /demo/seed` (not `GET`) is probed; `APP_VENV_DIR`, a pre-existing review directory, a dirty worktree and both states of `main/data/runtime/app.db` are guarded, with tokens/password cleared at the end. §9.2 records the second reviewer-verified CI run `43625989736` on docs-only HEAD `6d54ede`, which supersedes the earlier "docs commits lack CI" caveat. No code changed; P2 stays IN_REVIEW. |
 
 **NOT FOR CLINICAL USE — educational, synthetic-data demo only.**
