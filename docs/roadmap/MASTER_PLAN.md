@@ -2,7 +2,7 @@
 
 > **Project:** Multi-Agent Clinical Workflow Assistant (DEPI Graduation Project)  
 > **Repository name (proposed):** `AI-Doctor-FollowUp-Agent`  
-> **Plan version:** v0.1 / 2026-11-14 — DRAFT awaiting project-owner approval  
+> **Plan version:** v0.2 / 2026-11-14 — P0 baseline submitted as `IN_REVIEW`; owner approval pending. Phase 0 evidence: `docs/phase-reports/PHASE_0_REPORT.md`  
 > **Target:** Fully local, zero-paid-API, end-to-end educational demonstration  
 > **Source of truth:** This file, plus `PHASE_PROGRESS.md`, architecture ADRs, PR evidence, and tests  
 > **Working language:** English for implementation contracts; Arabic/English explanation in discussion
@@ -98,6 +98,8 @@ flowchart TD
 
 **Shared LangGraph state** should include `run_id`, `patient_id`, `document_ids`, `observation_ids`, `verified_facts`, `review_flags`, `draft_summary`, `approval_status`, `pending_tasks`, `errors`, `provenance`, `model_metadata`, `timestamps`, and `idempotency_key`. Use strict typed state and stable workflow versions.
 
+**Normative contracts (P0):** the typed state, node read/write permissions, transition edges, checkpoint/interrupt/resume and retry/idempotency policy are specified in `docs/contracts/STATE_AND_GRAPH_CONTRACT.md`; tool allowlists in `docs/contracts/TOOL_CONTRACTS.md`. The five components run inside one graph and only the drafting node uses a model (`ADR-0006`, `ADR-0004`).
+
 ### 2.3 Data model minimum
 `User`, `Patient`, `Encounter`, `Document`, `ExtractedFact`, `Observation`, `ReviewItem`, `SummaryDraft`, `ApprovalDecision`, `FollowUpTask`, `InAppNotification`, `WorkflowRun`, `AuditEvent`. Use UUIDs or stable IDs; UTC timestamps, displayed time zone, owner/doctor assignment, source, units and created/updated metadata. Keep synthetic fixture sets deterministic.
 
@@ -161,12 +163,12 @@ AI-Doctor-FollowUp-Agent/
 │   └── runtime/                 # gitignored
 ├── docs/
 │   ├── roadmap/{MASTER_PLAN,PHASE_PROGRESS}.md
-│   ├── architecture/{ARCHITECTURE,ADR-0001}.md
-│   ├── contracts/
-│   ├── clinical-safety/
-│   ├── evaluation/
-│   ├── demo/
-│   ├── phase-reports/
+│   ├── architecture/{ARCHITECTURE,ADR-0001..ADR-0006}.md
+│   ├── contracts/{MVP_SPEC,STATE_AND_GRAPH_CONTRACT,TOOL_CONTRACTS,API_CONTRACT,DATA_DICTIONARY,EXTRACTION_PROVENANCE,LLM_ADAPTER,DEPENDENCIES}.md + openapi.phase0.yaml
+│   ├── clinical-safety/{CLINICAL_SAFETY,DEMO_REVIEW_RULES,THREAT_MODEL}.md
+│   ├── evaluation/{EVALUATION_MATRIX,GOLD_FIXTURES,TRACEABILITY_MATRIX,LOCAL_BENCHMARK_PLAN}.md
+│   ├── demo/DEMO_SCENARIOS.md
+│   ├── phase-reports/PHASE_0_REPORT.md
 │   └── arena/{ARENA_PHASE_0_PROMPT}.md
 ├── scripts/
 │   ├── powershell/{setup,start,stop,test_all,preflight,demo,reset_demo}.ps1
@@ -179,7 +181,8 @@ The folders above are a **target layout**, not a claim that files already exist.
 ## 5. Strict phased delivery roadmap
 
 ### Phase 0 — Governance and specification baseline (`P0`)
-**Status:** `TODO` (this drafted plan alone is not an accepted gate).
+**Status:** `IN_REVIEW` — documentation-only PR submitted 2026-11-14; owner review and approval pending. This plan alone is not an accepted gate.
+**P0 artefacts:** `docs/contracts/{MVP_SPEC,STATE_AND_GRAPH_CONTRACT,TOOL_CONTRACTS,API_CONTRACT,DATA_DICTIONARY,EXTRACTION_PROVENANCE,LLM_ADAPTER,DEPENDENCIES}.md`, `docs/contracts/openapi.phase0.yaml`, `docs/architecture/{ARCHITECTURE,ADR-0001..0006}.md`, `docs/clinical-safety/{CLINICAL_SAFETY,DEMO_REVIEW_RULES,THREAT_MODEL}.md`, `docs/evaluation/{EVALUATION_MATRIX,GOLD_FIXTURES,TRACEABILITY_MATRIX,LOCAL_BENCHMARK_PLAN}.md`, `docs/demo/DEMO_SCENARIOS.md`, `AGENTS.md`, `docs/phase-reports/PHASE_0_REPORT.md`.
 - Finalize MVP/non-goals, actors and 3 demo scenarios.
 - Document architecture, ADR-0001, data dictionary, doctor/patient permission matrix, clinical safety boundaries, source/citation contract, agent tool allowlist.
 - Define demo-only trigger policy and gold synthetic fixtures spec; include threat model, assumed laptop constraints and evaluation plan.
@@ -329,10 +332,10 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 1. Owner creates **PRIVATE** GitHub repository named `AI-Doctor-FollowUp-Agent` (suggested) at https://github.com/new. Initialize with a README or upload the provided planning pack.
 2. Commit `README.md`, `docs/roadmap/MASTER_PLAN.md`, `docs/architecture/ARCHITECTURE.md`, and `docs/arena/ARENA_PHASE_0_PROMPT.md` as the initial *unapproved planning draft*.
 3. Owner confirms specific repo URL and intended demo laptop capacity (Windows, RAM, GPU/VRAM). These are planning inputs, not prerequisites to creating documentation.
-4. Assign **Phase 0 only** to Arena, using `docs/arena/ARENA_PHASE_0_PROMPT.md`. No code until approved baseline.
-5. ChatGPT reviews P0 PR against this plan, then owner runs applicable checks and merges; proceed sequentially.
+4. Assign **Phase 0 only** to Arena, using `docs/arena/ARENA_PHASE_0_PROMPT.md`. No code until approved baseline. *(Done: P0 PR submitted 2026-11-14, status `IN_REVIEW`.)*
+5. Reviewer inspects the P0 PR against this plan and the contracts; the owner runs the applicable local checks and decides. **Agent must not merge, must not mark P0 `PASS`, and must not start P1.** Proceed sequentially only after an explicit owner approval is recorded in `docs/roadmap/PHASE_PROGRESS.md`.
 
-## 12. Public documentation references (verify pinned versions at P0)
+## 12. Public documentation references (verified metadata recorded in `docs/contracts/DEPENDENCIES.md`)
 - LangGraph: https://docs.langchain.com/oss/python/langgraph/overview
 - LangGraph checkpoints: https://langchain-ai.github.io/langgraph/reference/checkpoints/
 - LangGraph human-in-the-loop: https://docs.langchain.com/oss/python/langgraph/interrupts

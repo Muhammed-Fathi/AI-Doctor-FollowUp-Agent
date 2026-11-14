@@ -1,0 +1,61 @@
+# Phase 0 safety net only. P1 replaces/extends this with the full project ignore set.
+# Purpose: make an accidental commit of runtime data, secrets, or model artefacts unlikely.
+
+# --- environment and secrets -------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+credentials*
+
+# --- runtime data (synthetic fixtures stay tracked; runtime does not) --------
+data/runtime/
+**/runtime/
+uploads/
+**/uploads/
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# --- model artefacts and caches ---------------------------------------------
+models/
+*.gguf
+*.safetensors
+*.bin
+.cache/
+ollama/
+
+# --- python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# --- node / frontend --------------------------------------------------------
+node_modules/
+.vite/
+dist/
+coverage/
+playwright-report/
+test-results/
+
+# --- OS / editor ------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp

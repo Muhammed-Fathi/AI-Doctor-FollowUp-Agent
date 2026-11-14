@@ -1,0 +1,1850 @@
+openapi: 3.1.0
+info:
+  title: AI Doctor Follow-Up — Phase 0 API Proposal
+  version: 0.1.0-p0
+  summary: Local, synthetic-data, doctor-in-the-loop follow-up workflow (proposal only; not implemented)
+  description: |
+    **EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE.**
+
+    Phase 0 contract proposal for a local FastAPI backend. Nothing in this document is implemented,
+    deployed, or tested. Human-readable rationale, error catalogue and negative tests live in
+    `docs/contracts/API_CONTRACT.md`; schema meaning lives in `docs/contracts/DATA_DICTIONARY.md`.
+
+    Design invariants encoded here:
+
+    * Task creation is reachable only through a doctor approval decision.
+    * No endpoint sends messages, prescribes, or exports datasets.
+    * Unverified extracted facts cannot be used downstream (HTTP 409 `E_UNVERIFIED_FACT`).
+    * Every workflow response exposes the run trace and the model/provider provenance.
+  contact:
+    name: Project owner (review pending)
+    url: https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent
+  license:
+    name: Academic project — license decision pending at P1
+    identifier: NOASSERTION
+  x-demo-notice: EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
+  x-design-status: IN_REVIEW
+servers:
+  - url: http://127.0.0.1:8000
+    description: Local demo server (single machine, synthetic data only)
+security:
+  - bearerAuth: []
+tags:
+  - name: system
+  - name: auth
+  - name: patients
+  - name: checkins
+  - name: documents
+  - name: workflows
+  - name: reviews
+  - name: tasks
+  - name: audit
+  - name: demo
+paths:
+  /health:
+    get:
+      tags: [system]
+      summary: Liveness and dependency status
+      operationId: getHealth
+      security: []
+      responses:
+        '200':
+          description: Process alive; dependency states reported separately
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /version:
+    get:
+      tags: [system]
+      summary: Build and contract versions
+      operationId: getVersion
+      security: []
+      responses:
+        '200':
+          description: Version metadata (no secrets)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionInfo'
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      summary: Local demo login
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Session established
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /api/v1/auth/me:
+    get:
+      tags: [auth]
+      summary: Current session identity
+      operationId: getMe
+      responses:
+        '200':
+          description: Caller identity and role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /api/v1/auth/logout:
+    post:
+      tags: [auth]
+      summary: Invalidate the current session
+      operationId: logout
+      responses:
+        '204':
+          description: Session invalidated
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /api/v1/doctor/patients:
+    get:
+      tags: [patients]
+      summary: List synthetic patients assigned to the caller
+      operationId: listDoctorPatients
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Assigned patients only
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PatientList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/doctor/patients/{patient_id}:
+    get:
+      tags: [patients]
+      summary: Patient header and record counts
+      operationId: getDoctorPatient
+      parameters:
+        - $ref: '#/components/parameters/PatientId'
+      responses:
+        '200':
+          description: Patient record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Patient'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/doctor/patients/{patient_id}/timeline:
+    get:
+      tags: [patients]
+      summary: Longitudinal doctor timeline
+      operationId: getPatientTimeline
+      parameters:
+        - $ref: '#/components/parameters/PatientId'
+      responses:
+        '200':
+          description: Observations, documents, review items and tasks in time order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Timeline'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/doctor/patients/{patient_id}/observations:
+    get:
+      tags: [patients]
+      summary: Observation series for one patient
+      operationId: listPatientObservations
+      parameters:
+        - $ref: '#/components/parameters/PatientId'
+        - name: measure_type
+          in: query
+          schema:
+            $ref: '#/components/schemas/MeasureType'
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Observation page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObservationList'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/patient/check-ins:
+    post:
+      tags: [checkins]
+      summary: Submit a self-scoped timestamped check-in
+      description: Requires an explicit unit; unknown units are rejected rather than assumed.
+      operationId: createCheckIn
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckInCreate'
+      responses:
+        '201':
+          description: Stored observation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Observation'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    get:
+      tags: [checkins]
+      summary: List the caller's own check-ins
+      operationId: listOwnCheckIns
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Observation page (self scope)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObservationList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /api/v1/documents/upload:
+    post:
+      tags: [documents]
+      summary: Upload a synthetic medical report (PDF, PNG, JPEG)
+      operationId: uploadDocument
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Max 10 MiB, max 20 pages, magic-byte validated
+                declared_type:
+                  type: string
+                  enum: [application/pdf, image/png, image/jpeg]
+      responses:
+        '202':
+          description: Accepted for extraction (not yet verified)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentUploadResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMedia'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+  /api/v1/documents/{document_id}:
+    get:
+      tags: [documents]
+      summary: Document metadata and extraction status (no clinical values for patients)
+      operationId: getDocument
+      parameters:
+        - $ref: '#/components/parameters/DocumentId'
+      responses:
+        '200':
+          description: Document metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentMeta'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/documents/{document_id}/extraction:
+    get:
+      tags: [documents]
+      summary: Extracted candidate facts with provenance (doctor only)
+      operationId: getDocumentExtraction
+      parameters:
+        - $ref: '#/components/parameters/DocumentId'
+      responses:
+        '200':
+          description: Candidate facts and extraction attempts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtractionResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/documents/{document_id}/verify:
+    post:
+      tags: [documents]
+      summary: Doctor verifies, corrects or rejects one extracted fact
+      description: Append-only human decision; required before a pending fact may be used downstream.
+      operationId: verifyFact
+      parameters:
+        - $ref: '#/components/parameters/DocumentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyRequest'
+      responses:
+        '200':
+          description: Updated fact and verification record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/documents/{document_id}/file:
+    get:
+      tags: [documents]
+      summary: Stream the stored synthetic upload
+      operationId: downloadDocument
+      parameters:
+        - $ref: '#/components/parameters/DocumentId'
+      responses:
+        '200':
+          description: Original bytes
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/workflows/follow-up:
+    post:
+      tags: [workflows]
+      summary: Start the follow-up workflow for one patient
+      description: |
+        Idempotent on `Idempotency-Key`. Refuses to start when a fact that the pipeline would consume is
+        still pending verification. Never accepts observation values or facts in the body.
+      operationId: startFollowUpWorkflow
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowStartRequest'
+      responses:
+        '202':
+          description: Run accepted and started (or paused immediately on a gate)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowStartResponse'
+        '200':
+          description: Existing run returned for a repeated idempotency key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowStartResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/workflows/{run_id}:
+    get:
+      tags: [workflows]
+      summary: Run detail, draft, review items and trace
+      operationId: getWorkflowRun
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Run detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowDetail'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/workflows/{run_id}/trace:
+    get:
+      tags: [workflows]
+      summary: Node and tool trace for the run
+      operationId: getWorkflowTrace
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Trace events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TraceResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/workflows/{run_id}/decisions:
+    post:
+      tags: [workflows]
+      summary: Doctor approves, edits or rejects the drafted follow-up
+      description: |
+        The only path that can create a follow-up task and notification. `approve`/`edit` create exactly
+        one task (idempotent); `reject` creates none.
+      operationId: submitDecision
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionRequest'
+      responses:
+        '200':
+          description: Decision recorded and run resumed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/workflows/{run_id}/resume:
+    post:
+      tags: [workflows]
+      summary: Resume a run paused for fact verification
+      operationId: resumeWorkflow
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResumeRequest'
+      responses:
+        '202':
+          description: Resume accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowStartResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/doctor/review-items:
+    get:
+      tags: [reviews]
+      summary: List deterministic demo review items for assigned patients
+      operationId: listReviewItems
+      parameters:
+        - name: state
+          in: query
+          schema:
+            type: string
+            enum: [open, decided, superseded]
+        - name: patient_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Review item page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewItemList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/doctor/review-items/{review_item_id}:
+    get:
+      tags: [reviews]
+      summary: Review item with evidence
+      operationId: getReviewItem
+      parameters:
+        - $ref: '#/components/parameters/ReviewItemId'
+      responses:
+        '200':
+          description: Review item
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewItem'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/doctor/review-items/{review_item_id}/decision:
+    post:
+      tags: [reviews]
+      summary: Acknowledge or dismiss a review item
+      description: Records that the doctor looked at the item. Does not change clinical data.
+      operationId: decideReviewItem
+      parameters:
+        - $ref: '#/components/parameters/ReviewItemId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewItemDecisionRequest'
+      responses:
+        '200':
+          description: Updated review item
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewItem'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/doctor/tasks:
+    get:
+      tags: [tasks]
+      summary: List doctor-approved follow-up tasks
+      operationId: listTasks
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, completed, cancelled]
+        - name: due_before
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Task page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/doctor/tasks/{task_id}/complete:
+    post:
+      tags: [tasks]
+      summary: Mark an approved task complete
+      operationId: completeTask
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Completed task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FollowUpTask'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/notifications:
+    get:
+      tags: [tasks]
+      summary: In-app notifications for the caller
+      operationId: listNotifications
+      responses:
+        '200':
+          description: Notification page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /api/v1/notifications/{notification_id}/read:
+    post:
+      tags: [tasks]
+      summary: Mark a notification read
+      operationId: markNotificationRead
+      parameters:
+        - name: notification_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Updated notification
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/doctor/audit-events:
+    get:
+      tags: [audit]
+      summary: Scoped audit trail
+      operationId: listAuditEvents
+      parameters:
+        - name: patient_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: run_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Audit page without document text or secrets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/demo/reset:
+    post:
+      tags: [demo]
+      summary: Rebuild synthetic demo fixtures (demo mode only)
+      description: Deletes runtime DB, checkpoints and uploads, then reseeds cases A/B/C. Refused while a run is active.
+      operationId: resetDemo
+      responses:
+        '200':
+          description: Reset completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DemoResetResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/demo/status:
+    get:
+      tags: [demo]
+      summary: Seeded synthetic cases and provider status
+      operationId: getDemoStatus
+      responses:
+        '200':
+          description: Demo status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DemoStatus'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-session-token
+      description: Local demo session token; roles doctor, patient, demo_admin.
+  parameters:
+    PatientId:
+      name: patient_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    DocumentId:
+      name: document_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RunId:
+      name: run_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ReviewItemId:
+      name: review_item_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    TaskId:
+      name: task_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+        maxLength: 200
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 100
+      description: Client-generated key; repeats return the original result instead of duplicating side effects.
+  responses:
+    Unauthenticated:
+      description: Missing or expired session
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: Role or scope denial (audited)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: Resource absent or deliberately not acknowledged
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ValidationError:
+      description: Request validation failure
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: State, idempotency or approval conflict
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    UnprocessableEntity:
+      description: Policy limit exceeded (page count, run limit)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PayloadTooLarge:
+      description: Upload exceeds 10 MiB
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    UnsupportedMedia:
+      description: MIME or magic-byte type not allowed
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    RateLimited:
+      description: Too many attempts
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ServiceUnavailable:
+      description: Local model or extraction dependency unavailable
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, code, detail]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        code:
+          type: string
+          pattern: '^E_[A-Z0-9_]+$'
+        detail:
+          type: string
+          maxLength: 500
+          description: Neutral text without document body, secrets or stack traces
+        instance:
+          type: string
+        request_id:
+          type: string
+        details:
+          type: array
+          maxItems: 10
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              field:
+                type: string
+              reason:
+                type: string
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, version, db, ollama, tesseract]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        version:
+          type: string
+        db:
+          $ref: '#/components/schemas/DependencyState'
+        ollama:
+          $ref: '#/components/schemas/DependencyState'
+        tesseract:
+          $ref: '#/components/schemas/DependencyState'
+        disclaimer:
+          type: string
+    DependencyState:
+      type: string
+      enum: [ok, unavailable, not_configured]
+    VersionInfo:
+      type: object
+      additionalProperties: false
+      required: [app_version, api_version, workflow_version, policy_version]
+      properties:
+        app_version:
+          type: string
+        api_version:
+          type: string
+          const: v1
+        workflow_version:
+          type: string
+        policy_version:
+          type: string
+        git_sha:
+          type: string
+          maxLength: 40
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 64
+        password:
+          type: string
+          minLength: 8
+          maxLength: 200
+    TokenResponse:
+      type: object
+      additionalProperties: false
+      required: [access_token, token_type, expires_at, user]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          const: Bearer
+        expires_at:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/User'
+    User:
+      type: object
+      additionalProperties: false
+      required: [id, username, display_name, role, timezone]
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        display_name:
+          type: string
+        role:
+          type: string
+          enum: [doctor, patient, demo_admin]
+        patient_id:
+          type: string
+          format: uuid
+          description: Present only for role=patient (self scope)
+        timezone:
+          type: string
+    Patient:
+      type: object
+      additionalProperties: false
+      required: [id, display_name, external_ref, data_source]
+      properties:
+        id:
+          type: string
+          format: uuid
+        display_name:
+          type: string
+        external_ref:
+          type: string
+          pattern: '^DEMO-'
+        data_source:
+          type: string
+          const: synthetic_fixture
+        date_of_birth:
+          type: string
+          format: date
+        observation_count:
+          type: integer
+          minimum: 0
+        document_count:
+          type: integer
+          minimum: 0
+        open_review_item_count:
+          type: integer
+          minimum: 0
+    PatientList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Patient'
+        next_cursor:
+          type: [string, 'null']
+    MeasureType:
+      type: string
+      enum: [systolic_bp, diastolic_bp, heart_rate, glucose]
+    Unit:
+      type: string
+      enum: [mmHg, bpm, mg/dL]
+    Observation:
+      type: object
+      additionalProperties: false
+      required: [id, patient_id, measure_type, value, unit, measured_at, source, validation]
+      properties:
+        id:
+          type: string
+          format: uuid
+        patient_id:
+          type: string
+          format: uuid
+        measure_type:
+          $ref: '#/components/schemas/MeasureType'
+        value:
+          type: number
+          exclusiveMinimum: 0
+        unit:
+          $ref: '#/components/schemas/Unit'
+        measured_at:
+          type: string
+          format: date-time
+        source:
+          type: string
+          enum: [patient_checkin, verified_document, seed_fixture]
+        validation:
+          type: string
+          enum: [ok, ok_with_warning, rejected]
+        note:
+          type: string
+          maxLength: 500
+        evidence:
+          type: array
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/EvidenceRef'
+    ObservationList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Observation'
+        next_cursor:
+          type: [string, 'null']
+    CheckInCreate:
+      type: object
+      additionalProperties: false
+      required: [measured_at, measure_type, value, unit]
+      properties:
+        measured_at:
+          type: string
+          format: date-time
+        measure_type:
+          $ref: '#/components/schemas/MeasureType'
+        value:
+          type: number
+          exclusiveMinimum: 0
+        unit:
+          $ref: '#/components/schemas/Unit'
+        note:
+          type: string
+          maxLength: 500
+        client_request_id:
+          type: string
+          maxLength: 100
+    EvidenceRef:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [document_span, observation, checkin_note]
+        document_id:
+          type: string
+          format: uuid
+        observation_id:
+          type: string
+          format: uuid
+        page_index:
+          type: integer
+          minimum: 0
+        char_start:
+          type: integer
+          minimum: 0
+        char_end:
+          type: integer
+          minimum: 0
+        raw_text:
+          type: string
+          maxLength: 500
+        extractor:
+          type: string
+          enum: [pypdf, tesseract, manual, patient_form]
+    DocumentMeta:
+      type: object
+      additionalProperties: false
+      required: [id, patient_id, filename, mime_type, sha256, size_bytes, extraction_status, uploaded_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        patient_id:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        mime_type:
+          type: string
+          enum: [application/pdf, image/png, image/jpeg]
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        size_bytes:
+          type: integer
+          minimum: 1
+          maximum: 10485760
+        page_count:
+          type: integer
+          minimum: 0
+          maximum: 20
+        extraction_status:
+          type: string
+          enum: [pending_extraction, extracted, needs_verification, verified, failed]
+        uploaded_at:
+          type: string
+          format: date-time
+    DocumentUploadResponse:
+      type: object
+      additionalProperties: false
+      required: [document_id, status, sha256]
+      properties:
+        document_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          const: pending_extraction
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        page_count:
+          type: integer
+          minimum: 0
+          maximum: 20
+        duplicate_ignored:
+          type: boolean
+          default: false
+    ExtractedFact:
+      type: object
+      additionalProperties: false
+      required: [fact_id, document_id, field_name, raw_text, page_index, verification_status, evidence]
+      properties:
+        fact_id:
+          type: string
+          format: uuid
+        document_id:
+          type: string
+          format: uuid
+        field_name:
+          type: string
+          enum: [report_date, test_name, value, unit, reference_text]
+        raw_text:
+          type: string
+          maxLength: 300
+        normalized_value:
+          type: [string, 'null']
+          maxLength: 120
+        unit:
+          type: [string, 'null']
+          maxLength: 32
+        page_index:
+          type: integer
+          minimum: 0
+        char_start:
+          type: integer
+          minimum: 0
+        char_end:
+          type: integer
+          minimum: 0
+        quality_flags:
+          type: array
+          maxItems: 6
+          items:
+            type: string
+            enum: [clean, low_confidence, ambiguous_date, ambiguous_unit, unparseable_value, source_conflict, page_missing]
+        confidence:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 1
+        verification_status:
+          type: string
+          enum: [pending, verified, rejected]
+        evidence:
+          type: array
+          minItems: 1
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/EvidenceRef'
+    ExtractionAttempt:
+      type: object
+      additionalProperties: false
+      required: [path, succeeded, duration_ms, created_at]
+      properties:
+        path:
+          type: string
+          enum: [pypdf, tesseract, manual]
+        succeeded:
+          type: boolean
+        error_code:
+          type: [string, 'null']
+        duration_ms:
+          type: integer
+          minimum: 0
+        tool_version:
+          type: [string, 'null']
+        created_at:
+          type: string
+          format: date-time
+    ExtractionResponse:
+      type: object
+      additionalProperties: false
+      required: [document_id, document_status, facts, attempts]
+      properties:
+        document_id:
+          type: string
+          format: uuid
+        document_status:
+          type: string
+          enum: [pending_extraction, extracted, needs_verification, verified, failed]
+        facts:
+          type: array
+          maxItems: 40
+          items:
+            $ref: '#/components/schemas/ExtractedFact'
+        attempts:
+          type: array
+          maxItems: 10
+          items:
+            $ref: '#/components/schemas/ExtractionAttempt'
+        disclaimer:
+          type: string
+    VerifyRequest:
+      type: object
+      additionalProperties: false
+      required: [fact_id, decision]
+      properties:
+        fact_id:
+          type: string
+          format: uuid
+        decision:
+          type: string
+          enum: [verified, rejected, corrected]
+        corrected_value:
+          type: string
+          maxLength: 120
+        corrected_unit:
+          type: string
+          maxLength: 32
+        reason:
+          type: string
+          maxLength: 300
+    VerificationRecord:
+      type: object
+      additionalProperties: false
+      required: [decision, verified_by, decided_at]
+      properties:
+        decision:
+          type: string
+          enum: [verified, rejected, corrected]
+        verified_by:
+          type: string
+          format: uuid
+        decided_at:
+          type: string
+          format: date-time
+        reason:
+          type: [string, 'null']
+    VerifyResponse:
+      type: object
+      additionalProperties: false
+      required: [fact, verification, document_status]
+      properties:
+        fact:
+          $ref: '#/components/schemas/ExtractedFact'
+        verification:
+          $ref: '#/components/schemas/VerificationRecord'
+        document_status:
+          type: string
+          enum: [pending_extraction, extracted, needs_verification, verified, failed]
+    ReviewFlagHint:
+      type: string
+      enum: [data_quality, verification_needed, change_to_review]
+    ReviewItem:
+      type: object
+      additionalProperties: false
+      required: [review_item_id, rule_id, reason_code, message, evidence, policy_version, demo_only, state]
+      properties:
+        review_item_id:
+          type: string
+          format: uuid
+        patient_id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        rule_id:
+          type: string
+          pattern: '^DR-[0-9]{3}$'
+        reason_code:
+          type: string
+          maxLength: 64
+        workflow_hint:
+          $ref: '#/components/schemas/ReviewFlagHint'
+        message:
+          type: string
+          maxLength: 240
+          description: Neutral wording; no clinical interpretation
+        evidence:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/EvidenceRef'
+        policy_version:
+          type: string
+        demo_only:
+          type: boolean
+          const: true
+        state:
+          type: string
+          enum: [open, decided, superseded]
+        created_at:
+          type: string
+          format: date-time
+    ReviewItemList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReviewItem'
+        next_cursor:
+          type: [string, 'null']
+    ReviewItemDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [acknowledge, dismiss]
+        reason:
+          type: string
+          maxLength: 300
+    ClaimCitation:
+      type: object
+      additionalProperties: false
+      required: [text, evidence]
+      properties:
+        text:
+          type: string
+          maxLength: 400
+        evidence:
+          type: array
+          minItems: 1
+          maxItems: 6
+          items:
+            $ref: '#/components/schemas/EvidenceRef'
+    DraftSummary:
+      type: object
+      additionalProperties: false
+      required: [draft_id, provider, execution_status, prompt_version, body, claims, disclaimer]
+      properties:
+        draft_id:
+          type: string
+          format: uuid
+        provider:
+          type: string
+          enum: [ollama, deterministic_fallback]
+        model:
+          type: [string, 'null']
+        execution_status:
+          type: string
+          enum: [model_ok, model_invalid_schema, model_timeout, model_unavailable, fallback_no_model]
+        prompt_version:
+          type: string
+        latency_ms:
+          type: [integer, 'null']
+          minimum: 0
+        body:
+          type: string
+          maxLength: 4000
+        claims:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/ClaimCitation'
+        uncertainties:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+            maxLength: 240
+        not_asserted:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+            maxLength: 240
+        disclaimer:
+          type: string
+          const: EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
+    ModelMetadata:
+      type: object
+      additionalProperties: false
+      properties:
+        provider:
+          type: string
+          enum: [ollama, deterministic_fallback]
+        model:
+          type: [string, 'null']
+        execution_status:
+          type: string
+        latency_ms:
+          type: [integer, 'null']
+        prompt_version:
+          type: string
+    WorkflowStartRequest:
+      type: object
+      additionalProperties: false
+      required: [patient_id, client_request_id]
+      properties:
+        patient_id:
+          type: string
+          format: uuid
+        observation_ids:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            format: uuid
+        document_ids:
+          type: array
+          maxItems: 5
+          items:
+            type: string
+            format: uuid
+        client_request_id:
+          type: string
+          minLength: 8
+          maxLength: 100
+    WorkflowStartResponse:
+      type: object
+      additionalProperties: false
+      required: [run_id, status]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/RunStatus'
+        current_node:
+          type: [string, 'null']
+        halt_reason:
+          type: [string, 'null']
+    RunStatus:
+      type: string
+      enum: [queued, running, needs_verification, awaiting_decision, finalizing, completed, failed_retryable, failed_terminal]
+    WorkflowRun:
+      type: object
+      additionalProperties: false
+      required: [run_id, patient_id, status, workflow_version, policy_version, started_at, updated_at]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        patient_id:
+          type: string
+          format: uuid
+        doctor_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/RunStatus'
+        current_node:
+          type: [string, 'null']
+        halt_reason:
+          type: [string, 'null']
+        workflow_version:
+          type: string
+        state_schema_version:
+          type: string
+        policy_version:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: [string, 'null']
+          format: date-time
+    TraceEvent:
+      type: object
+      additionalProperties: false
+      required: [node, started_at]
+      properties:
+        node:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: [string, 'null']
+          format: date-time
+        outcome:
+          type: [string, 'null']
+          enum: [ok, halted, interrupted, retried, failed]
+        tools_called:
+          type: array
+          maxItems: 6
+          items:
+            type: string
+    TraceResponse:
+      type: object
+      additionalProperties: false
+      required: [run_id, events]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        events:
+          type: array
+          maxItems: 40
+          items:
+            $ref: '#/components/schemas/TraceEvent'
+    WorkflowDetail:
+      type: object
+      additionalProperties: false
+      required: [run, review_items, events]
+      properties:
+        run:
+          $ref: '#/components/schemas/WorkflowRun'
+        review_items:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/ReviewItem'
+        draft:
+          $ref: '#/components/schemas/DraftSummary'
+        model_metadata:
+          $ref: '#/components/schemas/ModelMetadata'
+        blocking_facts:
+          type: array
+          maxItems: 40
+          items:
+            $ref: '#/components/schemas/ExtractedFact'
+        events:
+          type: array
+          maxItems: 40
+          items:
+            $ref: '#/components/schemas/TraceEvent'
+        disclaimer:
+          type: string
+        review_items_note:
+          type: string
+          description: Explains that review items are DEMO_ONLY workflow prompts, not clinical risk assessment
+    DecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [approve, edit, reject]
+        edited_summary:
+          type: string
+          maxLength: 4000
+          description: Required when decision=edit
+        reason:
+          type: string
+          maxLength: 500
+    ApprovalDecisionBody:
+      type: object
+      additionalProperties: false
+      required: [decision_id, decision, doctor_id, decided_at]
+      properties:
+        decision_id:
+          type: string
+          format: uuid
+        decision:
+          type: string
+          enum: [approve, edit, reject]
+        edited_summary:
+          type: [string, 'null']
+        reason:
+          type: [string, 'null']
+        doctor_id:
+          type: string
+          format: uuid
+        decided_at:
+          type: string
+          format: date-time
+    FollowUpTask:
+      type: object
+      additionalProperties: false
+      required: [id, patient_id, approval_decision_id, title, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        patient_id:
+          type: string
+          format: uuid
+        approval_decision_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          maxLength: 160
+        note:
+          type: [string, 'null']
+          maxLength: 500
+        due_date:
+          type: [string, 'null']
+          format: date
+        status:
+          type: string
+          enum: [open, completed, cancelled]
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: [string, 'null']
+          format: date-time
+    Notification:
+      type: object
+      additionalProperties: false
+      required: [id, text, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        text:
+          type: string
+          maxLength: 240
+        task_id:
+          type: [string, 'null']
+          format: uuid
+        read_at:
+          type: [string, 'null']
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    NotificationList:
+      type: object
+      additionalProperties: false
+      required: [items, unread_count]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Notification'
+        unread_count:
+          type: integer
+          minimum: 0
+    DecisionResponse:
+      type: object
+      additionalProperties: false
+      required: [run, decision]
+      properties:
+        run:
+          $ref: '#/components/schemas/WorkflowRun'
+        decision:
+          $ref: '#/components/schemas/ApprovalDecisionBody'
+        task:
+          $ref: '#/components/schemas/FollowUpTask'
+        notification:
+          $ref: '#/components/schemas/Notification'
+    ResumeRequest:
+      type: object
+      additionalProperties: false
+      required: [resume_reason]
+      properties:
+        resume_reason:
+          type: string
+          const: facts_verified
+    TaskList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/FollowUpTask'
+        next_cursor:
+          type: [string, 'null']
+    AuditEvent:
+      type: object
+      additionalProperties: false
+      required: [id, event_type, actor_type, outcome, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        event_type:
+          type: string
+          maxLength: 48
+        actor_type:
+          type: string
+          enum: [user, system, demo_admin]
+        actor_id:
+          type: [string, 'null']
+        patient_id:
+          type: [string, 'null']
+          format: uuid
+        run_id:
+          type: [string, 'null']
+          format: uuid
+        subject_type:
+          type: [string, 'null']
+        subject_id:
+          type: [string, 'null']
+        outcome:
+          type: string
+          enum: [ok, denied, error]
+        safe_detail:
+          type: [string, 'null']
+          maxLength: 500
+          description: Never contains document text, patient notes, credentials or tokens
+        created_at:
+          type: string
+          format: date-time
+    AuditList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+        next_cursor:
+          type: [string, 'null']
+    Timeline:
+      type: object
+      additionalProperties: false
+      required: [patient_id, observations, documents, review_items, tasks]
+      properties:
+        patient_id:
+          type: string
+          format: uuid
+        observations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Observation'
+        documents:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentMeta'
+        review_items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReviewItem'
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/FollowUpTask'
+    DemoStatus:
+      type: object
+      additionalProperties: false
+      required: [demo_mode, cases, provider]
+      properties:
+        demo_mode:
+          type: boolean
+        cases:
+          type: array
+          maxItems: 3
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              case_id:
+                type: string
+                enum: [A_stable, B_changed, C_ambiguous_ocr]
+              seeded:
+                type: boolean
+              patient_id:
+                type: string
+                format: uuid
+        provider:
+          $ref: '#/components/schemas/ModelMetadata'
+        disclaimer:
+          type: string
+    DemoResetResponse:
+      type: object
+      additionalProperties: false
+      required: [reset_at, cases_loaded]
+      properties:
+        reset_at:
+          type: string
+          format: date-time
+        cases_loaded:
+          type: array
+          maxItems: 3
+          items:
+            type: string
+            enum: [A_stable, B_changed, C_ambiguous_ocr]
+        disclaimer:
+          type: string
