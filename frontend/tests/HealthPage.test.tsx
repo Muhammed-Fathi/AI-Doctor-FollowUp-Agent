@@ -54,10 +54,34 @@ afterEach(() => {
 
 describe("HealthPage", () => {
   it("shows a loading state before the API responds", () => {
-    mockFetch({});
+    // A never-settling request models a slow backend, so the loading state is
+    // observable without a pending state update escaping the test.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {})),
+    );
+
     render(<HealthPage />);
+
+    // Rendered synchronously, before any answer could arrive.
     expect(screen.getByTestId("loading")).toBeInTheDocument();
     expect(screen.getByText(/Checking local services/i)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("leaves the loading state once the API rejects", async () => {
+    // The rejection resolves asynchronously, so the assertion is awaited: React
+    // state updates then happen inside act() instead of after the test ends.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))),
+    );
+
+    render(<HealthPage />);
+    expect(screen.getByTestId("loading")).toBeInTheDocument();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Backend unreachable/i);
+    expect(screen.queryByTestId("loading")).not.toBeInTheDocument();
   });
 
   it("renders dependency states from /health", async () => {
