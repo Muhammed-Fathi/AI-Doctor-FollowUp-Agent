@@ -241,7 +241,7 @@ iterations=600000 hash=271ms verify=204ms (CPython 3.11.2, this sandbox)
 
 | Check | Result |
 |---|---|
-| `pytest backend/tests` (355: 125 P1 + 230 P2) | **PASS** — see §11.15 for one intermittently flaky *test assertion* observed separately (test-only, product behaviour correct) |
+| `pytest backend/tests` (356: 125 P1 + 231 P2) | **PASS** — the one intermittently flaky assertion was fixed and given a deterministic regression case (§11.15) |
 | `ruff check` / `ruff format --check` | **PASS** |
 | `check_openapi.py` (11 paths / 12 operations / 22 schemas) | **PASS** |
 | `scan_repository.py` (secrets/artefacts) | **PASS** |
@@ -326,7 +326,8 @@ open.
 |---|---|---|---|---|
 | [`43625331149`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625331149) | `dbaf938` (implementation) | SUCCESS | SUCCESS | SUCCESS |
 | [`43625989736`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625989736) | `6d54ede` (docs-only) | SUCCESS | SUCCESS | SUCCESS |
-| [`43626628577`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43626628577) | `9fddb51` (**verified code snapshot**) | SUCCESS | SUCCESS | SUCCESS |
+| [`43626628577`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43626628577) | `9fddb51` (**owner-tested code snapshot**) | SUCCESS | SUCCESS | SUCCESS |
+| [`43631967775`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43631967775) | `7a5a047` (docs-only ledger sync) | SUCCESS | SUCCESS | SUCCESS |
 
 Any further documentation commit produced after this one is again docs-only; if
 the owner wants CI confirmation for the final head, it is read on PR #7 → *Checks*
@@ -876,18 +877,33 @@ records in §9.1–§9.2 are untouched.
     which is why the owner checklists prove the doctor's `403` *before* the admin
     reset and re-login afterwards (§10.8), and why the check-in idempotency
     evidence is collected earlier (§10.7).
-15. **`test_p2_auth_http.py::test_request_validation_uses_the_contract_envelope`
-    is intermittently flaky (~1 in 10 runs, observed 2026-11-14).** Root cause is in
-    the *test*, not the product: it asserts `"ab" not in response.text` to prove the
-    submitted username is never echoed, but the random `request_id` UUID can itself
-    contain the substring `ab` (e.g. `…-95e4-ab3b42cbc2d9`). The envelope and the
-    `{field, reason}` details are correct in every run. Reproduction:
-    `pytest "backend/tests/p2/test_p2_auth_http.py::test_request_validation_uses_the_contract_envelope"`
-    in a loop; a full-suite run passed 355/355 immediately after the failing run.
-    It is **reported, not fixed here**: the fix would edit a test file, which is
-    outside this documentation-only change. Suggested fix for the follow-up: assert
-    on the parsed `details`/`type` values (or on the absence of the *password*)
-    instead of a two-character substring of the random request id.
+15. **Resolved: the intermittently flaky validation-envelope assertion
+    (`test_p2_auth_http.py::test_request_validation_uses_the_contract_envelope`).**
+    The old test asserted `"ab" not in response.text` to prove the submitted
+    username is never echoed, but `response.text` contains a random `request_id`
+    UUID which can itself contain `ab` (`…-95e4-ab3b42cbc2d9`), so the test failed
+    roughly one run in ten despite correct product behaviour. It is now fixed — with
+    no change to application code:
+    - the assertion reads the **user-facing validation text only** (`title`,
+      `detail`, `details[].field`, `details[].reason`) and excludes the random
+      correlation id, which may legitimately contain any short substring;
+    - the submitted values are chosen so they cannot collide with a Pydantic *rule*
+      name (`string_too_short` contains `short`, so `password="short"` is a poor
+      probe; the test uses `secret7`);
+    - a **deterministic regression test**
+      (`test_validation_envelope_never_echoes_credentials_even_when_the_request_id_contains_them`)
+      pins a client-supplied `X-Request-ID` of
+      `00000000-ab00-4000-8000-000000000000`, asserts the response echoes exactly
+      that id, and shows that a raw-body substring check is false for this input —
+      so a regression to the old assertion now fails **every** time instead of one
+      run in ten;
+    - evidence: targeted pair of tests **25/25 runs PASS**; re-introducing
+      `request_id` into the checked fragments (mutation) makes the regression test
+      **FAIL** immediately; full suite **356 passed** (231 in `backend/tests/p2`).
+
+    Nothing about the security requirement was weakened: the envelope, the status
+    `400`, the `E_VALIDATION` code, the `{field, reason}` shape and the no-echo
+    property are all still asserted.
 
 ---
 
@@ -904,8 +920,10 @@ records in §9.1–§9.2 are untouched.
   database engine, or every Windows scheduling/busy-timeout case (§11.10–11.11).
 - Rate limiting and the audit idempotency key are per-process concerns; see §11.1.
 - The 3.12 CI leg is verified by the reviewer (§9.2) but **not by the
-  implementer**, and Windows timings are still unmeasured; §9/§10 record that
-  honestly instead of inferring success.
+  implementer**, whose Actions/Checks read stays `403` (§9.1). Windows timings
+  **are** measured: PBKDF2-HMAC-SHA256 at 600 000 iterations gives hash
+  **550.49 ms** and verify **537.67 ms** on the owner's Windows machine (§10.11).
+  They are one machine's numbers, not a performance budget.
 
 **Rollback**
 
@@ -948,5 +966,6 @@ No approval, merge, PASS marking or P3 work is performed by the implementer.
 | 2026-11-14 | Reviewer-driven documentation synchronization (mentor review `5906286395`), **docs-only**: §9.2 adds the independently verified CI run `43625331149` (3.12 SUCCESS, Node 22 SUCCESS) while §9.1 keeps the implementer's 403/NOT-OBSERVED evidence as a historical observer limitation; §8 ledger row updated accordingly, no `OQ` opened for the resolved CI question; §10 replaced with a PowerShell 5.1 / Python 3.12 checklist on an isolated review worktree with its own venv, `.env` and fresh SQLite database, covering full quality gates, migrations, bootstrap, auth, role-based access, idempotency, startup and clean shutdown; §11 adds the SQLite `database is locked` caveat and the unchanged `test_all.ps1` banner; no code, migration, gate script or P1 file changed. |
 | 2026-11-14 | **§10 revision 2** (mentor review `5906330237`), **docs-only**: the reset secret is re-supplied to the backend at launch and cleared from the parent shell (the previous order would have ended in `500 E_INTERNAL`); reset denials are proven **before** the admin reset because reset deletes all sessions; §10.7 now actually issues the new-key duplicate request and asserts `409 E_DUPLICATE_CHECKIN` plus the first response's `201`; `POST /demo/seed` (not `GET`) is probed; `APP_VENV_DIR`, a pre-existing review directory, a dirty worktree and both states of `main/data/runtime/app.db` are guarded, with tokens/password cleared at the end. §9.2 records the second reviewer-verified CI run `43625989736` on docs-only HEAD `6d54ede`, which supersedes the earlier "docs commits lack CI" caveat. No code changed; P2 stays IN_REVIEW. |
 | 2026-11-14 | **Final acceptance-ledger synchronization** (independent final review `5906680401`), **docs-only**: §10.11 records the owner's executed Windows verification at the verified code snapshot `9fddb51` — 12 PASS / 0 FAIL / 1 optional SKIP, Alembic P2→P1→P2, 11 paths / 12 operations / 22 schemas, 6 users / 3 patients / 3 encounters / 17 observations, 9 RBAC checks, 8 idempotency checks, 7 demo-reset checks, identity-safe shutdown, `main` HEAD unchanged and its database byte-identical, plus Windows-measured PBKDF2 550.49 ms hash / 537.67 ms verify — with the evidence comment `6882774686` linked. §8, §9.2, §13 and the header now show the gate as **PASS** at that commit and cite CI run `43626628577`; the former `PENDING` / `NOT RUN` wording is retained as historical provenance. Optional Playwright stays a recorded **SKIP**. No code, migration, gate, test or configuration change; no approval, merge SHA or P2 `PASS` recorded; P2 remains **IN_REVIEW**, P3 not started. |
+| 2026-11-14 | **Final test-reliability fix** (independent review `5906711140`), test + docs only: `test_request_validation_uses_the_contract_envelope` no longer asserts on the raw response body (a random `request_id` could contain `ab`, causing a ~1-in-10 false failure). It now checks the user-facing validation text only, with submitted values that cannot collide with a Pydantic rule name, and a new deterministic regression test pins a client `X-Request-ID` containing `ab` — proven by 25/25 targeted runs and by a mutation that makes the regression test fail. §11.15 is re-labelled **Resolved** with that evidence; §12's stale "Windows timings are still unmeasured" sentence now records the measured 550.49 ms / 537.67 ms at 600 000 iterations (§10.11). Suite: **356 passed** (231 P2). No application, migration, gate, dependency or configuration change; P2 remains **IN_REVIEW** and the owner-tested implementation is still `9fddb51`. |
 
 **NOT FOR CLINICAL USE — educational, synthetic-data demo only.**

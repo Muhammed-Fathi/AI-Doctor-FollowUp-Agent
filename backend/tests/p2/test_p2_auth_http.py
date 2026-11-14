@@ -110,16 +110,73 @@ def test_invalid_credentials_share_one_body(api_client: TestClient) -> None:
     assert wrong_password.json()["detail"] == unknown_user.json()["detail"]
 
 
+def _validation_text(body: dict) -> list[str]:
+    """Return the user-facing strings of a ``400 E_VALIDATION`` body.
+
+    ``request_id`` is deliberately excluded: it is a random UUID (or an
+    identifier-shaped client value) used for correlation only, so a short
+    submitted value can appear inside it by pure coincidence. Asserting on
+    ``response.text`` therefore produced a false failure roughly one run in ten
+    (``…-95e4-ab3b42cbc2d9`` contains the submitted username ``"ab"``). The
+    security property under test is about the *validation text*, which must never
+    quote the submission.
+    """
+    fragments = [str(body.get("detail", "")), str(body.get("title", ""))]
+    for part in body.get("details", []):
+        fragments.append(str(part.get("field", "")))
+        fragments.append(str(part.get("reason", "")))
+    return fragments
+
+
 def test_request_validation_uses_the_contract_envelope(api_client: TestClient) -> None:
     """A schema error is ``400 E_VALIDATION`` with ``{field, reason}`` details."""
-    response = api_client.post(LOGIN, json={"username": "ab", "password": "short"})
+    # Deliberately distinctive values: neither may collide with a Pydantic reason
+    # code such as ``string_too_short``, which is a description of the rule and not
+    # an echo of the submission.
+    submitted = {"username": "ab", "password": "secret7"}
+    response = api_client.post(LOGIN, json=submitted)
 
     assert response.status_code == 400
     body = response.json()
     assert body["code"] == "E_VALIDATION"
     assert body["details"]
     assert set(body["details"][0]) == {"field", "reason"}
-    assert "ab" not in response.text  # the submitted value is never echoed
+    assert {part["field"] for part in body["details"]} == {"username", "password"}
+
+    # The submitted values are never echoed in the user-facing validation text.
+    # Only the *raw* body could match them, and only through the random request id.
+    for fragment in _validation_text(body):
+        assert submitted["username"] not in fragment
+        assert submitted["password"] not in fragment
+
+
+def test_validation_envelope_never_echoes_credentials_even_when_the_request_id_contains_them(
+    api_client: TestClient,
+) -> None:
+    """Deterministic regression for the request-id substring flake.
+
+    The client may supply an identifier-shaped ``X-Request-ID``, which the
+    application honours. This test pins one containing the submitted username, so
+    the scenario that used to fail intermittently now fails *every* time if the
+    assertion ever regresses to a raw-body substring check.
+    """
+    submitted = {"username": "ab", "password": "secret7"}
+    request_id = "00000000-ab00-4000-8000-000000000000"
+
+    response = api_client.post(LOGIN, json=submitted, headers={"X-Request-ID": request_id})
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["request_id"] == request_id  # deterministic, not random
+    assert body["code"] == "E_VALIDATION"
+    assert set(body["details"][0]) == {"field", "reason"}
+
+    # The trap: a raw-body substring check is false here, which is exactly why the
+    # contract assertion above looks at the validation text instead.
+    assert submitted["username"] in response.text
+    for fragment in _validation_text(body):
+        assert submitted["username"] not in fragment
+        assert submitted["password"] not in fragment
 
 
 def test_rate_limited_login_returns_429(api_client: TestClient) -> None:
