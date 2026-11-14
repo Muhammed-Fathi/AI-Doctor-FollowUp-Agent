@@ -15,6 +15,10 @@ Behaviour fixed by the contracts:
   the row keeps ``sha256(token)``.
 * **No credential in a log or an audit row.** Only the username and a stable
   reason code are recorded, never the submitted password or the token.
+* **Stale hashes are upgraded, not left alone.** After a successful password
+  check, a row whose stored work factor is below
+  :data:`app.core.security.PASSWORD_ITERATIONS` is rewritten with the current
+  factor. The check is post-verification, so it can never weaken authentication.
 """
 
 from __future__ import annotations
@@ -40,6 +44,7 @@ from app.core.security import (
     generate_session_token,
     hash_password,
     hash_session_token,
+    needs_rehash,
     verify_password,
 )
 from app.db.models import User, UserSession, new_uuid
@@ -112,7 +117,23 @@ def authenticate(
         raise _invalid_credentials()
 
     limiter.reset(username)
+    _upgrade_hash_if_stale(db, user=user, password=password)
     return user
+
+
+def _upgrade_hash_if_stale(db: Session, *, user: User, password: str) -> None:
+    """Rewrite a weaker stored hash after a *successful* verification.
+
+    This is the only place :func:`app.core.security.needs_rehash` is used. It runs
+    after the password proved correct, so it can never turn a failed login into a
+    successful one, and it keeps an old work factor from surviving indefinitely
+    once ``PASSWORD_ITERATIONS`` increases. The plaintext is not retained beyond
+    this call and nothing is logged.
+    """
+    if not needs_rehash(user.password_hash):
+        return
+    user.password_hash = hash_password(password)
+    db.flush()
 
 
 def issue_session(

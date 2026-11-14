@@ -38,6 +38,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from sqlalchemy import and_, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.clock import MAX_FUTURE_SKEW_MINUTES, format_utc, parse_utc, to_utc
@@ -277,21 +278,43 @@ def create_check_in(
         created_at=format_utc(now),
         created_by_user_id=principal.user_id,
     )
-    db.add(observation)
-    db.flush()
 
-    if key is not None:
-        db.add(
-            CheckinIdempotency(
-                id=new_uuid(),
-                patient_id=patient_id,
-                idempotency_key=key,
-                observation_id=observation.id,
-                request_fingerprint=fingerprint,
-                created_at=format_utc(now),
-            )
-        )
+    # The two unique constraints behind this block are the real concurrency
+    # guarantee, not the optimistic reads above: two writers can both pass the
+    # "no replay, no duplicate" checks before either commits. Whatever the
+    # database rejects here is recovered in ``_resolve_write_race``, which rolls
+    # this transaction back and answers from the winner's rows — a replay or the
+    # documented 409, never a 500.
+    #
+    # Deliberately *not* wrapped in a savepoint: on SQLite a ``SAVEPOINT`` issued
+    # outside a DBAPI transaction starts one, and ``RELEASE`` of that outermost
+    # savepoint commits it — which would publish half-finished work early and
+    # break the very isolation this block depends on.
+    try:
+        db.add(observation)
         db.flush()
+        if key is not None:
+            db.add(
+                CheckinIdempotency(
+                    id=new_uuid(),
+                    patient_id=patient_id,
+                    idempotency_key=key,
+                    observation_id=observation.id,
+                    request_fingerprint=fingerprint,
+                    created_at=format_utc(now),
+                )
+            )
+            db.flush()
+    except IntegrityError:
+        return _resolve_write_race(
+            db,
+            patient_id=patient_id,
+            key=key,
+            fingerprint=fingerprint,
+            payload=payload,
+            measured_at=measured_at,
+            unit=unit,
+        )
 
     append_audit_event(
         db,
@@ -310,6 +333,75 @@ def create_check_in(
         ),
     )
     return observation_to_read(observation), True
+
+
+def _resolve_write_race(
+    db: Session,
+    *,
+    patient_id: str,
+    key: str | None,
+    fingerprint: str,
+    payload: CheckInCreate,
+    measured_at: datetime,
+    unit: Unit,
+) -> tuple[ObservationRead, bool]:
+    """Answer a losing writer after a unique-constraint collision.
+
+    Reached only through :class:`~sqlalchemy.exc.IntegrityError` inside the
+    insertion savepoint, so exactly one of the two constraints fired:
+
+    * ``(patient_id, idempotency_key)`` — the same key arrived twice at once, so
+      this request is a **replay** and the stored observation is returned with
+      ``created=False``;
+    * ``uq_observation_checkin_identity`` — a *different* key carried an
+      identical measurement, so this is the documented
+      ``409 E_DUPLICATE_CHECKIN``.
+
+    The session transaction is rolled back before re-reading so the fresh read
+    sees the winner's committed rows rather than this session's stale snapshot.
+    """
+    db.rollback()
+
+    if key is not None:
+        recorded = db.execute(
+            select(CheckinIdempotency).where(
+                CheckinIdempotency.patient_id == patient_id,
+                CheckinIdempotency.idempotency_key == key,
+            )
+        ).scalar_one_or_none()
+        if recorded is not None:
+            if recorded.request_fingerprint != fingerprint:
+                raise ApiError(
+                    409,
+                    ErrorCode.IDEMPOTENCY_CONFLICT,
+                    "This Idempotency-Key was already used with a different request body.",
+                )
+            stored = db.get(Observation, recorded.observation_id)
+            if stored is not None:
+                return observation_to_read(stored), False
+
+    duplicate = _existing_duplicate(
+        db,
+        patient_id=patient_id,
+        measure_type=payload.measure_type,
+        measured_at=measured_at,
+        value=payload.value,
+        unit=unit,
+    )
+    if duplicate is not None:
+        raise ApiError(
+            409,
+            ErrorCode.DUPLICATE_CHECKIN,
+            "An identical check-in (type, value, unit, measured_at) already exists.",
+        )
+
+    # Unreachable unless a constraint other than the two above fired; answer with
+    # a conflict rather than leaking a database error to the client.
+    raise ApiError(
+        409,
+        ErrorCode.DUPLICATE_CHECKIN,
+        "The check-in collided with a concurrent request.",
+    )
 
 
 def list_own_check_ins(

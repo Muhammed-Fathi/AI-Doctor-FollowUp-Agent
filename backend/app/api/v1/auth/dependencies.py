@@ -21,6 +21,7 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import Depends, Request
+from fastapi.security import HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.core.clock import utc_now
@@ -31,6 +32,18 @@ from app.core.security import LoginRateLimiter
 from app.db.models import UserSession
 from app.db.session import get_db_session
 from app.services.accounts import build_principal, resolve_session
+
+#: The contract's ``bearerAuth`` scheme (``openapi.phase0.yaml``
+#: ``components.securitySchemes.bearerAuth``). ``auto_error=False`` keeps the
+#: rejection inside :func:`current_principal`, so a missing header still produces
+#: the uniform problem envelope rather than FastAPI's default 403. Registering it
+#: as a dependency only documents the requirement; it never authenticates on its
+#: own.
+bearer_scheme = HTTPBearer(
+    auto_error=False,
+    scheme_name="bearerAuth",
+    description="Local demo session token; roles doctor, patient, demo_admin.",
+)
 
 #: Database session dependency.
 DbSession = Annotated[Session, Depends(get_db_session)]
@@ -139,6 +152,7 @@ __all__ = [
     "PrincipalDep",
     "RateLimiter",
     "RequestId",
+    "bearer_scheme",
     "clear_limiter_cache",
     "current_principal",
     "current_request_id",

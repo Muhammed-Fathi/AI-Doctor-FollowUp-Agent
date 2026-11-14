@@ -134,15 +134,17 @@ def test_rate_limited_login_returns_429(api_client: TestClient) -> None:
     assert blocked.headers["Retry-After"] == "300"
 
 
-def test_auth_surface_is_the_only_registered_route() -> None:
-    """The auth router exposes exactly the three contract operations."""
+def test_auth_routes_are_exposed_with_the_contract_shapes() -> None:
+    """The production app exposes the three auth operations with these shapes."""
     from conftest import build_test_app
 
     from app.core.config import Settings
 
     schema = build_test_app(Settings(_env_file=None)).openapi()
-    assert set(schema["paths"]) == {LOGIN, ME, LOGOUT}
+    assert {LOGIN, ME, LOGOUT} <= set(schema["paths"])
     assert schema["paths"][LOGIN]["post"]["security"] == []
+    assert schema["paths"][ME]["get"]["security"] == [{"bearerAuth": []}]
+    assert schema["paths"][LOGOUT]["post"]["security"] == [{"bearerAuth": []}]
     assert set(schema["components"]["schemas"]["TokenResponse"]["required"]) == {
         "access_token",
         "token_type",

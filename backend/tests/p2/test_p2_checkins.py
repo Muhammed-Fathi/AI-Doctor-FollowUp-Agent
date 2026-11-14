@@ -448,3 +448,172 @@ def _patient_principal(db: Session) -> Principal:
     _raw, session = issue_session(db, user=user, now=FIXED_NOW, ttl_minutes=60)
     db.commit()
     return build_principal(user, session)
+
+
+# --------------------------------------------------------------------------
+# Real two-writer concurrency (review item: "a real concurrent SQLite test")
+# --------------------------------------------------------------------------
+
+#: How long writer A keeps its write transaction open. Long enough that writer B
+#: performs its "no replay / no duplicate" reads first and then blocks on the
+#: write lock, short enough to keep the suite fast.
+HOLD_SECONDS = 0.3
+
+
+def _writer_session(engine: object) -> Session:
+    """Return a fresh session (its own connection) for a racing writer."""
+    from sqlalchemy.orm import sessionmaker
+
+    return sessionmaker(bind=engine)()
+
+
+def _race(writer_a, writer_b) -> tuple[object, object]:
+    """Run two real writers so that ``writer_b`` reads before ``writer_a`` commits.
+
+    ``writer_a(flushed, release)`` inserts, sets ``flushed``, then blocks until
+    ``release`` before committing. ``writer_b`` starts only after ``flushed``, its
+    own reads therefore see nothing committed, and the write it then attempts
+    collides with A's transaction — exactly the interleaving the optimistic checks
+    cannot handle. Anything raised is captured and asserted on by the caller.
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    outcomes: dict[str, object] = {}
+    flushed = threading.Event()
+    release = threading.Event()
+
+    def run_a() -> None:
+        try:
+            outcomes["a"] = writer_a(flushed, release)
+        except Exception as error:
+            outcomes["a"] = error
+
+    def run_b() -> None:
+        try:
+            assert flushed.wait(timeout=10)
+            # A commits only after B's read has had time to complete.
+            threading.Timer(HOLD_SECONDS, release.set).start()
+            outcomes["b"] = writer_b()
+        except Exception as error:
+            outcomes["b"] = error
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(run_a), pool.submit(run_b)]
+        for future in futures:
+            future.result(timeout=30)
+
+    return outcomes["a"], outcomes["b"]
+
+
+def _count_measurements(db: Session, payload: CheckInCreate) -> int:
+    """Count stored observations matching the payload's semantic identity."""
+    return db.execute(
+        select(func.count())
+        .select_from(Observation)
+        .where(Observation.patient_id == PATIENT_A_ID)
+        .where(Observation.measure_type == payload.measure_type.value)
+        .where(Observation.value == float(payload.value))
+    ).scalar_one()
+
+
+def test_two_writers_with_the_same_key_persist_exactly_one_check_in(seeded: Session) -> None:
+    """A racing duplicate key is answered as a replay: one row, no 500.
+
+    Without the savepoint-and-recover path in ``create_check_in`` this raises
+    ``IntegrityError`` out of the service (verified by reverting that code during
+    review of this test).
+    """
+    engine = seeded.get_bind()
+    principal = _patient_principal(seeded)
+    payload = make_payload()
+    key = str(uuid.uuid4())
+
+    def writer_a(flushed, release):
+        session = _writer_session(engine)
+        try:
+            observation, created = create(session, principal, payload, key=key)
+            flushed.set()
+            release.wait(timeout=10)
+            session.commit()
+            return ("ok", created, observation.id)
+        finally:
+            session.close()
+
+    def writer_b():
+        session = _writer_session(engine)
+        try:
+            observation, created = create(session, principal, payload, key=key)
+            session.commit()
+            return ("ok", created, observation.id)
+        except ApiError as error:
+            session.rollback()
+            return ("api_error", error.code.value, None)
+        finally:
+            session.close()
+
+    outcome_a, outcome_b = _race(writer_a, writer_b)
+
+    assert not isinstance(outcome_a, Exception), outcome_a
+    assert not isinstance(outcome_b, Exception), outcome_b
+    assert [outcome_a[0], outcome_b[0]] == ["ok", "ok"]
+    assert sorted([outcome_a[1], outcome_b[1]]) == [False, True]
+
+    with _writer_session(engine) as check:
+        assert _count_measurements(check, payload) == 1
+        assert (
+            check.execute(
+                select(func.count())
+                .select_from(CheckinIdempotency)
+                .where(CheckinIdempotency.idempotency_key == key)
+            ).scalar_one()
+            == 1
+        )
+
+
+def test_two_writers_with_different_keys_cannot_store_one_measurement_twice(
+    seeded: Session,
+) -> None:
+    """A semantic duplicate stays ``409`` even when two different keys race.
+
+    The optimistic duplicate read cannot see the other transaction, so
+    ``uq_observation_checkin_identity`` is the arbiter: the loser is answered with
+    ``E_DUPLICATE_CHECKIN`` instead of a second stored measurement or a 500.
+    """
+    engine = seeded.get_bind()
+    principal = _patient_principal(seeded)
+    payload = make_payload()
+
+    def writer_a(flushed, release):
+        session = _writer_session(engine)
+        try:
+            observation, created = create(session, principal, payload, key=str(uuid.uuid4()))
+            flushed.set()
+            release.wait(timeout=10)
+            session.commit()
+            return ("ok", created, observation.id)
+        finally:
+            session.close()
+
+    def writer_b():
+        session = _writer_session(engine)
+        try:
+            observation, created = create(session, principal, payload, key=str(uuid.uuid4()))
+            session.commit()
+            return ("ok", created, observation.id)
+        except ApiError as error:
+            session.rollback()
+            return ("api_error", error.code.value, None)
+        finally:
+            session.close()
+
+    outcome_a, outcome_b = _race(writer_a, writer_b)
+
+    assert not isinstance(outcome_a, Exception), outcome_a
+    assert not isinstance(outcome_b, Exception), outcome_b
+    assert outcome_a[0] == "ok"
+    assert outcome_b[0] == "api_error"
+    assert outcome_b[1] == "E_DUPLICATE_CHECKIN"
+
+    with _writer_session(engine) as check:
+        assert _count_measurements(check, payload) == 1

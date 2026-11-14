@@ -78,12 +78,41 @@ def test_p1_implements_no_clinical_capability() -> None:
     assert hits == []
 
 
-def test_backend_exposes_only_health_and_version_routes() -> None:
-    """The P1 app must not register speculative patient/auth/workflow routes."""
+#: The complete P2 surface. Anything outside this set is out of scope, and the
+#: assertion below is an equality check for exactly that reason.
+P2_ROUTES = {
+    "/api/v1/auth/login",
+    "/api/v1/auth/me",
+    "/api/v1/auth/logout",
+    "/api/v1/doctor/patients",
+    "/api/v1/doctor/patients/{patient_id}",
+    "/api/v1/doctor/patients/{patient_id}/timeline",
+    "/api/v1/doctor/patients/{patient_id}/observations",
+    "/api/v1/patient/check-ins",
+    "/api/v1/demo/reset",
+}
+
+
+def test_backend_exposes_only_health_version_and_allowlisted_p2_routes() -> None:
+    """The app must not register speculative P3+ routes or a demo seed endpoint.
+
+    P1's two paths are still required, and the P2 additions are enumerated: a
+    third-party route slipping in (documents, workflows, review items, tasks)
+    fails this guard.
+    """
     from app.main import create_app
 
     paths = set(create_app().openapi()["paths"])
-    assert paths == {"/health", "/version"}
+
+    assert {"/health", "/version"} <= paths
+    assert paths == {"/health", "/version"} | P2_ROUTES
+    assert "/api/v1/demo/seed" not in paths
+    assert "/api/v1/demo/status" not in paths
+    assert not any(
+        keyword in path
+        for path in paths
+        for keyword in ("document", "workflow", "review", "task", "notification", "summary")
+    )
 
 
 def test_educational_notice_constant_is_exact() -> None:

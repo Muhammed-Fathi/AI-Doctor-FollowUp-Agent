@@ -19,6 +19,33 @@ from app.db.models import SchemaMeta
 from app.db.session import create_db_engine, ensure_sqlite_directory
 
 BASELINE_REVISION = "0001_p1_baseline"
+HEAD_REVISION = "0002_p2_patient_domain"
+
+#: The seven tables the P2 revision owns. Equality is asserted below, so a P3+
+#: table created early fails just as loudly as a missing one.
+P2_TABLES = {
+    "audit_event",
+    "checkin_idempotency",
+    "encounter",
+    "observation",
+    "patient",
+    "session",
+    "user",
+}
+
+#: Tables owned by later phases; none of them may exist in P2.
+P3_PLUS_TABLES = {
+    "document",
+    "extraction_attempt",
+    "extracted_fact",
+    "fact_verification",
+    "review_item",
+    "summary_draft",
+    "approval_decision",
+    "follow_up_task",
+    "in_app_notification",
+    "workflow_run",
+}
 
 
 def _alembic_config(database_url: str) -> Config:
@@ -38,26 +65,20 @@ def test_migration_creates_baseline_table(engine: Engine) -> None:
 
     with engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-    assert revision == BASELINE_REVISION
+    assert revision == HEAD_REVISION
 
 
-def test_baseline_creates_no_patient_domain_tables(engine: Engine) -> None:
-    """Phase 1 must not pre-empt P2: no patient-domain table may exist yet."""
+def test_migrated_schema_is_exactly_p1_plus_the_p2_allowlist(engine: Engine) -> None:
+    """The migrated schema equals P1 plus the seven P2 tables — no extras.
+
+    Phase 1's assertion was "no patient-domain table exists". P2 legitimately
+    adds seven, so the check becomes an equality against the explicit allowlist:
+    a P3+ table appearing early still fails.
+    """
     tables = set(inspect(engine).get_table_names())
-    forbidden = {
-        "user",
-        "patient",
-        "encounter",
-        "document",
-        "observation",
-        "extracted_fact",
-        "fact_verification",
-        "review_item",
-        "workflow_run",
-        "follow_up_task",
-        "audit_event",
-    }
-    assert tables.isdisjoint(forbidden)
+
+    assert tables == {"schema_meta", "alembic_version"} | P2_TABLES
+    assert tables.isdisjoint(P3_PLUS_TABLES)
 
 
 def test_migration_is_reversible(sqlite_url: str) -> None:

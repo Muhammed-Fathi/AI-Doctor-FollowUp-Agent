@@ -255,6 +255,21 @@ class Observation(Base):
         ),
         Index("ix_obs_patient_type_time", "patient_id", "measure_type", "measured_at"),
         Index("ix_obs_trust", "patient_id", "trust_level"),
+        # Semantic check-in identity, enforced by the database so two racing
+        # writers cannot persist the same self-reported measurement twice
+        # (``E_DUPLICATE_CHECKIN``). Partial on purpose: document facts (P3) and
+        # seed fixtures may legitimately share a timestamp, and this index must
+        # never constrain them.
+        Index(
+            "uq_observation_checkin_identity",
+            "patient_id",
+            "measure_type",
+            "measured_at",
+            "value",
+            "unit",
+            unique=True,
+            sqlite_where=text("source = 'patient_checkin'"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)

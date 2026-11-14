@@ -10,9 +10,11 @@ Everything here is deterministic and offline:
 * a fixed demo seed password supplied through the environment, never a literal
   committed to the repository.
 
-The HTTP fixture builds an isolated application that installs the **production**
-problem handlers and the **production** auth router. Only the ASGI wiring in
-``app/main.py`` differs, and that file is part of the pending scope request.
+The HTTP fixtures build the **production** application
+(:func:`app.main.create_app`), so the router assembly, problem handlers, request-id
+middleware and route ordering under test are the ones that ship. Only two seams
+are overridden: the database session (per-test database) and the clock (fixed, so
+no assertion depends on the machine date).
 """
 
 from __future__ import annotations
@@ -33,14 +35,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from support import FIXED_NOW, SEED_PASSWORD, TEST_HASH_ITERATIONS, user_by_username
 
-from app.api.v1.auth import router as auth_router
 from app.api.v1.auth.dependencies import clear_limiter_cache, current_time
 from app.core.config import Settings, get_settings, reset_settings_cache
-from app.core.errors import install_problem_handlers
 from app.core.paths import SYNTHETIC_DATA_DIR
 from app.core.policies import Principal
 from app.db.base import Base
 from app.db.session import create_db_engine, get_db_session
+from app.main import create_app
 from app.services.accounts import build_principal, issue_session
 from app.services.seed import seed_demo_data
 
@@ -164,15 +165,12 @@ def api_db(app_settings: Settings) -> Iterator[Session]:
 
 
 def build_test_app(settings: Settings, now: datetime = FIXED_NOW) -> FastAPI:
-    """Build a FastAPI app with the production handlers and the auth router.
+    """Build the production app with a per-test database and a frozen clock.
 
-    ``app/main.py`` calls exactly these two functions once the router integration
-    is authorised; until then this harness is the only ASGI surface and it is
-    confined to tests.
+    This is :func:`app.main.create_app`, not a test-only replica: the router
+    assembly, problem handlers and middleware under test are the shipped ones.
     """
-    app = FastAPI(title="P2 test surface", version="0.2.0")
-    install_problem_handlers(app)
-    app.include_router(auth_router.router)
+    app = create_app(settings)
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[current_time] = lambda: now
     return app

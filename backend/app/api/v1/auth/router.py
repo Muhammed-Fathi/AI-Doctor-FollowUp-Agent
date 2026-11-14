@@ -15,7 +15,7 @@ username, the outcome and the session id are recorded.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Response, Security, status
 
 from app.api.v1.auth.dependencies import (
     AppSettings,
@@ -24,6 +24,7 @@ from app.api.v1.auth.dependencies import (
     PrincipalDep,
     RateLimiter,
     RequestId,
+    bearer_scheme,
 )
 from app.core.clock import parse_utc
 from app.core.errors import UNAUTHENTICATED_DETAIL, ApiError, ErrorCode
@@ -96,6 +97,7 @@ def login(
     response_model=UserRead,
     summary="Current session identity",
     description="Caller identity and role, resolved from the stored session.",
+    dependencies=[Security(bearer_scheme)],
     responses=_UNAUTHENTICATED_RESPONSE,
 )
 def read_me(principal: PrincipalDep, db: DbSession) -> UserRead:
@@ -111,6 +113,7 @@ def read_me(principal: PrincipalDep, db: DbSession) -> UserRead:
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Invalidate the current session",
     description="Revokes the bearer session; reuse afterwards returns 401.",
+    dependencies=[Security(bearer_scheme)],
     responses={
         204: {"description": "Session invalidated"},
         401: {"description": "Not authenticated (uniform body)"},

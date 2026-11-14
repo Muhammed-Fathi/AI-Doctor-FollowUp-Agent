@@ -274,3 +274,59 @@ def test_audit_rows_never_contain_the_submitted_password(seeded: Session) -> Non
     details = seeded.execute(select(AuditEvent.safe_detail)).scalars().all()
     assert any(detail and "E_INVALID_CREDENTIALS" in detail for detail in details)
     assert all(SEED_PASSWORD not in (detail or "") for detail in details)
+
+
+def test_successful_login_upgrades_a_stale_hash(seeded: Session) -> None:
+    """A weaker stored work factor is rewritten after the password is verified.
+
+    ``needs_rehash`` is only ever consulted *after* a successful verification, so
+    it can never turn a bad password into a good login. This pins that claim: the
+    row really is upgraded, and the new hash still verifies the same password.
+    """
+    from app.core.security import PASSWORD_ITERATIONS, hash_password, needs_rehash, verify_password
+
+    user = user_by_username(seeded, "demo_doctor")
+    user.password_hash = hash_password(SEED_PASSWORD, iterations=1_000)
+    seeded.commit()
+    assert needs_rehash(user.password_hash) is True
+
+    login(
+        seeded,
+        username="demo_doctor",
+        password=SEED_PASSWORD,
+        limiter=LoginRateLimiter(),
+        now=FIXED_NOW,
+        ttl_minutes=60,
+        request_id="req-rehash",
+    )
+    seeded.commit()
+
+    stored = user_by_username(seeded, "demo_doctor").password_hash
+    assert stored.startswith(f"pbkdf2_sha256${PASSWORD_ITERATIONS}$")
+    assert needs_rehash(stored) is False
+    assert verify_password(SEED_PASSWORD, stored) is True
+
+
+def test_failed_login_leaves_the_stored_hash_untouched(seeded: Session) -> None:
+    """A wrong password must not trigger a rewrite (or any write at all)."""
+    from app.core.errors import ApiError
+    from app.core.security import hash_password
+
+    user = user_by_username(seeded, "demo_doctor")
+    user.password_hash = hash_password(SEED_PASSWORD, iterations=1_000)
+    seeded.commit()
+    before = user_by_username(seeded, "demo_doctor").password_hash
+
+    with pytest.raises(ApiError):
+        login(
+            seeded,
+            username="demo_doctor",
+            password=SEED_PASSWORD + "-wrong",
+            limiter=LoginRateLimiter(),
+            now=FIXED_NOW,
+            ttl_minutes=60,
+            request_id="req-rehash-fail",
+        )
+    seeded.commit()
+
+    assert user_by_username(seeded, "demo_doctor").password_hash == before
