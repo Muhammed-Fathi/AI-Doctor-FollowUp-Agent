@@ -10,7 +10,7 @@
 
 | Phase | Topic | Status | PR | Merge SHA | Test Evidence | Owner Approval |
 |---|---|---|---|---|---|---|
-| P0 | Governance / specifications | **IN_REVIEW** | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) | — | Documentation + OpenAPI checks only (round 2, see `docs/phase-reports/PHASE_0_REPORT.md` §13); no application tests exist | Pending — round 1 changes requested, round 2 submitted |
+| P0 | Governance / specifications | **IN_REVIEW** | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) | — | Documentation + OpenAPI checks only (round 2, see `docs/phase-reports/PHASE_0_REPORT.md` §10–§11); no application tests exist | Pending — round 1 changes requested, round 2 submitted |
 | P1 | Foundation / reproducible startup | TODO | — | — | Not run | Pending |
 | P2 | Patient data + role-based API | TODO | — | — | Not run | Pending |
 | P3 | Document ingestion + OCR verification | TODO | — | — | Not run | Pending |
