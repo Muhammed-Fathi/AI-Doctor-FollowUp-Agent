@@ -34,7 +34,7 @@
 | Owner-laptop required | Windows PowerShell scripts, Tesseract/Poppler install, Ollama model benchmark, offline demo |
 | PR | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) — opened 2026-11-14, base `main` @ `7d2ef73`, not merged |
 | Review round 1 (`5904454222`) | 7 findings + 1 ADR concern, all resolved in documentation; content commit `81df966b2fe80ab842f3405b32cfabc2f1b3a5e7` |
-| Review round 2 (`5904505998`) | `P0-R08` typed trace payloads + typed extraction attempts (51 new OpenAPI properties), `P0-R09` app-DB source-of-truth and restart reconciliation (`RESUME-04/05`), `P0-R10` closed fact → observation mapping (`REQ-DATA-05`, `MAP-01`), `P0-R11` observation admissibility predicate (`TRUST-02`); test realism: mocked `AD-01` vs measured `OCR-LIVE-01`, `VI-002` `{count}` declared from 3 candidate facts, PR description rewritten |
+| Review round 2 (`5904505998`) | `P0-R08` typed trace payloads + typed extraction attempts (51 new OpenAPI properties), `P0-R09` app-DB source-of-truth and restart reconciliation (`RESUME-04/05`), `P0-R10` closed fact → observation mapping (`REQ-DATA-05`, `MAP-01`), `P0-R11` observation admissibility predicate (`TRUST-02`); test realism: mocked `AD-01` vs measured `OCR-LIVE-01`, `VI-002` `{count}` declared from 3 candidate facts, PR description rewritten; content commit `b3605ec484a38b15aec5bb153586fecda187ea1d` |
 | Blocks P1 until | Owner re-reviews the resolutions, confirms the six ADRs (incl. amended ADR-0006), approves the demo rule parameters, and merges the PR |
 
 Do not prefill future pass results, test counts, or metrics. When a phase completes, record the PR URL,
