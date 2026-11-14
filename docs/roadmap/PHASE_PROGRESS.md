@@ -29,7 +29,7 @@ The implementing agent never self-approves, marks phases `PASS` or merges pull r
 | Phase | Topic | Status | PR | Merge SHA | Test Evidence | Owner Approval |
 |---|---|---|---|---|---|---|
 | P0 | Governance / specifications | **PASS** | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) | `442256606fd2465439409cc9b4d42f1bec09a723` | Documentation consistency, traceability, OpenAPI validation and targeted contract checks completed. No runtime implementation tests applicable to P0. | **Approved — 2026-11-14** |
-| P1 | Foundation / reproducible startup | **IN_REVIEW** | open against `main` | — | Backend 94 tests, frontend 12 tests, Ruff, Alembic smoke, OpenAPI contract, repository scan, live `/health` + `/version`, Vite build all executed on Linux (Python 3.11.2). PowerShell scripts, Windows gate, GitHub CI run and Playwright smoke **not executed** — see `docs/phase-reports/PHASE_1_REPORT.md` §7. | Pending |
+| P1 | Foundation / reproducible startup | **IN_REVIEW** | open against `main` | — | Backend 94 tests, frontend 12 tests, Ruff, Alembic smoke, OpenAPI contract, repository scan, live `/health` + `/version`, Vite build all executed on Linux (Python 3.11.2). PowerShell scripts, Windows gate, GitHub CI (workflow not pushable by the agent) and Playwright smoke **not executed** — see `docs/phase-reports/PHASE_1_REPORT.md` §7. | Pending |
 | P2 | Patient data + role-based API | TODO | — | — | Not run | Pending |
 | P3 | Document ingestion + OCR verification | TODO | — | — | Not run | Pending |
 | P4 | Monitoring + demo review rules | TODO | — | — | Not run | Pending |
@@ -274,7 +274,7 @@ Project virtual environments, local runtime files, dependencies and test artifac
 | 9 | Backend unit and smoke tests | Implemented and executed (93 passing) |
 | 10 | Frontend build and test verification | Implemented and executed (8 passing, build OK) |
 | 11 | Ruff and applicable source checks | Implemented and executed (clean) |
-| 12 | GitHub Actions CI foundation | Implemented and statically validated; **run pending** |
+| 12 | GitHub Actions CI foundation | Workflow written and statically validated, but **not pushed** (session token lacks the `workflows` permission); file supplied in the PR body for the owner - see report §7.5 |
 | 13 | Phase 1 implementation report with actual evidence | `docs/phase-reports/PHASE_1_REPORT.md` |
 
 ### P1 Acceptance Gate
@@ -318,7 +318,7 @@ The implementation agent must use a dedicated P1 branch and PR.
 | Health endpoint | `GET /health` -> HTTP 200, `status=ok`, `db=ok`, exit 0 (live Uvicorn process) |
 | Version endpoint | `GET /version` -> `api_version=v1`, real base SHA (exit 0) |
 | Repository scan | `scan_repository.py` -> PASS, 0 secrets, 0 tracked artefacts, 0 forbidden claims |
-| GitHub Actions | Workflow committed and YAML/static-validated; **run result pending** after push |
+| GitHub Actions | **NOT DELIVERED ON THE BRANCH** - the session token cannot push workflow files; validated content is in the PR body; no run exists yet |
 | Windows PowerShell gate | **NOT EXECUTED** — requires the owner's Windows laptop |
 | Playwright browser smoke | **NOT EXECUTED** — browser binaries unavailable in the authoring environment |
 | Python 3.12 execution | **NOT EXECUTED locally** (sandbox has 3.11.2); CI is configured to run the suite on 3.12 |

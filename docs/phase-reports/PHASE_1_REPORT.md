@@ -36,10 +36,11 @@ router or speculative schema was created for any of them.
 
 ## 2. Changed files (exact)
 
-Renamed/added at the repository root and in these paths — 59 files added or replaced:
+Renamed/added at the repository root and in these paths — 58 files added or replaced on the branch
+(plus `ci.yml`, which is supplied separately for the reason in §7.5):
 
 ```text
-.github/workflows/ci.yml
+(CI workflow: prepared and validated but NOT included on the branch - see §7.5)
 .env.example
 .gitignore                              (replaced: Phase-0 net -> full project ignore set)
 README.md                               (Status, Start here, Stack, Layout, Verification honesty)
@@ -123,7 +124,7 @@ were added under `docs/**` — see §11 for the scope note the owner should ackn
 | 6 | Five Windows PowerShell scripts | **Implemented — not executed** | `scripts/powershell/` (see §7) |
 | 7 | `.env.example`, strict `.gitignore`, no committed secrets/artifacts | **Complete and scanned** | `.env.example`, `.gitignore`, `scripts/python/scan_repository.py` |
 | 8 | Deterministic tests, Ruff, build validation, Alembic smoke | **Complete and executed** | `backend/tests/`, `frontend/tests/`, `test_all.ps1` gates |
-| 9 | Minimal GitHub Actions CI, no model/GPU/paid API | **Written and statically validated — not yet run on GitHub** | `.github/workflows/ci.yml` |
+| 9 | Minimal GitHub Actions CI, no model/GPU/paid API | **INCOMPLETE — workflow prepared but could not be pushed** (GitHub App token lacks the `workflows` permission). Full file included in the PR description for the owner to add. | workflow content in the PR body; not present on the branch |
 | 10 | Reproducible Windows guide + truthful P1 report | **Complete** | `docs/runbooks/WINDOWS_SETUP.md`, this report |
 
 ### 3.1 `/health` — a live response (not an expectation)
@@ -310,9 +311,34 @@ The repository virtual environment lives at `.venv/` (gitignored).
 |---|---|
 | **All five PowerShell scripts** (`preflight`, `setup`, `start`, `stop`, `test_all`) | No PowerShell and no Windows in this environment. Only static properties are tested (`test_powershell_scripts.py`). **Linux results are not evidence that these scripts work.** |
 | **The Python suite on Python 3.12** | The sandbox has Python 3.11.2; obtaining 3.12 was impossible (the python-build-standalone release host is not in the allowed egress set). CI runs the same suite on 3.12 and is the first 3.12 execution. |
-| **GitHub Actions run** | Only observable after pushing; recorded in the PR once the run completes. |
+| **GitHub Actions run** | The workflow file could not be pushed at all (§7.5). No run exists yet; the owner must add the file (copy from the PR body) and then the run is observable. |
 | **Playwright browser smoke** | Browser binary download failed (§7.2). Spec exists (`frontend/tests/e2e/health.spec.ts`), gate is `SKIP` by design. |
 | **`test_all.ps1` end-to-end** | Same reason as the PowerShell row; each underlying command it calls was executed individually here. |
+
+### 7.5 CI workflow delivery blocker (incomplete deliverable)
+
+`.github/workflows/ci.yml` was written, YAML-parsed and covered by 16 static tests
+(python 3.12, node 22, read-only permissions, no model/GPU/OCR/paid API/secrets, every
+gate invoked, short timeouts). Pushing it failed:
+
+```text
+! [remote rejected] arena/d86c4f98-ai-doctor-followup-agent -> ... (refusing to allow a
+  GitHub App to create or update workflow `.github/workflows/ci.yml` without `workflows`
+  permission)
+```
+
+A direct API attempt to create a test workflow returned
+`403 Resource not accessible by integration`. This is a permission boundary on the
+agent's GitHub App token, not a code defect.
+
+**Resolution for the owner (one minute):** the complete workflow file is included verbatim
+in the PR description. Add it at `.github/workflows/ci.yml` on the branch (GitHub's web
+editor is enough) or grant the session app the `workflows` permission and re-run the agent.
+Until then:
+
+* **no GitHub Actions run exists** — the CI acceptance criterion is *not* met,
+* every command the workflow would run was executed manually (§7.1 items 3–10, 20–25),
+* `test_all.ps1` is the local equivalent gate for the owner's laptop.
 
 ### 7.4 Requires owner Windows laptop
 
@@ -371,6 +397,7 @@ Browser: `tests/e2e/health.spec.ts` — 1 smoke test, **not executed here**.
 | `P1-OPEN-01` | Project license still unset (`DEPENDENCIES.md` §7). `pyproject.toml` deliberately declares none. | Owner chooses before P2 (or explicitly defers to P8). |
 | `P1-OPEN-02` | `docs/**` additions (this report, `docs/runbooks/WINDOWS_SETUP.md`) plus the `PHASE_PROGRESS.md` row are outside the literal P1 path list in `AGENTS.md` §5, but item 10 of the P1 brief requires them. | **Owner acknowledgement requested** in the PR. No other doc was edited. |
 | `P1-OPEN-03` | `DEPENDENCIES.md` records "nothing pinned" (P0 text); this report supersedes it for P1. | Owner decides whether to synchronise the P0 document now or at P2. |
+| `P1-OPEN-09` | CI workflow could not be pushed (`workflows` permission); the owner must add the file from the PR body. | Treat CI verification as a follow-up step of the same PR. |
 | `P1-OPEN-04` | `pydantic-settings` reads `.env` from the repo root only. A second `.env` in a subdirectory is ignored. | Keep single-root configuration. |
 | `P1-OPEN-05` | `git_sha` falls back to `unknown` outside a git checkout (e.g. a source zip). CI sets `APP_GIT_SHA` explicitly. | Accepted; document in `setup.ps1` output if it matters. |
 | `P1-OPEN-06` | Vite 7 / TypeScript 5.9 chosen over the newest majors (8 / 7) for toolchain stability. | Revisit only with a re-run of the full gate. |
@@ -401,7 +428,7 @@ Browser: `tests/e2e/health.spec.ts` — 1 smoke test, **not executed here**.
 - [ ] `http://127.0.0.1:5173/` loads the status page, shows the notice banner and no error card.
 - [ ] `alembic current` → `0001_p1_baseline`; `data\runtime\app.db` exists and is gitignored.
 - [ ] `stop.ps1` leaves ports 8000/5173 free and stops nothing else.
-- [ ] GitHub Actions `CI` run is green on the PR head (paste the run URL).
+- [ ] CI workflow added by the owner (§7.5) and the resulting run is green (paste the run URL).
 - [ ] `git ls-files | Select-String -Pattern '\.env$|\.db$|node_modules'` returns nothing.
 - [ ] Scope question `P1-OPEN-02` explicitly accepted or rejected.
 - [ ] Decide `P1-OPEN-01` (license) before P2.
