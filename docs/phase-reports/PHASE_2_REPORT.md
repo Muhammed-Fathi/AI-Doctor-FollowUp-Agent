@@ -9,15 +9,18 @@ ticked by the implementer. Acceptance, merge and any PASS marking are the owner'
 | Approved baseline | `main` @ `d1ec0b9b481dca313c8ea2f21f97872582fc5a86` (P0 PASS, P1 PASS) |
 | Branch | `arena/a8844cc2-ai-doctor-followup-agent` |
 | Pull request | [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) — **draft**, base `main` |
-| Commits | implementation `4f661de`, `58b60f8`, `69f12ae`; documentation `b079090`, `7b0b822` + this report correction. The branch head at handback is stated in the PR #7 handback comment |
+| Commits | implementation `4f661de`, `58b60f8`, `69f12ae`; documentation `b079090`, `7b0b822`, `dbaf938` and the 2026-11-14 documentation-synchronization commit (§14). The exact branch head is the PR #7 head |
 | Scope authorization | [owner comment 6881832444](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6881832444) — recorded verbatim in `docs/roadmap/PHASE_PROGRESS.md` |
 | Authorized exceptions | A1–A3, B1–B2, C1–C2, D1–D2, E1–E2, F1–F2, G1–G3, H1–H3 (19 physical paths) |
 | Executed here | Debian 12 sandbox, **Python 3.11.2** |
-| Owner-required | Windows PowerShell gate, Python 3.12 CI leg, Windows PBKDF2 timing |
+| CI | run [`43625331149`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625331149) at `dbaf938` — 3.12 **SUCCESS**, Node 22 **SUCCESS** (reviewer-verified, §9.2) |
+| Owner-required | Windows PowerShell gate on an isolated worktree, Windows PBKDF2 timing (§10) |
 
 > **This report distinguishes three evidence sources and never mixes them:**
-> sandbox Python 3.11 execution (this file's numbers), the GitHub Actions 3.12 CI
-> leg (see §9), and owner-side Windows verification (§10, not executed here).
+> sandbox Python 3.11 execution by the implementer (this file's numbers), the
+> GitHub Actions 3.12 + Node 22 run verified independently by the reviewer (§9.2;
+> the implementer's own read was 403 / NOT OBSERVED, §9.1), and owner-side Windows
+> verification (§10, **not executed** — PENDING).
 
 ---
 
@@ -244,7 +247,7 @@ iterations=600000 hash=271ms verify=204ms (CPython 3.11.2, this sandbox)
 | P2 HTTP lifecycle (auth, doctor, patient, demo) through the production app | **PASS** (29 tests) |
 | Two-writer concurrency, both interleavings | **PASS** (and fail without the recovery path) |
 | Migration round trip + ORM/metadata parity | **PASS** (7 tests) |
-| GitHub Actions CI (Python 3.12 + frontend) | **BLOCKED / NOT OBSERVED** — Actions+Checks APIs return 403 to this session's credentials; owner must read PR #7 → Checks (§9) |
+| GitHub Actions CI (Python 3.12 + frontend) | **VERIFIED SUCCESS by the independent reviewer** — run `43625331149` at HEAD `dbaf938`, both jobs SUCCESS (§9.2). The implementer's own read attempt was 403 / NOT OBSERVED (§9.1, historical) |
 | Windows `scripts/powershell/test_all.ps1` | **NOT RUN — owner-laptop required** |
 | Windows PBKDF2 timing at 600 000 iterations | **NOT RUN — owner-laptop required** |
 | Ollama / Tesseract / Playwright | **N/A** (P3+/optional) |
@@ -259,9 +262,16 @@ The 3.12 CI leg runs `ruff check`, `ruff format --check`, `pytest`,
 `alembic upgrade → downgrade base → upgrade` + `check_alembic_smoke.py`, and
 `check_openapi.py`.
 
-**Result: NOT OBSERVABLE from the implementation environment — BLOCKED, not
-claimed.** The automation credentials available to the implementing agent cannot
-read Actions/Checks data. Every attempt returned HTTP 403
+CI evidence is recorded twice, from two different observers, and the two records
+are never merged. The implementer could not read Actions/Checks; the independent
+reviewer could and did.
+
+### 9.1 Implementer observation at HEAD `dbaf938` — NOT OBSERVED (historical)
+
+Kept as evidence of an **observer permission limitation**, not of a CI failure.
+
+The automation credentials available to the implementing agent cannot read
+Actions/Checks data, so no conclusion was claimed. Every attempt returned HTTP 403
 `Resource not accessible by integration`:
 
 ```
@@ -274,43 +284,378 @@ $ gh api repos/…/commits/<sha>/status         → 403
 $ gh api repos/…/actions/runs?per_page=2      → 403
 ```
 
-The workflow is triggered normally on the branch (`push` → `CI`), and the pushes
-succeeded (`58b60f8..69f12ae..b079090`), but this report does **not** assert a
-green run. The owner must read the conclusion on PR #7 → *Checks*. If the run
-reports a failure, that failure is unresolved work: nothing here should be read
-as CI evidence until it is observed green.
+The pushes themselves succeeded (`58b60f8..69f12ae..b079090`), but no CI result is
+asserted from this side. **Resolved by §9.2.**
+
+### 9.2 Reviewer verification addendum — 2026-11-14 — CI VERIFIED SUCCESS
+
+Independently verified by the reviewer in mentor review
+[5906286395](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#pullrequestreview-5906286395),
+for the exact HEAD this report was handed back at
+(`dbaf938ecb2e8abd39759f7856f083d2efe11cad`):
+
+| Item | Result |
+|---|---|
+| Workflow run | [`43625331149`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625331149) — **COMPLETED / SUCCESS** |
+| Backend — Python 3.12 | **SUCCESS** |
+| Frontend — Node 22 | **SUCCESS** |
+| Overall | **SUCCESS** |
+
+Provenance, deliberately never collapsed into one line:
+
+| Observer | CI evidence | Meaning |
+|---|---|---|
+| Implementer (agent) | `403 Resource not accessible by integration` — **NOT OBSERVED** | An observer permission restriction of the automation credentials, **not** a CI failure |
+| Independent reviewer | run `43625331149` — **VERIFIED SUCCESS** | The 3.12 + Node 22 legs pass at `dbaf938` |
+| Owner Windows gate | **PENDING** | `test_all.ps1` on the owner laptop is still unrun (§10) |
+
+Because the reviewer resolved this matter, **no `OQ-P2-0x` was opened for it** — an
+open question is not created for a resolved issue.
+
+**Caveat, stated plainly:** run `43625331149` belongs to HEAD `dbaf938`. The
+documentation commits that follow this report (docs-only, `docs/**` + PR body) are
+not covered by that run; if the owner wants CI evidence for the final head, that
+run must be read on PR #7 → *Checks*.
 
 ---
 
-## 10. Windows verification commands (owner)
+## 10. Windows verification checklist (owner) — PowerShell 5.1, Python 3.12, isolated worktree
 
-Run from the repository root in PowerShell 7 on the owner laptop:
+Supersedes the earlier draft of this section, which assumed `pwsh` 7, an
+unquoted placeholder password and the `main` checkout. Everything below is
+**Windows PowerShell 5.1 compatible** (no `&&`, no ternary, no `??`), runs from a
+**separate review worktree with its own virtual environment and its own fresh
+SQLite database**, and leaves the accepted `main` checkout and its
+`data/runtime/app.db` untouched.
+
+**What must not be touched:** `main`, `E:\…\AI-Doctor-FollowUp-Agent\data\runtime\app.db`,
+its `.env`, its `.venv`, and any path outside the authorized scope. No file in
+this repository is edited by the checklist; only environment variables, the new
+worktree and its own database are used.
+
+### 10.0 Preparation (once per review)
 
 ```powershell
-# 1. Full gate (ruff, format, pytest, alembic smoke, OpenAPI, checks)
-pwsh -File scripts/powershell/test_all.ps1
+# PowerShell 5.1, from the existing main checkout. Nothing is modified in it.
+$Main = 'E:\DEPI\AI-Doctor-FollowUp-Agent'          # accepted main working copy
+$Review = 'E:\DEPI\P2-Review'                        # empty/absent: a NEW directory
+$Branch = 'arena/a8844cc2-ai-doctor-followup-agent'
 
-# 2. Fresh database from migrations + bootstrap on Python 3.12 only
-$env:DEMO_MODE = 'true'
-$env:DEMO_SEED_PASSWORD = '<local throwaway password>'
-python -m alembic -c backend/migrations/alembic.ini upgrade head
-python scripts/python/check_alembic_smoke.py data/runtime/app.db --state head
-python -m app.services.seed            # run with backend/ on PYTHONPATH or from backend/
-python scripts/python/check_openapi.py
+# a) Record the accepted database fingerprint so you can prove it was not touched.
+$MainDb = Join-Path $Main 'data\runtime\app.db'
+if (Test-Path -LiteralPath $MainDb) {
+    Get-FileHash -LiteralPath $MainDb -Algorithm SHA256 | Format-List
+    Get-Item  -LiteralPath $MainDb | Select-Object FullName, Length, LastWriteTime
+} else { 'main has no data/runtime/app.db yet' }
 
-# 3. PBKDF2 timing at the shipped work factor (compare with the 3.11 figure)
-python -c "import time,sys; sys.path.insert(0,'backend'); from app.core.security import hash_password, verify_password; t=time.perf_counter(); h=hash_password('benchmark-only'); v=verify_password('benchmark-only',h); print('hash+verify %.0f ms' % ((time.perf_counter()-t)*1000), v)"
+# b) Fetch the branch and create an isolated worktree at the reviewed commit.
+git -C $Main fetch origin $Branch
+$Head = (git -C $Main rev-parse "origin/$Branch")   # the SHA under review, exact
+$Head
+git -C $Main worktree add $Review $Head
 
-# 4. Downgrade/upgrade round trip on a scratch database
-python -m alembic -c backend/migrations/alembic.ini -x "database_url=sqlite:///$env:TEMP/p2-smoke.db" upgrade head
-python -m alembic -c backend/migrations/alembic.ini -x "database_url=sqlite:///$env:TEMP/p2-smoke.db" downgrade 0001_p1_baseline
-python scripts/python/check_alembic_smoke.py "$env:TEMP/p2-smoke.db" --state p1
+# c) Confirm isolation before installing anything.
+git -C $Review rev-parse HEAD                        # must equal $Head
+git -C $Review status --porcelain                    # must print nothing
 ```
 
-Expected: every gate PASS; the timing line is the only number expected to differ
-from §7 (Windows/3.12 vs this sandbox).
+> `$env:APP_VENV_DIR` must stay **unset** here. If it points at the `main`
+> checkout's `.venv`, `setup.ps1` would install P2 into that environment instead
+> of the worktree's own. The worktree gets `<worktree>\.venv`.
 
----
+### 10.1 Install inside the worktree (own venv, own `.env`, own database)
+
+```powershell
+Set-Location $Review
+
+# setup.ps1 is idempotent: creates .env from .env.example when missing,
+# creates <worktree>\.venv with Python 3.12, installs the pinned lock files,
+# creates data\runtime\ and applies the Alembic migration (now head = 0002).
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\setup.ps1
+
+# Prove the worktree owns its environment and its database:
+& "$Review\.venv\Scripts\python.exe" -c "import sys; print(sys.version); print(sys.executable)"
+Test-Path -LiteralPath (Join-Path $Review 'data\runtime\app.db')      # expected: True (fresh)
+Test-Path -LiteralPath (Join-Path $Main   'data\runtime\app.db')      # main's own file, untouched
+```
+
+Expected: `3.12.x` and a path under `E:\DEPI\P2-Review\.venv`. If the Python
+version is not 3.12, stop and report it — the P2 gates are pinned to 3.12 on
+Windows.
+
+### 10.2 Full quality gate (backend + frontend + migration + OpenAPI + scan)
+
+```powershell
+Set-Location $Review
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\test_all.ps1
+"exit code: $LASTEXITCODE"
+```
+
+Expected: the summary block reports **PASS** for Ruff lint, Ruff format check,
+Backend pytest, Alembic migration smoke (upgrade → downgrade base → upgrade),
+OpenAPI surface check, Frontend typecheck / lint / tests / build, Secret scan, and
+`$LASTEXITCODE = 0`. Playwright is reported `SKIP` unless `-IncludeE2E` is passed;
+a SKIP is **not** a pass.
+
+Two documented details about this script (it is **unchanged by P2** — editing it
+was outside the authorized scope):
+
+- Its OpenAPI gate banner still reads `/health, /version only`. That banner is a
+  historical P1 *comment*, not the behaviour: the line it invokes is the P2
+  strict gate, whose own output states `PASS (11 paths / 12 operations, 22 schemas)`.
+  Read the produced line, not the banner.
+- It runs `pytest` from the repository root with `PYTHONPATH=backend` and
+  `APP_ENV=test`, so the worktree's own sources are what get tested.
+
+### 10.3 Migration round trip on the worktree's own database
+
+```powershell
+Set-Location $Review
+$Alembic = Join-Path $Review 'backend\migrations\alembic.ini'
+$Python  = Join-Path $Review '.venv\Scripts\python.exe'
+$DbPath  = Join-Path $Review 'data\runtime\app.db'
+
+& $Python -m alembic -c $Alembic upgrade head
+& $Python (Join-Path $Review 'scripts\python\check_alembic_smoke.py') $DbPath --state head
+
+# P1 retention: 0002 -> 0001 must keep schema_meta; then back up to head.
+& $Python -m alembic -c $Alembic downgrade 0001_p1_baseline
+& $Python (Join-Path $Review 'scripts\python\check_alembic_smoke.py') $DbPath --state p1
+& $Python -m alembic -c $Alembic upgrade head
+& $Python (Join-Path $Review 'scripts\python\check_alembic_smoke.py') $DbPath --state head
+```
+
+Expected: three `PASS` lines with revisions `0002_p2_patient_domain`,
+`0001_p1_baseline`, `0002_p2_patient_domain`. `--state base` is exercised by
+`test_all.ps1` on a temporary database; do not run `downgrade base` against the
+worktree database that the smoke tests below need.
+
+### 10.4 Synthetic account bootstrap (no password is ever printed or committed)
+
+Choose a password of at least 12 characters when prompted. It is typed, held only
+in the session, passed through the environment and stored only as a salted
+PBKDF2 hash. It is not written to `.env`, so it must be supplied again for any
+later reseed.
+
+```powershell
+Set-Location $Review
+$env:PYTHONPATH   = Join-Path $Review 'backend'
+$env:DEMO_MODE    = 'true'
+
+$secure = Read-Host -AsSecureString 'Local demo password (>= 12 chars, not reused anywhere)'
+$bstr   = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+$env:DEMO_SEED_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+Remove-Variable bstr, secure
+
+& "$Review\.venv\Scripts\python.exe" -m app.services.seed
+"seed exit code: $LASTEXITCODE"
+
+# The password must not survive in the session after seeding.
+Remove-Item Env:DEMO_SEED_PASSWORD
+if (Test-Path Env:DEMO_SEED_PASSWORD) { 'FAIL: password still in the environment' } else { 'OK: password cleared' }
+```
+
+Expected: exit code `0`; counts of users/patients/encounters/observations and the
+account list (`demo_admin (demo_admin)`, `demo_doctor (doctor)`,
+`demo_doctor_unassigned (doctor)`, `demo_patient_a|b|c (patient)`); the line
+`password: supplied via DEMO_SEED_PASSWORD (not displayed)`. Re-running must be
+idempotent (no duplicates), and running with `DEMO_MODE=false` must exit `2` with
+a refusal and write nothing.
+
+### 10.5 Start the demo (backend + frontend) and check health
+
+```powershell
+Set-Location $Review
+$env:DEMO_MODE = 'true'      # inherited by the processes start.ps1 creates
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\start.ps1 -NoBrowser
+"start exit code: $LASTEXITCODE"
+
+$Api = 'http://127.0.0.1:8000'
+Invoke-RestMethod -Uri "$Api/health"  | ConvertTo-Json -Depth 6
+Invoke-RestMethod -Uri "$Api/version" | ConvertTo-Json -Depth 6
+Invoke-WebRequest -Uri 'http://127.0.0.1:5173/' -UseBasicParsing | Select-Object StatusCode
+Get-NetTCPConnection -LocalPort 8000, 5173 -State Listen |
+    Select-Object LocalAddress, LocalPort, OwningProcess
+```
+
+Expected: `/health` → `status = "ok"` with database/migrations `ok`; `/version` →
+the P2 version string; the Vite page answers `200`; both ports listen on
+`127.0.0.1` only, and the owning processes are the ones `start.ps1` recorded in
+`data/runtime/`.
+
+### 10.6 Authentication and role-based API smoke
+
+```powershell
+$Api = 'http://127.0.0.1:8000'
+$Pwd = Read-Host -AsSecureString 'Same demo password used in 10.4'
+$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Pwd)
+$Plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+
+function Get-Token([string]$User) {
+    $body = @{ username = $User; password = $Plain } | ConvertTo-Json
+    (Invoke-RestMethod -Method Post -Uri "$Api/api/v1/auth/login" `
+        -ContentType 'application/json' -Body $body).access_token
+}
+
+$DocToken       = Get-Token 'demo_doctor'
+$UnassignedTok  = Get-Token 'demo_doctor_unassigned'
+$PatToken       = Get-Token 'demo_patient_a'
+$AdminToken     = Get-Token 'demo_admin'
+Remove-Variable Plain, Pwd, bstr
+
+$H  = @{ Authorization = "Bearer $DocToken" }
+$HU = @{ Authorization = "Bearer $UnassignedTok" }
+$HP = @{ Authorization = "Bearer $PatToken" }
+$HA = @{ Authorization = "Bearer $AdminToken" }
+
+# identity
+Invoke-RestMethod -Uri "$Api/api/v1/auth/me" -Headers $H  | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Uri "$Api/api/v1/auth/me" -Headers $HP | ConvertTo-Json -Depth 5   # patient_id present
+
+# unauthorized: no token must be 401 E_UNAUTHENTICATED (never 403, never HTML)
+try { Invoke-RestMethod -Uri "$Api/api/v1/doctor/patients" -ErrorAction Stop | Out-Null }
+catch { "no token     -> " + [int]$_.Exception.Response.StatusCode + " " + $_.ErrorDetails.Message }
+
+# a doctor cannot read an unassigned patient (403 E_SCOPE_VIOLATION, no content)
+$Pid = '11111111-1111-4111-8111-111111111111'
+try { Invoke-RestMethod -Uri "$Api/api/v1/doctor/patients/$Pid/timeline" -Headers $HU -ErrorAction Stop | Out-Null }
+catch { "unassigned   -> " + [int]$_.Exception.Response.StatusCode + " " + $_.ErrorDetails.Message }
+
+# the assigned doctor reads the assigned patient
+Invoke-RestMethod -Uri "$Api/api/v1/doctor/patients?limit=5" -Headers $H | ConvertTo-Json -Depth 4
+Invoke-RestMethod -Uri "$Api/api/v1/doctor/patients/$Pid" -Headers $H | ConvertTo-Json -Depth 4
+Invoke-RestMethod -Uri "$Api/api/v1/doctor/patients/$Pid/timeline?limit=5" -Headers $H | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Uri "$Api/api/v1/doctor/patients/$Pid/observations?measure_type=glucose&limit=5" -Headers $H |
+    ConvertTo-Json -Depth 5
+
+# a patient cannot use the doctor surface (403 E_FORBIDDEN) and cannot read someone else
+try { Invoke-RestMethod -Uri "$Api/api/v1/doctor/patients" -Headers $HP -ErrorAction Stop | Out-Null }
+catch { "patient→doctor -> " + [int]$_.Exception.Response.StatusCode }
+```
+
+Expected: `401 E_UNAUTHENTICATED`; `403 E_SCOPE_VIOLATION` for the unassigned
+doctor with **no** patient content; populated-assignment reads for `demo_doctor`;
+`403 E_FORBIDDEN` for the patient on the doctor surface; every error body is the
+problem envelope (`type`, `title`, `status`, `code`, `request_id`), never HTML.
+
+### 10.7 Check-in idempotency
+
+```powershell
+$Api = 'http://127.0.0.1:8000'
+$Now = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+$Key  = [guid]::NewGuid().ToString()
+$Body = @{ measured_at = $Now; measure_type = 'heart_rate'; value = 78; unit = 'bpm';
+           note = 'owner Windows smoke' } | ConvertTo-Json
+
+$Hdr = @{ Authorization = "Bearer $PatToken"; 'Idempotency-Key' = $Key;
+          'Content-Type' = 'application/json' }
+
+$first  = Invoke-RestMethod -Method Post -Uri "$Api/api/v1/patient/check-ins" -Headers $Hdr -Body $Body
+$second = Invoke-WebRequest -Method Post -Uri "$Api/api/v1/patient/check-ins" -Headers $Hdr -Body $Body
+$secondJson = $second.Content | ConvertFrom-Json
+
+"first  id: $($first.id) / trust_level: $($first.trust_level) / source: $($first.source)"
+"replay id: $($secondJson.id)  equal: $($first.id -eq $secondJson.id)"
+"Idempotent-Replay header: $($second.Headers['Idempotent-Replay'])"
+
+# engine-derived provenance cannot be forged: an extra field must be a 400
+$Forge = @{ measured_at = $Now; measure_type = 'heart_rate'; value = 79; unit = 'bpm';
+            trust_level = 'doctor_verified' } | ConvertTo-Json
+try {
+    Invoke-RestMethod -Method Post -Uri "$Api/api/v1/patient/check-ins" `
+        -Headers @{ Authorization = "Bearer $PatToken"; 'Content-Type' = 'application/json' } `
+        -Body $Forge -ErrorAction Stop | Out-Null
+} catch { "forged field -> " + [int]$_.Exception.Response.StatusCode }
+
+# unit allowlist: mmol/L glucose is refused, it is never converted
+$Bad = @{ measured_at = $Now; measure_type = 'glucose'; value = 6.1; unit = 'mmol/L' } | ConvertTo-Json
+try {
+    Invoke-RestMethod -Method Post -Uri "$Api/api/v1/patient/check-ins" `
+        -Headers @{ Authorization = "Bearer $PatToken"; 'Content-Type' = 'application/json' } `
+        -Body $Bad -ErrorAction Stop | Out-Null
+} catch { "mmol/L       -> " + [int]$_.Exception.Response.StatusCode + " " + $_.ErrorDetails.Message }
+
+# self-scoped read-back
+Invoke-RestMethod -Uri "$Api/api/v1/patient/check-ins?limit=5" -Headers $HP | ConvertTo-Json -Depth 5
+```
+
+Expected: first `201` with `trust_level = self_reported_validated` and
+`source = patient_checkin`; the replay returns the **same** `id` with header
+`Idempotent-Replay: true` and creates no second row; a new key with an identical
+measurement is `409 E_DUPLICATE_CHECKIN` (not a 500); the forged field is `400
+E_VALIDATION`; `mmol/L` is `400 E_UNIT_NOT_ALLOWED`; the patient sees only their
+own check-ins.
+
+### 10.8 Demo reset, then clean shutdown
+
+```powershell
+$Api = 'http://127.0.0.1:8000'
+Invoke-RestMethod -Method Post -Uri "$Api/api/v1/demo/reset" -Headers $HA | ConvertTo-Json -Depth 4
+try { Invoke-RestMethod -Method Post -Uri "$Api/api/v1/demo/reset" -Headers $H -ErrorAction Stop | Out-Null }
+catch { "doctor → reset -> " + [int]$_.Exception.Response.StatusCode }   # 403 E_FORBIDDEN
+
+# the removed/deferred surface must stay absent
+foreach ($path in @('/api/v1/demo/status', '/api/v1/demo/seed')) {
+    try { Invoke-RestMethod -Uri "$Api$path" -Headers $HA -ErrorAction Stop | Out-Null }
+    catch { "$path -> " + [int]$_.Exception.Response.StatusCode }        # expected 404
+}
+
+Set-Location $Review
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\stop.ps1
+"stop exit code: $LASTEXITCODE"
+Get-NetTCPConnection -LocalPort 8000, 5173 -State Listen -ErrorAction SilentlyContinue   # expected: none
+Get-ChildItem -LiteralPath (Join-Path $Review 'data\runtime') -Filter *.json |
+    Select-Object Name                                                   # expected: no run-state/PID files
+```
+
+Expected: reset returns `cases_loaded = [A_stable, B_changed, C_ambiguous_ocr]`
+and keeps the audit trail; the doctor is `403`; `/demo/status` and `/demo/seed`
+are `404`; `stop.ps1` exits `0`, both ports are free and the tracking files are
+gone.
+
+### 10.9 Prove isolation and record the measured numbers
+
+```powershell
+# main must be byte-identical to 10.0
+git -C $Main status --porcelain
+git -C $Main rev-parse HEAD
+Get-FileHash -LiteralPath (Join-Path $Main 'data\runtime\app.db') -Algorithm SHA256
+
+# PBKDF2 timing at the shipped work factor, measured ON WINDOWS (do not reuse
+# the 3.11 sandbox figure from §7 — it is not a Windows measurement)
+& "$Review\.venv\Scripts\python.exe" -c "import sys,time; sys.path.insert(0,'backend'); from app.core.security import hash_password, verify_password; t=time.perf_counter(); h=hash_password('benchmark-only-not-a-credential'); t1=time.perf_counter(); ok=verify_password('benchmark-only-not-a-credential',h); print('python', sys.version.split()[0]); print('hash %.0f ms, verify %.0f ms, ok=%s' % ((t1-t)*1000,(time.perf_counter()-t1)*1000,ok))"
+
+# remove the review worktree when finished (its database goes with it)
+git -C $Main worktree remove $Review --force
+```
+
+Record: Windows build, `python --version`, the `test_all.ps1` summary table verbatim,
+the measured hash/verify timings, every status code printed above, and the
+`main` fingerprint before/after (they must match). Then clean up the session
+environment:
+
+```powershell
+Remove-Item Env:DEMO_MODE, Env:PYTHONPATH -ErrorAction SilentlyContinue
+```
+
+### 10.10 What the owner must report back
+
+| Evidence | Where it comes from |
+|---|---|
+| `test_all.ps1` PASS/FAIL/SKIP summary + exit code | 10.2 |
+| Migration state at `head` / `p1` / back to `head` | 10.3 |
+| Seed counts, refusal paths, password cleared | 10.4 |
+| `/health`, `/version`, Vite `200`, listening ports | 10.5 |
+| Login, `me`, 401/403/404/400 status codes | 10.6, 10.8 |
+| Check-in `201` + replay `Idempotent-Replay: true` + `409` duplicate | 10.7 |
+| Clean shutdown, ports free, tracking files removed | 10.8 |
+| Windows PBKDF2 timings (measured, not copied) | 10.9 |
+| Confirmation `main` is unchanged | 10.9 |
+
+Any deviation is a **blocker to be reported**, not something to work around: this
+report claims no Windows result.
 
 ## 11. Known limitations and deferred items
 
@@ -341,6 +686,22 @@ from §7 (Windows/3.12 vs this sandbox).
    the explicit P2 allowlist, preserving their intent.
 9. **No clinical claim** is made anywhere: synthetic data, deterministic rules,
    `self_reported_validated` provenance, and no recommendations or diagnoses.
+10. **The two-writer tests are SQLite-specific evidence, not a Windows or
+    multi-process guarantee.** They use two real connections plus an explicit
+    hold event and prove that the second writer replays or receives `409` instead
+    of a `500`; they do not prove every Windows scheduler interleaving, every
+    `busy_timeout` configuration, or safety under multiple worker processes.
+11. **A `database is locked` error is not explicitly converted into a replay.**
+    The service catches `IntegrityError` (unique/constraint violation) and rolls
+    back; a SQLite `OperationalError` under sustained lock contention would
+    surface as an error rather than a guaranteed idempotent answer. Do not read
+    this as blanket contention safety.
+12. **`scripts/powershell/test_all.ps1` was not modified** (outside the authorized
+    scope) and its OpenAPI gate *banner* still reads `/health, /version only`
+    from P1. This is cosmetic: the script invokes `check_openapi.py`, which is the
+    P2 strict gate and prints `PASS (11 paths / 12 operations, 22 schemas)`. The
+    banner must not be read as evidence that the P1-only check still runs, and
+    silently editing that unapproved file was deliberately avoided.
 
 ---
 
@@ -352,11 +713,13 @@ from §7 (Windows/3.12 vs this sandbox).
   index `uq_observation_checkin_identity`; dropping that index in a later phase
   would silently reopen the semantic-duplicate race. It is asserted in
   `test_p2_migration.py` and the smoke gate.
-- Concurrency behaviour is proven for SQLite serialized writers; it is **not** a
-  claim about multi-process deployments or another database engine.
+- Concurrency behaviour is proven for SQLite serialized writers with two
+  connections; it is **not** a claim about multi-process deployments, another
+  database engine, or every Windows scheduling/busy-timeout case (§11.10–11.11).
 - Rate limiting and the audit idempotency key are per-process concerns; see §11.1.
-- The 3.12 CI leg and Windows timings are not yet observed by the implementer;
-  §9/§10 record that honestly instead of inferring success.
+- The 3.12 CI leg is verified by the reviewer (§9.2) but **not by the
+  implementer**, and Windows timings are still unmeasured; §9/§10 record that
+  honestly instead of inferring success.
 
 **Rollback**
 
@@ -372,8 +735,30 @@ from §7 (Windows/3.12 vs this sandbox).
 
 ## 13. Handback
 
-Implementation and sandbox verification are complete; this report is handed back
-for **independent technical review and owner Windows testing**. No approval, merge,
-PASS marking or P3 work is performed by the implementer.
+Implementation and sandbox verification are complete. The independent reviewer
+verified CI run `43625331149` (Python 3.12 **SUCCESS**, Node 22 **SUCCESS**) at HEAD
+`dbaf938` and cleared P2 to proceed to **owner Windows verification** subject to
+the documentation corrections in this revision. That is **not** code approval,
+merge authorization or a PASS.
+
+| Gate | State at this revision |
+|---|---|
+| Implementer sandbox evidence (3.11) | **complete** (§7) |
+| Independent reviewer technical review | **proceed to owner Windows verification** — review `5906286395` |
+| CI (3.12 + Node 22), run `43625331149` at `dbaf938` | **SUCCESS** (reviewer-verified, §9.2) |
+| Owner Windows quality gate (`test_all.ps1`) | **PENDING** (§10) |
+| Owner approval / merge / P2 PASS | **NOT GIVEN** — PR #7 stays **draft** |
+| P3 | **NOT STARTED** |
+
+No approval, merge, PASS marking or P3 work is performed by the implementer.
+
+---
+
+## 14. Document history
+
+| Date | Revision |
+|---|---|
+| 2026-11-14 | Initial report at implementation handback `dbaf938`. |
+| 2026-11-14 | Reviewer-driven documentation synchronization (mentor review `5906286395`), **docs-only**: §9.2 adds the independently verified CI run `43625331149` (3.12 SUCCESS, Node 22 SUCCESS) while §9.1 keeps the implementer's 403/NOT-OBSERVED evidence as a historical observer limitation; §8 ledger row updated accordingly, no `OQ` opened for the resolved CI question; §10 replaced with a PowerShell 5.1 / Python 3.12 checklist on an isolated review worktree with its own venv, `.env` and fresh SQLite database, covering full quality gates, migrations, bootstrap, auth, role-based access, idempotency, startup and clean shutdown; §11 adds the SQLite `database is locked` caveat and the unchanged `test_all.ps1` banner; no code, migration, gate script or P1 file changed. |
 
 **NOT FOR CLINICAL USE — educational, synthetic-data demo only.**
