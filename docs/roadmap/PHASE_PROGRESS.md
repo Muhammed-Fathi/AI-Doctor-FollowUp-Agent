@@ -1,6 +1,6 @@
 # Phase Progress Tracker
 
-> **Current status: P0 PASS — Owner-approved and merged on 2026-11-14.**
+> **Current status: P0 PASS (owner-approved and merged 2026-11-14); P1 IN_REVIEW.**
 >
 > Phase 0 (Governance and Specifications) completed its documentation review process and was merged into `main` through [PR #2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2).
 >
@@ -29,7 +29,7 @@ The implementing agent never self-approves, marks phases `PASS` or merges pull r
 | Phase | Topic | Status | PR | Merge SHA | Test Evidence | Owner Approval |
 |---|---|---|---|---|---|---|
 | P0 | Governance / specifications | **PASS** | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) | `442256606fd2465439409cc9b4d42f1bec09a723` | Documentation consistency, traceability, OpenAPI validation and targeted contract checks completed. No runtime implementation tests applicable to P0. | **Approved — 2026-11-14** |
-| P1 | Foundation / reproducible startup | TODO | — | — | Not run | Pending |
+| P1 | Foundation / reproducible startup | **IN_REVIEW** | open against `main` | — | Backend 94 tests, frontend 12 tests, Ruff, Alembic smoke, OpenAPI contract, repository scan, live `/health` + `/version`, Vite build all executed on Linux (Python 3.11.2). PowerShell scripts, Windows gate, GitHub CI run and Playwright smoke **not executed** — see `docs/phase-reports/PHASE_1_REPORT.md` §7. | Pending |
 | P2 | Patient data + role-based API | TODO | — | — | Not run | Pending |
 | P3 | Document ingestion + OCR verification | TODO | — | — | Not run | Pending |
 | P4 | Monitoring + demo review rules | TODO | — | — | Not run | Pending |
@@ -226,9 +226,11 @@ This safeguard must be checked during P3 implementation before the document-inge
 
 **Phase:** P1 — Foundation and Reproducible Startup
 
-**Current status:** `TODO`
+**Current status:** `IN_REVIEW` — implementation PR open against `main`; owner review and the
+local Windows quality gate are pending. Evidence: `docs/phase-reports/PHASE_1_REPORT.md`.
 
 **Prerequisite:** P0 accepted and merged — satisfied.
+**Base commit of the P1 branch:** `a33e693ba16560836312351787769ec5ee18b469`.
 
 ### Owner Laptop Environment
 
@@ -257,26 +259,23 @@ P1 PowerShell scripts should use `npm.cmd` where appropriate and must not requir
 
 Project virtual environments, local runtime files, dependencies and test artifacts should be placed on the E: workspace wherever configurable, with generated artifacts excluded from Git.
 
-### P1 Required Deliverables
+### P1 Required Deliverables (delivery status)
 
-1. Python 3.12-based reproducible backend environment.
-2. FastAPI application scaffold with `/health` and `/version`.
-3. React, TypeScript and Vite frontend scaffold.
-4. SQLite application database initialization.
-5. Alembic baseline migration.
-6. Dependency declarations, appropriate lockfiles and `.env.example`.
-7. Strict `.gitignore` preventing local secrets and runtime data from being committed.
-8. Windows PowerShell scripts:
-   - `preflight.ps1`
-   - `setup.ps1`
-   - `start.ps1`
-   - `stop.ps1`
-   - `test_all.ps1`
-9. Backend unit and smoke tests.
-10. Frontend build and test verification.
-11. Ruff and applicable source checks.
-12. GitHub Actions CI foundation.
-13. Phase 1 implementation report with actual evidence.
+| # | Deliverable | Status in the submitted P1 PR |
+|---|---|---|
+| 1 | Python 3.12-based reproducible backend environment | Implemented; executed on 3.11.2 locally, 3.12 execution pending in CI |
+| 2 | FastAPI scaffold with `/health` and `/version` | Implemented and executed (HTTP 200) |
+| 3 | React, TypeScript and Vite frontend scaffold | Implemented; build and dev server executed |
+| 4 | SQLite application database initialization | Implemented and executed |
+| 5 | Alembic baseline migration (reversible) | Implemented and executed (up/down/up) |
+| 6 | Dependency declarations, lockfiles, `.env.example` | Implemented (hash-pinned locks + `package-lock.json`) |
+| 7 | Strict `.gitignore` | Implemented; repository scan passes |
+| 8 | PowerShell `preflight` / `setup` / `start` / `stop` / `test_all` | Implemented; **not executed** — requires the owner laptop |
+| 9 | Backend unit and smoke tests | Implemented and executed (93 passing) |
+| 10 | Frontend build and test verification | Implemented and executed (8 passing, build OK) |
+| 11 | Ruff and applicable source checks | Implemented and executed (clean) |
+| 12 | GitHub Actions CI foundation | Implemented and statically validated; **run pending** |
+| 13 | Phase 1 implementation report with actual evidence | `docs/phase-reports/PHASE_1_REPORT.md` |
 
 ### P1 Acceptance Gate
 
@@ -301,6 +300,37 @@ The implementation agent must use a dedicated P1 branch and PR.
 
 ---
 
+## P1 Evidence — Submitted for Review
+
+**Status:** `IN_REVIEW`. Nothing below is an owner approval.
+
+| Item | Value |
+|---|---|
+| Scope | Foundation only: monorepo layout, FastAPI `/health` + `/version`, React/TS/Vite status page, SQLite + Alembic baseline, hash-pinned locks, Windows scripts, CI, guides |
+| Branch | `arena/d86c4f98-ai-doctor-followup-agent` |
+| Base commit | `a33e693ba16560836312351787769ec5ee18b469` |
+| Deliverables | 10/10 addressed; see `docs/phase-reports/PHASE_1_REPORT.md` §3 |
+| Backend tests | `python -m pytest -q` -> 94 passed (exit 0) |
+| Frontend tests | `npm test` -> 12 passed (exit 0) |
+| Lint / format | `ruff check .` and `ruff format --check .` -> clean (exit 0) |
+| Frontend build | `npm run build` -> built in 1.20 s (exit 0) |
+| Migration | `alembic upgrade head` / `downgrade base` / `upgrade head` -> `0001_p1_baseline` (exit 0) |
+| Health endpoint | `GET /health` -> HTTP 200, `status=ok`, `db=ok`, exit 0 (live Uvicorn process) |
+| Version endpoint | `GET /version` -> `api_version=v1`, real base SHA (exit 0) |
+| Repository scan | `scan_repository.py` -> PASS, 0 secrets, 0 tracked artefacts, 0 forbidden claims |
+| GitHub Actions | Workflow committed and YAML/static-validated; **run result pending** after push |
+| Windows PowerShell gate | **NOT EXECUTED** — requires the owner's Windows laptop |
+| Playwright browser smoke | **NOT EXECUTED** — browser binaries unavailable in the authoring environment |
+| Python 3.12 execution | **NOT EXECUTED locally** (sandbox has 3.11.2); CI is configured to run the suite on 3.12 |
+| Application scope | No patient, auth, OCR, monitoring, agent, task or messaging code exists in P1 |
+| Owner decision | **Pending** — review the PR, run the Windows gate, then accept or reject |
+
+See `docs/phase-reports/PHASE_1_REPORT.md` §7 for exact commands, exit codes and the list of
+checks that were *not* executed and why. No test count, timing or result in this table is
+estimated; each came from a command actually run in the implementation session.
+
+---
+
 ## Required Evidence for Every Phase
 
 Each future phase must record:
@@ -322,18 +352,19 @@ Do not prefill future pass results, test counts, benchmarks or model metrics.
 
 ## Next Authorized Workflow
 
-1. Record and merge this Phase 0 administrative tracker update through a separate documentation PR.
-2. Preserve the verified P0 merge commit and owner approval evidence.
-3. Start P1 only from the latest accepted `main` baseline.
-4. Assign P1 implementation to Arena on a dedicated branch.
-5. Require an implementation PR with reproducible test evidence.
-6. Independently review the P1 diff and test claims.
-7. Run the P1 local Windows PowerShell quality gate before approving the merge.
-8. Record P1 approval and merge SHA only after successful verification.
+1. Preserve the verified P0 merge commit and owner approval evidence — done.
+2. P1 implementation submitted on `arena/d86c4f98-ai-doctor-followup-agent`; PR open, status `IN_REVIEW`.
+3. Owner/reviewer: inspect the P1 diff, the changed-file list and `docs/phase-reports/PHASE_1_REPORT.md`.
+4. Run `preflight.ps1`, `setup.ps1`, `test_all.ps1`, `start.ps1`, `stop.ps1` on the owner's Windows laptop.
+5. Confirm the GitHub Actions run on the PR head is green.
+6. Record the P1 decision (accept/reject), the merge SHA and the local evidence only after verification.
+7. P2 must not start until P1 is accepted.
 
 **Current accepted baseline:** P0 architecture and governance.
 
-**Next implementation milestone:** P1 — Foundation and Reproducible Startup.
+**Phase under review:** P1 — Foundation and Reproducible Startup.
+
+**Next implementation milestone (not authorized yet):** P2 — Patient data domain and role-scoped API.
 
 **Project classification:** Educational, synthetic-data, local-first multi-agent workflow assistant.
 

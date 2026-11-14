@@ -1,0 +1,216 @@
+<#
+.SYNOPSIS
+    Start the local demo (FastAPI backend, and optionally the Vite frontend).
+
+.DESCRIPTION
+    Starts ONLY processes this project owns, records their PIDs in
+    `data/runtime/`, and writes `run-state.json` so `stop.ps1` can verify
+    process identity before stopping anything.
+
+    Safety rules implemented here:
+      * refuses to start when the same application process is already running
+        (it reports the existing instance instead of duplicating it);
+      * never kills an unrelated process occupying a port - it reports the
+        conflict and stops;
+      * the backend binds 127.0.0.1 only;
+      * no window is hidden and no execution policy is changed.
+
+    EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
+
+.PARAMETER BackendOnly
+    Start only the FastAPI backend (no Vite dev server).
+
+.PARAMETER NoBrowser
+    Do not open the default browser.
+
+.PARAMETER TimeoutSeconds
+    How long to wait for `/health` to answer before declaring failure.
+
+.EXAMPLE
+    powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\start.ps1
+#>
+[CmdletBinding()]
+param(
+    [switch]$BackendOnly,
+    [switch]$NoBrowser,
+    [int]$TimeoutSeconds = 60
+)
+
+. "$PSScriptRoot\_common.ps1"
+
+Write-Banner 'Start: local demo'
+
+$venvPython = Get-VenvPython
+if (-not (Test-Path -LiteralPath $venvPython)) {
+    Write-Fail "No virtual environment at $(Get-VenvDir). Run setup.ps1 first."
+    exit 1
+}
+
+$envFile = Join-Path $script:RepoRoot '.env'
+if (-not (Test-Path -LiteralPath $envFile)) {
+    Write-Warn '.env is missing; defaults from the application will be used (setup.ps1 creates it).'
+}
+
+Ensure-RuntimeDir | Out-Null
+
+# --- already running? ---------------------------------------------------------
+$previousState = Read-StateFile
+if ($previousState) {
+    $stillRunning = $false
+    foreach ($entry in @($previousState.processes)) {
+        if ($entry -and $entry.pid -and (Get-Process -Id $entry.pid -ErrorAction SilentlyContinue)) {
+            $stillRunning = $true
+        }
+    }
+    if ($stillRunning) {
+        Write-Warn 'An application instance is already running. Use stop.ps1 first if you want a restart.'
+        Write-Host "  state file: $($script:StateFile)" -ForegroundColor DarkGray
+        exit 1
+    }
+    Write-Warn 'A stale run-state.json was found (no matching processes); it will be replaced.'
+}
+
+# --- port conflicts -----------------------------------------------------------
+$ports = @($script:BackendPort)
+if (-not $BackendOnly) { $ports += $script:FrontendPort }
+foreach ($port in $ports) {
+    if (Test-PortListening -Port $port) {
+        Write-Fail "Port $port is already in use by another process. Nothing was started."
+        Write-Host "  Inspect it with: Get-NetTCPConnection -LocalPort $port -State Listen | Select-Object OwningProcess" -ForegroundColor DarkGray
+        Write-Host '  This script never terminates a process it did not start.' -ForegroundColor DarkGray
+        exit 1
+    }
+}
+
+$started = New-Object System.Collections.Generic.List[object]
+
+function Stop-StartedProcesses {
+    param([System.Collections.Generic.List[object]]$List)
+    foreach ($item in $List) {
+        $process = Get-Process -Id $item.pid -ErrorAction SilentlyContinue
+        if ($process) {
+            Stop-Process -Id $item.pid -Force -ErrorAction SilentlyContinue
+            Write-Warn "Rolled back $($item.name) (PID $($item.pid))."
+        }
+    }
+}
+
+try {
+    # --- backend --------------------------------------------------------------
+    Write-Step 'Starting FastAPI backend on 127.0.0.1:8000'
+    $backendLog = Join-Path $script:RuntimeDir 'backend.out.log'
+    $backendErrLog = Join-Path $script:RuntimeDir 'backend.err.log'
+
+    $backendArgs = @(
+        '-m', 'uvicorn', 'app.main:app',
+        '--host', '127.0.0.1',
+        '--port', "$($script:BackendPort)",
+        '--app-dir', $script:BackendDir,
+        '--log-level', 'info'
+    )
+
+    $backendProcess = Start-Process -FilePath $venvPython `
+        -ArgumentList $backendArgs `
+        -WorkingDirectory $script:RepoRoot `
+        -RedirectStandardOutput $backendLog `
+        -RedirectStandardError $backendErrLog `
+        -PassThru `
+        -WindowStyle Hidden
+
+    $started.Add([pscustomobject]@{ Name = 'backend'; pid = $backendProcess.Id })
+    Set-Content -LiteralPath $script:BackendPidFile -Value $backendProcess.Id -Encoding ASCII
+    Write-Ok "backend started (PID $($backendProcess.Id))"
+
+    $healthUrl = "http://127.0.0.1:$($script:BackendPort)/health"
+    if (-not (Wait-HttpOk -Url $healthUrl -TimeoutSeconds $TimeoutSeconds)) {
+        throw "Backend did not answer $healthUrl within $TimeoutSeconds s. See $backendLog and $backendErrLog."
+    }
+    Write-Ok "GET $healthUrl -> 200"
+
+    $health = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 5
+    Write-Host ("      status={0} db={1} ollama={2} tesseract={3}" -f $health.status, $health.db, $health.ollama, $health.tesseract) -ForegroundColor DarkGray
+
+    # --- frontend -------------------------------------------------------------
+    if (-not $BackendOnly) {
+        $nodeModules = Join-Path $script:FrontendDir 'node_modules'
+        if (-not (Test-Path -LiteralPath $nodeModules)) {
+            throw "frontend/node_modules is missing. Run setup.ps1 first."
+        }
+
+        Write-Step "Starting Vite dev server on 127.0.0.1:$($script:FrontendPort)"
+        $frontendLog = Join-Path $script:RuntimeDir 'frontend.out.log'
+        $frontendErrLog = Join-Path $script:RuntimeDir 'frontend.err.log'
+
+        # npm.cmd, because npm.ps1 may be blocked by the execution policy.
+        $frontendProcess = Start-Process -FilePath 'npm.cmd' `
+            -ArgumentList @('run', 'dev', '--', '--host', '127.0.0.1', '--port', "$($script:FrontendPort)", '--strictPort') `
+            -WorkingDirectory $script:FrontendDir `
+            -RedirectStandardOutput $frontendLog `
+            -RedirectStandardError $frontendErrLog `
+            -PassThru `
+            -WindowStyle Hidden
+
+        $started.Add([pscustomobject]@{ Name = 'frontend'; pid = $frontendProcess.Id })
+        Set-Content -LiteralPath $script:FrontendPidFile -Value $frontendProcess.Id -Encoding ASCII
+        Write-Ok "frontend started (PID $($frontendProcess.Id))"
+
+        $frontendUrl = "http://127.0.0.1:$($script:FrontendPort)/"
+        if (-not (Wait-HttpOk -Url $frontendUrl -TimeoutSeconds $TimeoutSeconds)) {
+            throw "Frontend did not answer $frontendUrl within $TimeoutSeconds s. See $frontendLog and $frontendErrLog."
+        }
+        Write-Ok "GET $frontendUrl -> 200"
+    }
+
+    # --- state file -----------------------------------------------------------
+    $state = [pscustomobject]@{
+        schemaVersion = 1
+        startedAt     = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        repoRoot      = $script:RepoRoot
+        venvDir       = (Get-VenvDir)
+        processes     = @($started | ForEach-Object {
+                [pscustomobject]@{
+                    name        = $_.name
+                    pid         = $_.pid
+                    port        = if ($_.name -eq 'backend') { $script:BackendPort } else { $script:FrontendPort }
+                    commandLine = (Get-ProcessCommandLine -ProcessId $_.pid)
+                }
+            })
+    }
+    $state | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $script:StateFile -Encoding UTF8
+
+    Write-Host ''
+    Write-Host 'Start result: PASS' -ForegroundColor Green
+    Write-Host ''
+    Write-Host "  API      : http://127.0.0.1:$($script:BackendPort)/health"
+    Write-Host "  Version  : http://127.0.0.1:$($script:BackendPort)/version"
+    Write-Host "  API docs : http://127.0.0.1:$($script:BackendPort)/docs"
+    if (-not $BackendOnly) {
+        Write-Host "  Frontend : http://127.0.0.1:$($script:FrontendPort)/"
+    }
+    Write-Host "  Logs     : $($script:RuntimeDir)"
+    Write-Host "  Stop     : powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\stop.ps1"
+    Write-Host ''
+    Write-Host 'Logs are application-owned and gitignored. Nothing is exposed beyond 127.0.0.1.' -ForegroundColor DarkGray
+
+    if (-not $NoBrowser -and -not $BackendOnly) {
+        try {
+            Start-Process "http://127.0.0.1:$($script:FrontendPort)/" | Out-Null
+        }
+        catch {
+            Write-Warn 'Could not open the default browser; open the URL manually.'
+        }
+    }
+
+    exit 0
+}
+catch {
+    Write-Fail $_.Exception.Message
+    Write-Step 'Rolling back started processes'
+    Stop-StartedProcesses -List $started
+    Remove-Item -LiteralPath $script:StateFile -Force -ErrorAction SilentlyContinue
+    foreach ($pidFile in @($script:BackendPidFile, $script:FrontendPidFile)) {
+        Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+    }
+    Write-Fail 'Start failed; nothing is left running.'
+    exit 1
+}
