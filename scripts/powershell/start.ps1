@@ -84,13 +84,74 @@ foreach ($port in $ports) {
 
 $started = New-Object System.Collections.Generic.List[object]
 
+# Captures the identity of a process we just launched, so stop.ps1 can later
+# prove the PID is still ours (PID + image name + creation time). Without the
+# creation time a recycled PID could be stopped by mistake (P1-R07).
+function New-StartedRecord {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][int]$ProcessId
+    )
+
+    $snapshot = Get-ProcessSnapshot
+    $imageName = ''
+    $creation = ''
+    $commandLine = ''
+    if ($snapshot.ContainsKey($ProcessId)) {
+        $live = $snapshot[$ProcessId]
+        $imageName = $live.Name
+        $creation = ConvertTo-CreationStamp -CreationDate $live.CreationDate
+        $commandLine = $live.CommandLine
+    }
+
+    return [pscustomobject]@{
+        Name        = $Name
+        pid         = $ProcessId
+        imageName   = $imageName
+        startedAt   = $creation
+        commandLine = $commandLine
+    }
+}
+
+# Rolls back exactly what this run started. npm.cmd -> cmd.exe -> node.exe means
+# stopping only the recorded wrapper leaks the Vite server, so the verified
+# child tree is stopped too (same hierarchy as stop.ps1, P1-R07).
 function Stop-StartedProcesses {
     param([System.Collections.Generic.List[object]]$List)
+
     foreach ($item in $List) {
-        $process = Get-Process -Id $item.pid -ErrorAction SilentlyContinue
-        if ($process) {
-            Stop-Process -Id $item.pid -Force -ErrorAction SilentlyContinue
-            Write-Warn "Rolled back $($item.name) (PID $($item.pid))."
+        $snapshot = Get-ProcessSnapshot
+
+        # Only touch the recorded PID when it still is the process we started.
+        if ($snapshot.ContainsKey($item.pid)) {
+            $live = $snapshot[$item.pid]
+            $sameName = (-not $item.imageName) -or ($live.Name -eq $item.imageName)
+            $sameStart = (-not $item.startedAt) -or ((ConvertTo-CreationStamp -CreationDate $live.CreationDate) -eq $item.startedAt)
+            if (-not ($sameName -and $sameStart)) {
+                Write-Warn "Rollback skipped $($item.Name): PID $($item.pid) now belongs to another process."
+                continue
+            }
+        }
+
+        $targets = New-Object System.Collections.Generic.List[int]
+        $targets.Add($item.pid)
+
+        # Children first, then the wrapper.
+        foreach ($childId in @(Get-DescendantProcessIds -RootProcessId $item.pid -Snapshot $snapshot)) {
+            if ($snapshot.ContainsKey($childId)) {
+                $targets.Add($childId)
+            }
+        }
+
+        $stoppedAny = $false
+        foreach ($targetId in $targets) {
+            if (Get-Process -Id $targetId -ErrorAction SilentlyContinue) {
+                Stop-Process -Id $targetId -Force -ErrorAction SilentlyContinue
+                $stoppedAny = $true
+            }
+        }
+        if ($stoppedAny) {
+            Write-Warn "Rolled back $($item.Name) (PID $($item.pid), $($targets.Count) process(es) in its tree)."
         }
     }
 }
@@ -120,7 +181,7 @@ try {
         -PassThru `
         -WindowStyle Hidden
 
-    $started.Add([pscustomobject]@{ Name = 'backend'; pid = $backendProcess.Id })
+    $started.Add((New-StartedRecord -Name 'backend' -ProcessId $backendProcess.Id))
     Set-Content -LiteralPath $script:BackendPidFile -Value $backendProcess.Id -Encoding ASCII
     Write-Ok "backend started (PID $($backendProcess.Id))"
 
@@ -160,7 +221,7 @@ try {
             -PassThru `
             -WindowStyle Hidden
 
-        $started.Add([pscustomobject]@{ Name = 'frontend'; pid = $frontendProcess.Id })
+        $started.Add((New-StartedRecord -Name 'frontend' -ProcessId $frontendProcess.Id))
         Set-Content -LiteralPath $script:FrontendPidFile -Value $frontendProcess.Id -Encoding ASCII
         Write-Ok "frontend started (PID $($frontendProcess.Id))"
 
@@ -173,16 +234,18 @@ try {
 
     # --- state file -----------------------------------------------------------
     $state = [pscustomobject]@{
-        schemaVersion = 1
+        schemaVersion = 2
         startedAt     = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
         repoRoot      = $script:RepoRoot
         venvDir       = (Get-VenvDir)
         processes     = @($started | ForEach-Object {
                 [pscustomobject]@{
-                    name        = $_.name
+                    name        = $_.Name
                     pid         = $_.pid
-                    port        = if ($_.name -eq 'backend') { $script:BackendPort } else { $script:FrontendPort }
-                    commandLine = (Get-ProcessCommandLine -ProcessId $_.pid)
+                    port        = if ($_.Name -eq 'backend') { $script:BackendPort } else { $script:FrontendPort }
+                    imageName   = $_.imageName
+                    startedAt   = $_.startedAt
+                    commandLine = $_.commandLine
                 }
             })
     }

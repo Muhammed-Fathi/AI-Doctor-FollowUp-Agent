@@ -122,6 +122,20 @@ else {
     Add-Result -Gate 'Command wrapper self-test' -Status 'FAIL' -Detail "missing $harnessTest"
 }
 
+# --- 0b. shutdown identity self-test (P1-R07) --------------------------------
+# Classifier checks for the npm.cmd -> cmd.exe -> node.exe hierarchy. Runs here
+# because a wrong identity rule leaks a process on port 5173 after stop.ps1.
+$identityTest = Join-Path $script:ScriptsDir 'tests\stop_identity.tests.ps1'
+if (Test-Path -LiteralPath $identityTest) {
+    $powershellExe = (Get-Process -Id $PID).Path
+    if (-not $powershellExe) { $powershellExe = 'powershell' }
+    Invoke-Gate -Gate 'Shutdown identity self-test' -FilePath $powershellExe `
+        -Arguments @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $identityTest) | Out-Null
+}
+else {
+    Add-Result -Gate 'Shutdown identity self-test' -Status 'FAIL' -Detail "missing $identityTest"
+}
+
 # --- 1. Ruff ------------------------------------------------------------------
 $ruff = Join-Path (Get-VenvDir) 'Scripts\ruff.exe'
 if (-not (Test-Path -LiteralPath $ruff)) {

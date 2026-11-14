@@ -100,10 +100,12 @@ def test_uses_npm_cmd_not_npm_ps1(script_name: str) -> None:
 
 
 def test_only_owned_processes_are_stopped() -> None:
-    """``stop.ps1`` verifies command-line ownership before stopping a PID."""
+    """``stop.ps1`` verifies ownership before stopping any PID (P1-R07)."""
     text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
-    assert "Test-OwnedProcess" in text
-    assert "Get-ProcessCommandLine" in text
+    # Ownership is proven from recorded identity + verified command lines.
+    assert "Test-ProcessIdentity" in text or "ConvertTo-CreationStamp" in text
+    assert "Test-ViteCommandLine" in text
+    assert "Test-NpmWrapperCommandLine" in text
     # It must refuse to act without a state file instead of guessing.
     assert "never falls back to killing" in text
 
@@ -116,18 +118,18 @@ def test_stop_collects_the_verified_process_tree() -> None:
     """
     text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
     assert "Get-DescendantProcessIds" in text
-    assert "Win32_Process" in text
-    # The tree walk must be reachable only through the verified root.
-    assert text.index("Test-OwnedProcess -ProcessId $processId") < text.index(
-        "$descendants = @(Get-DescendantProcessIds"
-    )
+    # The snapshot (Win32_Process) lives in the shared helper.
+    assert "Win32_Process" in (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    # The tree walk must come after the ownership decision, never before it.
+    assert text.index("wrapperAccepted") < text.index("$descendants = @(Get-DescendantProcessIds")
 
 
 def test_start_records_state_for_safe_shutdown() -> None:
     """``start.ps1`` writes ``run-state.json`` with PIDs and command lines."""
     text = (SCRIPTS_DIR / "start.ps1").read_text(encoding="utf-8")
     assert "run-state.json" in text
-    assert "Get-ProcessCommandLine" in text
+    # Identity now comes from the snapshot (name + creation time + command line).
+    assert "Get-ProcessSnapshot" in text
     # Rollback only touches the PIDs it started.
     assert "Stop-StartedProcesses" in text
 
@@ -263,14 +265,152 @@ def test_common_exposes_command_line_quoting_helpers() -> None:
 
 
 def test_stop_accepts_npm_wrapper_identity_without_repo_path() -> None:
-    """npm.cmd -> cmd.exe may not carry the repository path (P1-R05)."""
-    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
-    function = text.split("function Test-OwnedProcess", 1)[1].split(
-        "function Get-DescendantProcessIds"
+    """npm.cmd -> cmd.exe may not carry the repository path (P1-R05, P1-R07).
+
+    The wrapper classifier lives in ``_common.ps1`` now, so the rule is written
+    once and exercised by the executable regression script.
+    """
+    common = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    wrapper = common.split("function Test-NpmWrapperCommandLine", 1)[1].split(
+        "function Test-PortListening"
     )[0]
-    # Frontend identity no longer requires the repository path alone.
-    assert "$referencesRepo" in function
-    assert "run\\s+dev" in function
-    assert "strictPort" in function
-    # Backend identity stays strict.
-    assert "$isOwned = $belongsToRepo -and $looksLikeBackend" in function
+    assert "run\\s+dev" in wrapper
+    assert "--port" in wrapper
+    # Backend identity stays strict: uvicorn AND the app target.
+    uvicorn = common.split("function Test-UvicornCommandLine", 1)[1].split(
+        "function Test-NpmWrapperCommandLine"
+    )[0]
+    assert "uvicorn" in uvicorn
+    assert "app\\.main:app" in uvicorn
+
+
+# --- P1-R07: shutdown must handle the npm.cmd -> cmd.exe -> node.exe tree ----
+# The owner's Windows run left Vite on port 5173 because stop.ps1 rejected the
+# recorded cmd.exe wrapper (no "vite"/"node_modules" token in its command line).
+# Executable coverage: ``scripts/powershell/tests/stop_identity.tests.ps1``.
+
+
+def test_common_exposes_the_ownership_classifiers() -> None:
+    """Classification lives in one place and is unit-testable."""
+    text = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    for helper in (
+        "function Get-ProcessSnapshot",
+        "function Get-DescendantProcessIds",
+        "function Test-ProcessIdentity",
+        "function ConvertTo-CreationStamp",
+        "function Test-ViteCommandLine",
+        "function Test-UvicornCommandLine",
+        "function Test-NpmWrapperCommandLine",
+    ):
+        assert helper in text, f"missing {helper}"
+
+
+def test_stop_accepts_the_npm_wrapper_from_its_own_command_line() -> None:
+    """The wrapper is owned by npm-run-dev identity, not by a vite token."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    assert "Test-NpmWrapperCommandLine" in text
+    # The frontend branch must consult the wrapper classifier before giving up.
+    # The frontend branch sets wrapperAccepted, then uses it to gate the tree walk
+    # and to decide the wrapper itself.
+    assert "wrapperAccepted" in text
+    first_use = min(
+        text.index("if (-not $root -or $wrapperAccepted)"),
+        text.index("if ($root -and $wrapperAccepted"),
+    )
+    assert text.index("$wrapperAccepted = $true") < first_use
+
+
+def test_stop_verifies_descendants_by_their_own_command_line() -> None:
+    """A descendant is stopped only when IT is this repository's Vite."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    assert "Get-DescendantProcessIds" in text
+    # Each descendant must pass Test-ViteCommandLine before being targeted.
+    block = text.split("foreach ($childId in $descendants)", 1)[1]
+    assert "if (-not $freshSnapshot.ContainsKey($childId)) { continue }" in block
+    # The Vite check must decide the case BEFORE the PID is added to the targets.
+    assert block.index("Test-ViteCommandLine -CommandLine $child.CommandLine") < block.index(
+        "targets.Add($childId)"
+    )
+
+
+def test_stop_never_kills_by_port_or_image_name() -> None:
+    """Port-based or name-based termination is explicitly forbidden."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    lowered = text.lower()
+    # Get-NetTCPConnection may appear only as guidance printed for the operator,
+    # never as part of a stop decision.
+    for line in lowered.splitlines():
+        if "get-nettcpconnection" in line:
+            assert "write-host" in line or "write-warn" in line or "write-step" in line, line
+    assert "stop-process -name" not in lowered
+    assert "taskkill" not in lowered
+    # Ports are only ever *observed*, never used as an identity source.
+    assert "Test-PortListening" in text
+    assert "never by port alone" in lowered or "never by port" in lowered
+
+
+def test_stop_returns_nonzero_when_a_process_survives() -> None:
+    """Requirement 4: incomplete shutdown must not exit 0."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    assert "exit 1" in text  # a recorded process could not be stopped
+    assert "exit 2" in text  # a port is still occupied
+    # The success path must be guarded by both conditions.
+    tail = text.split("Stop result: PASS")[0]
+    assert "if ($failed.Count -gt 0)" in tail
+    assert "if ($busyPorts.Count -gt 0)" in tail
+
+
+def test_stop_preserves_tracking_state_on_partial_shutdown() -> None:
+    """Requirement 3: identity information survives a failed stop."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    assert "function Save-StopState" in text
+    # State is rewritten with the survivors, and only deleted when none remain.
+    save = text.split("function Save-StopState", 1)[1].split("if (-not $state)", 1)[0]
+    assert "if ($Remaining.Count -eq 0)" in save
+    assert "Remove-Item -LiteralPath $script:StateFile" in save
+    assert "partial       = $true" in save
+
+
+def test_stop_guards_against_pid_reuse() -> None:
+    """Creation time + image name defeat PID recycling."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    assert "ConvertTo-CreationStamp" in text
+    assert "different process" in text
+    assert "startedAt" in text
+
+
+def test_stop_does_not_trust_a_falsy_json_property() -> None:
+    """PS 5.1 ConvertFrom-Json adds a falsy PSComputerName to every object."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    assert "$null -ne $_" in text
+    assert "PSComputerName" in text
+
+
+def test_start_records_identity_for_safe_shutdown() -> None:
+    """start.ps1 must persist name + creation time, not just the PID."""
+    text = (SCRIPTS_DIR / "start.ps1").read_text(encoding="utf-8")
+    assert "function New-StartedRecord" in text
+    assert "imageName" in text
+    assert "startedAt" in text
+    assert "ConvertTo-CreationStamp" in text
+
+
+def test_start_rollback_stops_the_verified_child_tree() -> None:
+    """Requirement 7: rollback must not leak the Vite child either."""
+    text = (SCRIPTS_DIR / "start.ps1").read_text(encoding="utf-8")
+    rollback = text.split("function Stop-StartedProcesses", 1)[1].split("try {", 1)[0]
+    assert "Get-DescendantProcessIds" in rollback
+    assert "Get-ProcessSnapshot" in rollback
+    # Rollback must not kill a PID that has been reused.
+    assert "startedAt" in rollback
+
+
+def test_executable_stop_identity_script_covers_the_owner_evidence() -> None:
+    """The Windows-runnable test pins the command lines from the review."""
+    path = SCRIPTS_DIR / "tests" / "stop_identity.tests.ps1"
+    assert path.is_file(), "missing executable regression script for stop identity"
+    text = path.read_text(encoding="utf-8")
+    assert "npm.cmd" in text and "run dev" in text
+    assert "vite.js" in text
+    for case in ("wrapper is recognised", "Vite command line", "rejected", "descendant"):
+        assert case in text, f"regression script does not cover: {case}"

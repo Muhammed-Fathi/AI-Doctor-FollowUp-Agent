@@ -278,6 +278,134 @@ function Get-ProcessCommandLine {
     return $null
 }
 
+# Returns a snapshot of ALL processes: ProcessId -> {ProcessId, ParentProcessId,
+# Name, CommandLine, CreationDate, ExecutablePath}. One CIM query instead of one
+# per PID, so a tree walk is a single consistent view.
+function Get-ProcessSnapshot {
+    $snapshot = @{}
+    $processes = Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue
+    if (-not $processes) { return $snapshot }
+    foreach ($process in $processes) {
+        $snapshot[[int]$process.ProcessId] = [pscustomobject]@{
+            ProcessId       = [int]$process.ProcessId
+            ParentProcessId = [int]$process.ParentProcessId
+            Name            = [string]$process.Name
+            CommandLine     = [string]$process.CommandLine
+            CreationDate    = $process.CreationDate
+            ExecutablePath  = [string]$process.ExecutablePath
+        }
+    }
+    return $snapshot
+}
+
+# Returns the PIDs of every descendant of $RootProcessId, breadth-first, using a
+# snapshot. Never includes the root itself.
+function Get-DescendantProcessIds {
+    param(
+        [Parameter(Mandatory = $true)][int]$RootProcessId,
+        [Parameter(Mandatory = $false)]$Snapshot
+    )
+    if (-not $Snapshot) { $Snapshot = Get-ProcessSnapshot }
+
+    $children = @{}
+    foreach ($entry in $Snapshot.Values) {
+        $parent = $entry.ParentProcessId
+        if (-not $children.ContainsKey($parent)) {
+            $children[$parent] = New-Object System.Collections.Generic.List[int]
+        }
+        $children[$parent].Add($entry.ProcessId)
+    }
+
+    $result = New-Object System.Collections.Generic.List[int]
+    $queue = New-Object System.Collections.Generic.Queue[int]
+    $queue.Enqueue($RootProcessId)
+    while ($queue.Count -gt 0) {
+        $current = $queue.Dequeue()
+        if (-not $children.ContainsKey($current)) { continue }
+        foreach ($child in $children[$current]) {
+            if (-not $result.Contains($child)) {
+                $result.Add($child)
+                $queue.Enqueue($child)
+            }
+        }
+    }
+    return $result
+}
+
+# True when a live PID still corresponds to the process that was recorded:
+# same PID, same name, and (when recorded) the same creation time. Creation time
+# is what defeats PID reuse - Windows recycles PIDs aggressively.
+function Test-ProcessIdentity {
+    param(
+        [Parameter(Mandatory = $true)][int]$ProcessId,
+        [Parameter(Mandatory = $false)][string]$ExpectedName,
+        [Parameter(Mandatory = $false)][string]$ExpectedCreationTime,
+        [Parameter(Mandatory = $false)]$Snapshot
+    )
+    if (-not $Snapshot) { $Snapshot = Get-ProcessSnapshot }
+    if (-not $Snapshot.ContainsKey($ProcessId)) { return $false }
+
+    $entry = $Snapshot[$ProcessId]
+    if ($ExpectedName -and $entry.Name -ne $ExpectedName) { return $false }
+    if ($ExpectedCreationTime) {
+        $actual = ConvertTo-CreationStamp -CreationDate $entry.CreationDate
+        if ($actual -ne $ExpectedCreationTime) { return $false }
+    }
+    return $true
+}
+
+# Normalises a CIM CreationDate (DMTF string or DateTime) to a sortable string
+# so it can be stored in JSON and compared later.
+function ConvertTo-CreationStamp {
+    param([Parameter(Mandatory = $false)]$CreationDate)
+    if ($null -eq $CreationDate) { return '' }
+    try {
+        if ($CreationDate -is [datetime]) {
+            return $CreationDate.ToUniversalTime().ToString('yyyyMMddHHmmss')
+        }
+        return ([Management.ManagementDateTimeConverter]::ToDateTime([string]$CreationDate)).ToUniversalTime().ToString('yyyyMMddHHmmss')
+    }
+    catch {
+        return ''
+    }
+}
+
+# True when the command line identifies THIS application's Vite dev server:
+# a vite entry point under this repository's frontend directory.
+function Test-ViteCommandLine {
+    param([Parameter(Mandatory = $false)][string]$CommandLine)
+    if (-not $CommandLine) { return $false }
+    $frontendEscaped = [Regex]::Escape($script:FrontendDir)
+    # vite.js / vite bin path anywhere in this repo's frontend directory.
+    if ($CommandLine -match $frontendEscaped -and $CommandLine -match 'vite') { return $true }
+    # node_modules/.bin or vite/bin/vite.js under our frontend, with either slash.
+    $normalised = $CommandLine.Replace('/', '\')
+    $frontendNormalised = $script:FrontendDir.Replace('/', '\')
+    if ($normalised -match [Regex]::Escape($frontendNormalised) -and $normalised -match 'vite') { return $true }
+    return $false
+}
+
+# True when the command line is this application's uvicorn backend.
+function Test-UvicornCommandLine {
+    param([Parameter(Mandatory = $false)][string]$CommandLine)
+    if (-not $CommandLine) { return $false }
+    return ($CommandLine -match 'uvicorn' -and $CommandLine -match 'app\.main:app')
+}
+
+# True when the command line is the npm wrapper that start.ps1 launched:
+# any npm/npm.cmd invocation running the `dev` script with our frontend port.
+function Test-NpmWrapperCommandLine {
+    param(
+        [Parameter(Mandatory = $false)][string]$CommandLine,
+        [Parameter(Mandatory = $true)][int]$Port
+    )
+    if (-not $CommandLine) { return $false }
+    $runsNpm = $CommandLine -match 'npm(\.cmd)?'
+    $runsDev = $CommandLine -match 'run\s+dev'
+    $usesPort = $CommandLine -match "--port\s+$Port\b"
+    return ($runsNpm -and $runsDev -and $usesPort)
+}
+
 function Test-PortListening {
     param([Parameter(Mandatory = $true)][int]$Port)
     $connection = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue

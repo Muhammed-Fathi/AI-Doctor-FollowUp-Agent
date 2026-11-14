@@ -3,18 +3,32 @@
     Stop only the application processes started by start.ps1.
 
 .DESCRIPTION
-    Identity-safe shutdown:
+    Identity-safe shutdown, designed around the real Windows process hierarchy
+    that start.ps1 creates:
 
-      1. Reads `data/runtime/run-state.json` (written by start.ps1).
-      2. For each recorded PID, re-reads the live command line.
-      3. Stops the process ONLY when the command line still belongs to this
-         repository's application (uvicorn with this app-dir / a vite dev server
-         in this frontend directory).
-      4. Refuses to fall back to "kill anything on port 8000". If no state file
-         exists, it reports the situation and does nothing.
+        powershell -> npm.cmd (cmd.exe) -> cmd.exe -> node.exe (vite)
 
-    Uses SIGTERM-equivalent (Stop-Process without -Force) first, waits, and
-    falls back to -Force only for a PID it has already verified.
+    The recorded root is the npm.cmd/cmd.exe wrapper, whose command line does NOT
+    contain "vite" or "node_modules" (P1-R07). Ownership is therefore decided
+    from three independent, verified sources:
+
+      1. the process recorded at startup (PID + image name + creation time), so a
+         recycled PID is never mistaken for ours;
+      2. the recorded wrapper command line (npm ... run dev --port 5173);
+      3. the verified descendant tree, where a descendant is accepted only when
+         its own command line is this repository's Vite entry point.
+
+    Nothing is ever stopped because it merely owns port 8000 or 5173, and no
+    process is stopped by image name. If ownership cannot be proven, the process
+    is left alone and reported.
+
+    Exit status
+      0  every recorded process is gone AND ports 8000/5173 are free
+      1  a recorded process could not be stopped and is still running
+      2  processes were stopped but a port is still occupied (another owner)
+
+    On any non-zero status the tracking files are KEPT so a retry has the same
+    identity information; they are only removed after a fully successful stop.
 
     EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 
@@ -34,184 +48,319 @@ param(
 Write-Banner 'Stop: application-owned processes only'
 
 $state = Read-StateFile
-$stopped = 0
-$skipped = 0
+$results = New-Object System.Collections.Generic.List[object]
 
-function Test-OwnedProcess {
-    param(
-        [Parameter(Mandatory = $true)][int]$ProcessId,
-        [Parameter(Mandatory = $true)][string]$Name
-    )
+# --- helpers ------------------------------------------------------------------
+function Stop-VerifiedProcess {
+    param([Parameter(Mandatory = $true)][int]$ProcessId)
 
-    $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
-    if (-not $process) {
-        return $false
+    Stop-Process -Id $ProcessId -ErrorAction SilentlyContinue
+
+    if (-not $Force) {
+        $deadline = (Get-Date).AddSeconds(10)
+        while ((Get-Date) -lt $deadline) {
+            if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) { return }
+            Start-Sleep -Milliseconds 300
+        }
     }
 
-    $commandLine = Get-ProcessCommandLine -ProcessId $ProcessId
-    if (-not $commandLine) {
-        # Cannot verify identity -> do not touch it.
-        Write-Warn "PID $ProcessId ($Name): command line unavailable to CIM. Not stopping it."
-        return $false
+    if (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
+        # Identity was verified before this call, so a forced stop is limited to
+        # a PID we proved is ours.
+        Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+        $deadline = (Get-Date).AddSeconds(5)
+        while ((Get-Date) -lt $deadline) {
+            if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) { return }
+            Start-Sleep -Milliseconds 200
+        }
     }
-
-    $isOwned = $false
-
-    if ($Name -eq 'backend') {
-        # uvicorn is launched directly by this script, so its command line always
-        # carries both the repository path and the app target.
-        $rootEscaped = [Regex]::Escape($script:RepoRoot)
-        $belongsToRepo = $commandLine -match $rootEscaped
-        $looksLikeBackend = $commandLine -match 'uvicorn' -and $commandLine -match 'app\.main:app'
-        $isOwned = $belongsToRepo -and $looksLikeBackend
-    }
-    elseif ($Name -eq 'frontend') {
-        # npm.cmd -> cmd.exe -> node.exe. The intermediate cmd.exe wrapper often
-        # carries only the npm invocation, without the repository path (P1-R05),
-        # so identity is established by the Vite signature of this project plus
-        # ANY of: the repository path, the dev-script invocation, or the
-        # frontend port flag that start.ps1 always passes.
-        $looksLikeFrontend = $commandLine -match 'vite' -or $commandLine -match 'node_modules'
-        $rootEscaped = [Regex]::Escape($script:RepoRoot)
-        $referencesRepo = ($commandLine -match $rootEscaped) -or
-            ($commandLine -match 'run\s+dev') -or
-            ($commandLine -match "--port\s+$($script:FrontendPort)\b") -or
-            ($commandLine -match 'strictPort')
-        $isOwned = $looksLikeFrontend -and $referencesRepo
-    }
-
-    if (-not $isOwned) {
-        Write-Warn "PID $ProcessId ($Name): command line does not match this repository. Not stopping it."
-    }
-    return $isOwned
 }
 
-# Returns the process tree below $RootProcessId (npm.cmd -> cmd.exe -> node.exe).
-# Only used after the root process was verified as application-owned.
-function Get-DescendantProcessIds {
-    param([Parameter(Mandatory = $true)][int]$RootProcessId)
+function Save-StopState {
+    # Rewrites the tracking files with whatever is STILL running, so a retry
+    # keeps full identity information (P1-R07 point 3).
+    param([System.Collections.Generic.List[object]]$Remaining)
 
-    $all = Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue
-    if (-not $all) { return @() }
-
-    $children = @{}
-    foreach ($process in $all) {
-        $parent = [int]$process.ParentProcessId
-        if (-not $children.ContainsKey($parent)) {
-            $children[$parent] = New-Object System.Collections.Generic.List[int]
-        }
-        $children[$parent].Add([int]$process.ProcessId)
+    if ($Remaining.Count -eq 0) {
+        Remove-Item -LiteralPath $script:StateFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $script:BackendPidFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $script:FrontendPidFile -Force -ErrorAction SilentlyContinue
+        return
     }
 
-    $result = New-Object System.Collections.Generic.List[int]
-    $queue = New-Object System.Collections.Generic.Queue[int]
-    $queue.Enqueue($RootProcessId)
-    while ($queue.Count -gt 0) {
-        $current = $queue.Dequeue()
-        if ($children.ContainsKey($current)) {
-            foreach ($child in $children[$current]) {
-                if (-not $result.Contains($child)) {
-                    $result.Add($child)
-                    $queue.Enqueue($child)
-                }
+    $kept = @($Remaining | ForEach-Object {
+            [pscustomobject]@{
+                name        = $_.name
+                pid         = $_.pid
+                port        = $_.port
+                commandLine = $_.commandLine
+                imageName   = $_.imageName
+                startedAt   = $_.startedAt
             }
-        }
+        })
+
+    $stateObject = [pscustomobject]@{
+        schemaVersion = 2
+        startedAt     = if ($state -and $state.startedAt) { $state.startedAt } else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
+        repoRoot      = $script:RepoRoot
+        venvDir       = (Get-VenvDir)
+        partial       = $true
+        processes     = $kept
     }
-    return $result
+    Ensure-RuntimeDir | Out-Null
+    $stateObject | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $script:StateFile -Encoding UTF8
+
+    foreach ($entry in $kept) {
+        $file = if ($entry.name -eq 'backend') { $script:BackendPidFile } else { $script:FrontendPidFile }
+        Set-Content -LiteralPath $file -Value $entry.pid -Encoding ASCII
+    }
 }
 
 if (-not $state) {
     Write-Warn "No run-state.json at $($script:StateFile) - nothing was started by start.ps1."
     Write-Host '  No process was stopped. This script never falls back to killing whatever owns a port.' -ForegroundColor DarkGray
+
+    # Still tell the truth about the ports: if something holds them we cannot
+    # prove it is ours, so this is not a success.
+    $busyPorts = @(@($script:BackendPort, $script:FrontendPort) | Where-Object { Test-PortListening -Port $_ })
     Write-Host ''
+    if ($busyPorts.Count -gt 0) {
+        foreach ($port in $busyPorts) {
+            Write-Warn "Port $port is listening, but there is no state file proving the owner is ours."
+        }
+        Write-Host 'Stop result: UNKNOWN - nothing was stopped (no state file)' -ForegroundColor Yellow
+        Write-Host '  Inspect with: Get-NetTCPConnection -LocalPort 8000,5173 -State Listen | Select-Object OwningProcess' -ForegroundColor DarkGray
+        exit 2
+    }
     Write-Host 'Stop result: NOTHING TO DO' -ForegroundColor Yellow
     exit 0
 }
 
-foreach ($entry in @($state.processes)) {
-    if (-not $entry -or -not $entry.pid) { continue }
-    $processId = [int]$entry.pid
-    $name = [string]$entry.name
+# --- stop each recorded process ----------------------------------------------
+$snapshot = Get-ProcessSnapshot
 
-    if (-not (Test-OwnedProcess -ProcessId $processId -Name $name)) {
-        $skipped++
+# Windows PowerShell 5.1's ConvertFrom-Json adds a PSComputerName property to
+# every object, and that property is falsy. A bare `if (-not $entry)` would
+# therefore skip EVERY entry and report a clean stop without doing anything.
+# The null check is explicit for that reason.
+$entries = @($state.processes | Where-Object { $null -ne $_ })
+if ($entries.Count -eq 0) {
+    Write-Warn "run-state.json contains no process entries; nothing can be verified. Not stopping anything."
+    Write-Host 'Stop result: FAILED - state file present but empty' -ForegroundColor Red
+    exit 1
+}
+
+foreach ($entry in $entries) {
+    $entryPid = 0
+    if (-not [int]::TryParse([string]$entry.pid, [ref]$entryPid)) {
+        Write-Warn "Skipping a state entry without a usable pid: $($entry.pid)"
         continue
     }
 
-    Write-Step "Stopping $name (PID $processId)"
-    try {
-        # npm.cmd spawns cmd.exe -> node.exe; the children must go too, or the
-        # Vite dev server keeps port 5173 open. Children are collected only
-        # after the root PID was verified as application-owned above.
-        $descendants = @(Get-DescendantProcessIds -RootProcessId $processId)
-        if ($descendants.Count -gt 0) {
-            Write-Host "      child processes: $($descendants -join ', ')" -ForegroundColor DarkGray
-        }
+    $processId = $entryPid
+    $name = [string]$entry.name
+    $port = if ($entry.port) { [int]$entry.port } elseif ($name -eq 'backend') { $script:BackendPort } else { $script:FrontendPort }
+    $recordedName = [string]$entry.imageName
+    $recordedStart = [string]$entry.startedAt
+    $recordedCommand = [string]$entry.commandLine
 
-        Stop-Process -Id $processId -ErrorAction Stop
-
-        if (-not $Force) {
-            $deadline = (Get-Date).AddSeconds(10)
-            while ((Get-Date) -lt $deadline) {
-                if (-not (Get-Process -Id $processId -ErrorAction SilentlyContinue)) { break }
-                Start-Sleep -Milliseconds 300
-            }
-        }
-
-        if (Get-Process -Id $processId -ErrorAction SilentlyContinue) {
-            # Identity was verified above, so a forced stop is limited to our own PID.
-            Stop-Process -Id $processId -Force -ErrorAction Stop
-        }
-
-        foreach ($childId in $descendants) {
-            if (Get-Process -Id $childId -ErrorAction SilentlyContinue) {
-                Stop-Process -Id $childId -Force -ErrorAction SilentlyContinue
-            }
-        }
-
-        Write-Ok "$name stopped"
-        $stopped++
+    $record = [pscustomobject]@{
+        name        = $name
+        pid         = $processId
+        port        = $port
+        commandLine = $recordedCommand
+        imageName   = $recordedName
+        startedAt   = $recordedStart
     }
-    catch {
-        Write-Fail "Could not stop $name (PID $processId): $($_.Exception.Message)"
-        $skipped++
+
+    Write-Step "Checking $name (recorded PID $processId)"
+
+    # --- 1. is the recorded PID still OUR process? ---------------------------
+    if ($snapshot.ContainsKey($processId)) {
+        $live = $snapshot[$processId]
+        $sameName = (-not $recordedName) -or ($live.Name -eq $recordedName)
+        $sameStart = (-not $recordedStart) -or ((ConvertTo-CreationStamp -CreationDate $live.CreationDate) -eq $recordedStart)
+
+        if (-not ($sameName -and $sameStart)) {
+            Write-Warn "  PID $processId now belongs to a different process ($($live.Name)). It was NOT ours; leaving it alone."
+            $results.Add([pscustomobject]@{ outcome = 'not-ours'; record = $record })
+            continue
+        }
+    }
+
+    $root = if ($snapshot.ContainsKey($processId)) { $snapshot[$processId] } else { $null }
+    $rootCommand = if ($root) { $root.CommandLine } else { $recordedCommand }
+
+    # --- 2. work out which processes in this tree are ours -------------------
+    $targets = New-Object System.Collections.Generic.List[int]
+
+    if ($name -eq 'backend') {
+        # uvicorn is launched directly by start.ps1: its own command line is
+        # decisive, and its children die with it.
+        if ($root -and (Test-UvicornCommandLine -CommandLine $rootCommand)) {
+            $targets.Add($processId)
+        }
+        elseif (-not $root) {
+            Write-Ok "  backend (PID $processId) is already gone"
+            $results.Add([pscustomobject]@{ outcome = 'stopped'; record = $record })
+            continue
+        }
+        else {
+            Write-Warn "  PID $processId does not look like this application's uvicorn. Leaving it alone."
+            $results.Add([pscustomobject]@{ outcome = 'not-ours'; record = $record })
+            continue
+        }
+    }
+    else {
+        # Frontend: npm.cmd -> cmd.exe -> node.exe -> vite.
+        # The wrapper is accepted from its recorded identity plus its own
+        # npm-run-dev command line; the Vite process is accepted only from the
+        # verified descendant tree AND its own Vite command line.
+        $wrapperAccepted = $false
+        if ($root) {
+            if (Test-NpmWrapperCommandLine -CommandLine $rootCommand -Port $port) {
+                $wrapperAccepted = $true
+            }
+            elseif (Test-ViteCommandLine -CommandLine $rootCommand) {
+                $wrapperAccepted = $true
+            }
+            elseif ($recordedCommand -and (Test-NpmWrapperCommandLine -CommandLine $recordedCommand -Port $port)) {
+                Write-Host "  recorded wrapper command line matches npm run dev on port $port" -ForegroundColor DarkGray
+                $wrapperAccepted = $true
+            }
+        }
+
+        # Descendants are only considered when the recorded PID is genuinely
+        # ours (or already gone), never for an unrelated process on the port.
+        if (-not $root -or $wrapperAccepted) {
+            $freshSnapshot = Get-ProcessSnapshot
+            $descendants = @(Get-DescendantProcessIds -RootProcessId $processId -Snapshot $freshSnapshot)
+            # Children first: the Vite process must be gone before the wrapper
+            # that parents it, otherwise it can be re-parented mid-shutdown.
+            foreach ($childId in $descendants) {
+                if (-not $freshSnapshot.ContainsKey($childId)) { continue }
+                $child = $freshSnapshot[$childId]
+                if (Test-ViteCommandLine -CommandLine $child.CommandLine) {
+                    $targets.Add($childId)
+                }
+            }
+
+            # Orphan case: the wrapper exited but its Vite child survived and was
+            # re-parented to a dead PID. The child is identified ONLY by this
+            # repository's Vite entry point - never by port alone.
+            if (-not $root) {
+                foreach ($candidate in $freshSnapshot.Values) {
+                    if (Test-ViteCommandLine -CommandLine $candidate.CommandLine) {
+                        $parentAlive = $freshSnapshot.ContainsKey($candidate.ParentProcessId)
+                        if (-not $parentAlive -and -not $targets.Contains($candidate.ProcessId)) {
+                            Write-Host "  adopted orphaned Vite process PID $($candidate.ProcessId) (parent $($candidate.ParentProcessId) is gone)" -ForegroundColor DarkGray
+                            $targets.Add($candidate.ProcessId)
+                        }
+                    }
+                }
+            }
+        }
+
+        # The wrapper itself goes last, after every verified child.
+        if ($root -and $wrapperAccepted -and -not $targets.Contains($processId)) {
+            $targets.Add($processId)
+        }
+
+        if (-not $root -and $targets.Count -eq 0) {
+            Write-Ok "  frontend (PID $processId) is already gone"
+            $results.Add([pscustomobject]@{ outcome = 'stopped'; record = $record })
+            continue
+        }
+        if (-not $wrapperAccepted -and $targets.Count -eq 0) {
+            Write-Warn "  PID $processId is not this application's npm/vite process. Leaving it alone."
+            $results.Add([pscustomobject]@{ outcome = 'not-ours'; record = $record })
+            continue
+        }
+    }
+
+    # --- 3. stop the verified targets, children first ------------------------
+    if ($targets.Count -eq 0) {
+        Write-Warn "  nothing to stop for $name"
+        $results.Add([pscustomobject]@{ outcome = 'not-ours'; record = $record })
+        continue
+    }
+
+    Write-Host "      stopping PIDs: $($targets -join ', ')" -ForegroundColor DarkGray
+    foreach ($targetId in $targets) {
+        Stop-VerifiedProcess -ProcessId $targetId
+    }
+
+    Start-Sleep -Milliseconds 400
+    $stillRunning = @($targets | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+    if ($stillRunning.Count -gt 0) {
+        Write-Fail "  $name could not be stopped (still running: $($stillRunning -join ', '))"
+        $results.Add([pscustomobject]@{ outcome = 'failed'; record = $record })
+    }
+    else {
+        Write-Ok "$name stopped (PIDs: $($targets -join ', '))"
+        $results.Add([pscustomobject]@{ outcome = 'stopped'; record = $record })
     }
 }
 
-# A frontend PID file may survive a partial start. It is only acted on when the
-# recorded PID still exists AND its command line is this repository's Vite server.
-$frontendPidFile = $script:FrontendPidFile
-if (Test-Path -LiteralPath $frontendPidFile) {
-    $recorded = (Get-Content -LiteralPath $frontendPidFile -Raw).Trim()
-    if ($recorded -and (Get-Process -Id $recorded -ErrorAction SilentlyContinue)) {
-        if (Test-OwnedProcess -ProcessId ([int]$recorded) -Name 'frontend') {
-            Write-Step "Stopping leftover frontend wrapper (PID $recorded)"
-            foreach ($childId in @(Get-DescendantProcessIds -RootProcessId ([int]$recorded))) {
-                Stop-Process -Id $childId -Force -ErrorAction SilentlyContinue
-            }
-            Stop-Process -Id ([int]$recorded) -Force -ErrorAction SilentlyContinue
-            $stopped++
-            Write-Ok 'leftover frontend wrapper stopped'
-        }
+# --- stale PID files without a state file ------------------------------------
+# Only acted on when the recorded PID still has OUR identity and command line.
+foreach ($pidFile in @($script:FrontendPidFile, $script:BackendPidFile)) {
+    if (-not (Test-Path -LiteralPath $pidFile)) { continue }
+    $recorded = (Get-Content -LiteralPath $pidFile -Raw).Trim()
+    if (-not $recorded) { continue }
+    $pidValue = 0
+    if (-not [int]::TryParse($recorded, [ref]$pidValue)) { continue }
+
+    $freshSnapshot = Get-ProcessSnapshot
+    if (-not $freshSnapshot.ContainsKey($pidValue)) { continue }
+
+    $candidate = $freshSnapshot[$pidValue]
+    $isOurVite = Test-ViteCommandLine -CommandLine $candidate.CommandLine
+    $isOurNpm = Test-NpmWrapperCommandLine -CommandLine $candidate.CommandLine -Port $script:FrontendPort
+    if ($isOurVite -or $isOurNpm) {
+        Write-Step "Stopping leftover frontend process (PID $pidValue from $([System.IO.Path]::GetFileName($pidFile)))"
+        $toStop = @($pidValue) + @(Get-DescendantProcessIds -RootProcessId $pidValue -Snapshot $freshSnapshot |
+                Where-Object { Test-ViteCommandLine -CommandLine $freshSnapshot[$_].CommandLine })
+        foreach ($targetId in $toStop) { Stop-VerifiedProcess -ProcessId $targetId }
     }
 }
 
-Remove-Item -LiteralPath $script:StateFile -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $script:BackendPidFile -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $script:FrontendPidFile -Force -ErrorAction SilentlyContinue
+# --- outcome ------------------------------------------------------------------
+$failed = @($results | Where-Object { $_.outcome -eq 'failed' })
+$notOurs = @($results | Where-Object { $_.outcome -eq 'not-ours' })
+$stopped = @($results | Where-Object { $_.outcome -eq 'stopped' })
 
-# --- report -------------------------------------------------------------------
 Write-Host ''
+$busyPorts = @(@($script:BackendPort, $script:FrontendPort) | Where-Object { Test-PortListening -Port $_ })
 foreach ($port in @($script:BackendPort, $script:FrontendPort)) {
-    if (Test-PortListening -Port $port) {
-        Write-Warn "Port $port is still listening - it belongs to a process this script does not own."
+    if ($busyPorts -contains $port) {
+        Write-Warn "Port $port is still listening"
     }
     else {
         Write-Ok "Port $port is free"
     }
 }
 
+# Keep tracking state unless the shutdown is fully clean.
+$survivors = @($failed) + @($notOurs)
+Save-StopState -Remaining @($survivors | ForEach-Object { $_.record })
+
 Write-Host ''
-Write-Host "Stop result: $stopped stopped, $skipped not stopped" -ForegroundColor Green
+if ($failed.Count -gt 0) {
+    Write-Host "Stop result: FAILED - $($failed.Count) application process(es) could not be stopped" -ForegroundColor Red
+    Write-Host '  Tracking files were kept so you can retry: .\scripts\powershell\stop.ps1 -Force' -ForegroundColor DarkGray
+    exit 1
+}
+if ($busyPorts.Count -gt 0) {
+    Write-Host "Stop result: INCOMPLETE - port(s) $($busyPorts -join ', ') still in use" -ForegroundColor Yellow
+    if ($notOurs.Count -gt 0) {
+        Write-Host '  At least one port is held by a process this script could not prove it owns.' -ForegroundColor DarkGray
+        Write-Host '  Inspect it with: Get-NetTCPConnection -LocalPort 8000,5173 -State Listen | Select-Object OwningProcess' -ForegroundColor DarkGray
+        Write-Host '  Then: Get-CimInstance Win32_Process -Filter "ProcessId = <pid>" | Select-Object Name, CommandLine' -ForegroundColor DarkGray
+    }
+    exit 2
+}
+
+Write-Host "Stop result: PASS - $($stopped.Count) stopped, ports 8000 and 5173 are free" -ForegroundColor Green
 Write-Host 'Runtime artifacts (logs, database) are kept for inspection; delete data\runtime manually for a clean slate.' -ForegroundColor DarkGray
 exit 0
