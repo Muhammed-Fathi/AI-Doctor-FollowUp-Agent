@@ -14,7 +14,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from support import FIXED_NOW, PATIENT_A_ID, PATIENT_B_ID
+from support import FIXED_NOW, PATIENT_A_ID, PATIENT_B_ID, PATIENT_C_ID
 
 from app.core.clock import format_utc
 from app.core.enums import MeasureType, ValidationState
@@ -297,3 +297,40 @@ def test_limit_is_clamped_to_the_contract_maximum(
     """A limit above 100 is clamped rather than honoured."""
     page = list_assigned_patients(seeded, principal=doctor_principal, limit=1000)
     assert len(page.items) == 3
+
+
+def test_a_doctor_assigned_elsewhere_cannot_read_this_patient(
+    seeded: Session, unassigned_doctor_principal: Principal
+) -> None:
+    """REQ-SEC-01 / NEG-01 mechanics: scope, not just "some assignment".
+
+    The caller here *is* a doctor with an active assignment (patient C), so the
+    denial cannot be explained by "no assignments at all". Patient A belongs to a
+    different doctor, and the attempt is audited.
+    """
+    from app.db.models import Patient
+
+    patient_c = seeded.get(Patient, PATIENT_C_ID)
+    assert patient_c is not None
+    patient_c.assigned_doctor_id = unassigned_doctor_principal.user_id
+    seeded.commit()
+
+    with pytest.raises(ApiError) as caught:
+        timeline_for(seeded, unassigned_doctor_principal, PATIENT_A_ID)
+    seeded.commit()
+
+    assert caught.value.status_code == 403
+    assert caught.value.code is ErrorCode.SCOPE_VIOLATION
+
+    denials = (
+        seeded.execute(select(AuditEvent).where(AuditEvent.event_type == "access.denied"))
+        .scalars()
+        .all()
+    )
+    assert len(denials) == 1
+    assert denials[0].actor_id == unassigned_doctor_principal.user_id
+    assert denials[0].patient_id == PATIENT_A_ID
+
+    # And the assignment it does hold is readable, so the check is not blanket.
+    assigned = timeline_for(seeded, unassigned_doctor_principal, PATIENT_C_ID)
+    assert assigned.patient_id == PATIENT_C_ID

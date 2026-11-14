@@ -20,6 +20,7 @@ from app.core.security import (
     generate_session_token,
     hash_password,
     hash_session_token,
+    needs_rehash,
     verify_password,
 )
 
@@ -116,3 +117,58 @@ def test_rate_limiter_is_case_insensitive_and_resettable() -> None:
     assert limiter.is_blocked("demo_doctor", NOW) is True
     limiter.reset("DEMO_DOCTOR")
     assert limiter.is_blocked("demo_doctor", NOW) is False
+
+
+#: OWASP Password Storage Cheat Sheet work factor for PBKDF2-HMAC-SHA256.
+OWASP_PBKDF2_SHA256_ITERATIONS = 600_000
+
+
+def test_pbkdf2_work_factor_meets_the_owasp_minimum() -> None:
+    """AUTH-01: the stored work factor is the documented SHA-256 recommendation.
+
+    The earlier 210 000 value belongs to PBKDF2-HMAC-SHA512 guidance and was
+    flagged in review; 600 000 is the SHA-256 figure.
+    """
+    assert PASSWORD_ITERATIONS >= OWASP_PBKDF2_SHA256_ITERATIONS
+
+    encoded = hash_password(DEMO_PASSWORD)
+    algorithm, iterations, salt_hex, digest_hex = encoded.split("$")
+
+    assert algorithm == PASSWORD_ALGORITHM
+    assert int(iterations) == PASSWORD_ITERATIONS
+    assert len(bytes.fromhex(salt_hex)) >= 16
+    assert len(bytes.fromhex(digest_hex)) == 32  # SHA-256 output
+
+
+def test_a_stored_hash_verifies_at_its_own_work_factor() -> None:
+    """Hash compatibility: verification reads the count from the row, not a constant.
+
+    This is what makes a future work-factor bump or an Argon2id move incremental
+    instead of a forced reset.
+    """
+    legacy = hash_password(DEMO_PASSWORD, iterations=1_000)
+
+    assert verify_password(DEMO_PASSWORD, legacy) is True
+    assert verify_password("wrong-password", legacy) is False
+    assert needs_rehash(legacy) is True
+
+    current = hash_password(DEMO_PASSWORD)
+    assert needs_rehash(current) is False
+
+
+def test_work_factor_cost_is_bounded_on_this_machine() -> None:
+    """A real 600 000-iteration hash+verify stays inside a usable login budget.
+
+    The bound is deliberately generous (seconds, not milliseconds) so the test is
+    meaningful on a slow CI box while still catching an accidental 10x increase.
+    It measures one hash and one verify only — no database, no HTTP.
+    """
+    import time
+
+    started = time.perf_counter()
+    encoded = hash_password(DEMO_PASSWORD)
+    accepted = verify_password(DEMO_PASSWORD, encoded)
+    elapsed = time.perf_counter() - started
+
+    assert accepted is True
+    assert elapsed < 5.0, f"hash+verify took {elapsed:.2f}s at {PASSWORD_ITERATIONS} iterations"

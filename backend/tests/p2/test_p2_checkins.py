@@ -376,3 +376,75 @@ def test_check_in_audit_row_is_recorded(seeded: Session, patient_principal: Prin
     assert event.actor_id == patient_principal.user_id
     assert event.patient_id == PATIENT_A_ID
     assert "121" not in (event.safe_detail or "")
+
+
+def test_replay_survives_a_new_session(seeded: Session) -> None:
+    """The replay record is durable, not an in-process cache."""
+    from sqlalchemy.orm import sessionmaker
+
+    principal = _patient_principal(seeded)
+    key = str(uuid.uuid4())
+    payload = make_payload()
+    first, created = create(seeded, principal, payload, key=key)
+    seeded.commit()
+    engine = seeded.get_bind()
+
+    with sessionmaker(bind=engine)() as fresh:
+        replay, created_again = create(fresh, principal, payload, key=key)
+        fresh.commit()
+
+    assert created is True
+    assert created_again is False
+    assert replay.id == first.id
+
+
+def test_a_concurrent_duplicate_is_caught_by_the_unique_index(seeded: Session) -> None:
+    """NEG-13 durability: a second writer cannot create a second observation.
+
+    The service re-reads under the unique ``(patient_id, idempotency_key)``
+    constraint, so a racing request resolves to the stored row instead of
+    producing a duplicate measurement.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    principal = _patient_principal(seeded)
+    key = str(uuid.uuid4())
+    payload = make_payload()
+    stored, created = create(seeded, principal, payload, key=key)
+    seeded.commit()
+
+    record = seeded.execute(
+        select(CheckinIdempotency).where(CheckinIdempotency.idempotency_key == key)
+    ).scalar_one()
+    duplicate = CheckinIdempotency(
+        id=str(uuid.uuid4()),
+        patient_id=record.patient_id,
+        idempotency_key=key,
+        request_fingerprint=record.request_fingerprint,
+        observation_id=record.observation_id,
+        created_at=record.created_at,
+    )
+    seeded.add(duplicate)
+    with pytest.raises(IntegrityError):
+        seeded.flush()
+    seeded.rollback()
+
+    assert created is True
+    assert (
+        seeded.execute(
+            select(func.count()).select_from(Observation).where(Observation.id == stored.id)
+        ).scalar_one()
+        == 1
+    )
+
+
+def _patient_principal(db: Session) -> Principal:
+    """Return a fresh patient principal for the seeded demo patient A."""
+    from support import user_by_username
+
+    from app.services.accounts import build_principal, issue_session
+
+    user = user_by_username(db, "demo_patient_a")
+    _raw, session = issue_session(db, user=user, now=FIXED_NOW, ttl_minutes=60)
+    db.commit()
+    return build_principal(user, session)

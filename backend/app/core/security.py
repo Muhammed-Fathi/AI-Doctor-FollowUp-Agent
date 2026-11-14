@@ -6,12 +6,18 @@ Design notes
   forbids plaintext passwords. It names argon2/bcrypt as candidates and leaves
   the choice to P2. Those libraries are **not** current project dependencies, and
   adding one would require ``pyproject.toml`` plus both hash-locked requirement
-  files — outside the P2 file scope. This module therefore uses the standard
-  library ``hashlib.pbkdf2_hmac`` (PBKDF2-HMAC-SHA256, 210 000 iterations,
-  16-byte random salt per password, ``hmac.compare_digest`` for verification).
-  The deviation is recorded for owner review in the P2 report; it is not a
-  silent substitution in the stored format (the algorithm name is part of the
-  encoded string, so a migration to argon2 later can coexist row by row).
+  files — outside the P2 file scope.
+
+  This module therefore uses the standard library ``hashlib.pbkdf2_hmac`` —
+  **PBKDF2-HMAC-SHA256 with 600 000 iterations**, which is the OWASP Password
+  Storage Cheat Sheet work factor for SHA-256 (600 000), rather than the older
+  210 000 figure that belongs to PBKDF2-HMAC-SHA512. Each password gets a fresh
+  16-byte random salt and verification uses ``hmac.compare_digest``. Argon2id
+  remains the preferred long-term choice; moving to it is a dependency decision
+  for a later phase, and it is *not* blocked by stored data because the encoded
+  form is self-describing (algorithm, iteration count and salt are all in the
+  string), so old and new rows can coexist and be upgraded on next login via
+  :func:`needs_rehash`.
 
 * **No raw session token is stored.** ``issue_session_token`` returns the raw
   token once for the client; the database keeps only its SHA-256 digest
@@ -40,8 +46,11 @@ from datetime import datetime, timedelta
 #: algorithm change is detectable per row instead of guessed.
 PASSWORD_ALGORITHM: str = "pbkdf2_sha256"
 
-#: PBKDF2 work factor (OWASP-style local-demo default; not a security claim).
-PASSWORD_ITERATIONS: int = 210_000
+#: PBKDF2-HMAC-SHA256 work factor. Matches the OWASP Password Storage Cheat
+#: Sheet recommendation for SHA-256 (600 000). Changing this value does **not**
+#: invalidate stored hashes: the count is part of the encoded string and
+#: :func:`verify_password` uses the stored count, so a rotation is incremental.
+PASSWORD_ITERATIONS: int = 600_000
 
 #: Random salt size in bytes, per user.
 SALT_BYTES: int = 16
@@ -64,8 +73,9 @@ def hash_password(
     """Return a salted, self-describing hash for ``password``.
 
     The encoded form is ``pbkdf2_sha256$<iterations>$<salt-hex>$<digest-hex>``.
-    ``salt`` and ``iterations`` are explicit parameters so tests can pin them;
-    production callers omit both and get a fresh random salt.
+    ``salt`` and ``iterations`` are explicit parameters so tests can pin a cheap
+    work factor for speed; production callers omit both and get a fresh random
+    salt at :data:`PASSWORD_ITERATIONS`.
     """
     if not password:
         raise ValueError("password must not be empty")
@@ -111,6 +121,27 @@ def verify_password(password: str, encoded: str) -> bool:
 
     candidate = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
     return hmac.compare_digest(candidate, expected)
+
+
+def needs_rehash(encoded: str) -> bool:
+    """Return ``True`` when a stored hash uses weaker parameters than current.
+
+    Used to upgrade a row on its next successful login; it must never be
+    consulted to decide whether a login is *allowed*, only whether to rewrite the
+    stored value afterwards. Malformed encodings report ``False`` because
+    :func:`verify_password` already rejects them.
+    """
+    try:
+        algorithm, raw_iterations, salt_hex, digest_hex = encoded.split(_HASH_SEPARATOR)
+        iterations = int(raw_iterations)
+        bytes.fromhex(salt_hex)
+        bytes.fromhex(digest_hex)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    if algorithm != PASSWORD_ALGORITHM:
+        # A different (future) algorithm is not "weaker"; leave it alone here.
+        return False
+    return iterations < PASSWORD_ITERATIONS
 
 
 def generate_session_token() -> str:

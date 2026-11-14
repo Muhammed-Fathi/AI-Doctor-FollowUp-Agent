@@ -24,14 +24,27 @@ Phase 2 additions outside ``DATA_DICTIONARY.md`` §2
 Both are additive and reversible; the amendment is requested in the P2 report
 rather than applied silently to the contract document.
 
-Deliberate P2 deviations (documented, not silent)
--------------------------------------------------
-* ``user.patient_id`` carries a **unique index but no foreign key**. SQLite
-  cannot express the resulting ``user ↔ patient`` reference cycle without an
-  ``ALTER TABLE ADD CONSTRAINT`` step it does not support, and SQLAlchemy's
-  ``create_all`` would warn (tests run with ``filterwarnings = error``). The
-  link is enforced by the seeder and by ``services.accounts`` scope checks, and
-  the intent is recorded here.
+Documented P2 decisions (no silent deviations)
+----------------------------------------------
+* ``user.patient_id`` **does** carry a foreign key to ``patient.id``
+  (``DATA_DICTIONARY.md`` §2.1), declared with ``use_alter=True``. The
+  ``user -> patient -> user`` reference cycle cannot be topologically sorted, and
+  SQLAlchemy reports that as ``SAWarning`` (fatal under our
+  ``filterwarnings = error``). ``use_alter=True`` marks the cycle as known: the
+  metadata sorts deterministically, and on SQLite the constraint is still emitted
+  inline in ``CREATE TABLE`` (an ``ALTER TABLE ADD CONSTRAINT`` step is neither
+  needed nor supported, and none is emitted). Enforcement then comes from
+  ``PRAGMA foreign_keys=ON`` in :func:`app.db.session.create_db_engine`, so an
+  orphan ``patient_id`` is rejected by the database, not only by the service
+  layer.
+
+  Consequence for migrations: ``DROP TABLE`` of a referenced parent fails while
+  enforcement is on, so the Alembic environment runs migrations with
+  ``foreign_keys=OFF`` (the documented SQLite pattern) and the gate verifies
+  ``PRAGMA foreign_key_check`` afterwards. Row-level inserts are *not* cyclic —
+  a patient's ``assigned_doctor_id`` points at a doctor account, and
+  ``user.patient_id`` points back from a different (patient) account — so ordered
+  seeding needs no deferred checks.
 * ``observation.source_fact_id`` is deferred to P3 with ``extracted_fact``: the
   column's foreign key target does not exist yet, and creating a dangling
   reference (or a column that can never be populated) would be speculative.
@@ -128,8 +141,14 @@ class User(Base):
     #: Only the salted, self-describing hash (``core.security``) is stored.
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     #: Self scope for ``role='patient'``; NULL for every other role.
-    #: Unique index, no FK — see the module docstring for the reference cycle.
-    patient_id: Mapped[str | None] = mapped_column(String(36), nullable=True, unique=True)
+    #: ``use_alter`` breaks the ``user <-> patient`` metadata cycle; see the
+    #: module docstring. The unique constraint keeps one account per patient.
+    patient_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("patient.id", ondelete="RESTRICT", use_alter=True),
+        nullable=True,
+        unique=True,
+    )
     timezone: Mapped[str] = mapped_column(
         String(64), nullable=False, default="Africa/Cairo", server_default="Africa/Cairo"
     )

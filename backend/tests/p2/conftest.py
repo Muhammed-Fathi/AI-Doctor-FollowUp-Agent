@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from support import FIXED_NOW, SEED_PASSWORD, user_by_username
+from support import FIXED_NOW, SEED_PASSWORD, TEST_HASH_ITERATIONS, user_by_username
 
 from app.api.v1.auth import router as auth_router
 from app.api.v1.auth.dependencies import clear_limiter_cache, current_time
@@ -77,7 +77,7 @@ def fixtures_dir() -> Path:
 @pytest.fixture()
 def seeded(db: Session) -> Session:
     """A database with the deterministic demo dataset."""
-    seed_demo_data(db, password=SEED_PASSWORD, now=FIXED_NOW)
+    seed_demo_data(db, password=SEED_PASSWORD, now=FIXED_NOW, iterations=TEST_HASH_ITERATIONS)
     db.commit()
     return db
 
@@ -154,7 +154,7 @@ def api_db(app_settings: Settings) -> Iterator[Session]:
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     session = factory()
-    seed_demo_data(session, password=SEED_PASSWORD, now=FIXED_NOW)
+    seed_demo_data(session, password=SEED_PASSWORD, now=FIXED_NOW, iterations=TEST_HASH_ITERATIONS)
     session.commit()
     try:
         yield session

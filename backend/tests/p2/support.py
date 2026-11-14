@@ -16,6 +16,13 @@ from sqlalchemy.orm import Session
 from app.core.enums import ActorType
 from app.db.models import User
 
+#: Cheap PBKDF2 work factor used when *seeding* inside tests. Production and the
+#: bootstrap CLI use ``app.core.security.PASSWORD_ITERATIONS`` (600 000); the real
+#: work factor is asserted and timed separately in
+#: ``test_p2_security_primitives.py`` so the suite stays fast without pretending
+#: the stored hashes are production-strength.
+TEST_HASH_ITERATIONS = 1_000
+
 #: The injected demo clock used by every P2 test. Later than all seeded values.
 FIXED_NOW = datetime(2026, 11, 14, 12, 0, 0, tzinfo=UTC)
 

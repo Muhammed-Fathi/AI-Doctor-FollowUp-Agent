@@ -18,26 +18,41 @@ What seeding does **not** do
 
 Seeding order matters because of two references:
 
-``patient.assigned_doctor_id → user.id`` and ``user.patient_id → patient``. The
-foreign key is declared on the patient side only (see ``app/db/models.py``), so a
-seed runs in three phases: accounts without a self scope, then patients, then the
-patient accounts' self scope.
+``patient.assigned_doctor_id -> user.id`` and ``user.patient_id -> patient``. Both
+foreign keys exist and are enforced (``PRAGMA foreign_keys=ON``), so a seed runs
+in three phases: staff accounts without a self scope, then patients, then the
+patient accounts whose ``patient_id`` points back at those rows. The metadata
+cycle behind these keys is documented in ``app/db/models.py``; the *rows* never
+form a cycle, so no deferred check is needed.
+
+First-run bootstrap
+-------------------
+A fresh database has no accounts, and the API deliberately has no registration
+endpoint. ``python -m app.services.seed`` is the documented local bootstrap: it
+refuses unless ``DEMO_MODE=true`` and ``DEMO_SEED_PASSWORD`` are supplied through
+the environment, reads its schema from Alembic (it creates no tables), prints
+only counts and usernames — never the password — and is idempotent.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import TextIO
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, inspect, select
 from sqlalchemy.orm import Session
 
-from app.core.clock import format_utc
+from app.core.clock import format_utc, utc_now
+from app.core.config import Settings
 from app.core.enums import Role
 from app.core.paths import SYNTHETIC_DATA_DIR
-from app.core.security import hash_password
+from app.core.security import PASSWORD_ITERATIONS, hash_password
 from app.db.models import (
     CheckinIdempotency,
     Encounter,
@@ -46,6 +61,7 @@ from app.db.models import (
     User,
     UserSession,
 )
+from app.db.session import create_db_engine
 from app.schemas.fixtures import (
     EncounterFixtureFile,
     ObservationFixtureFile,
@@ -124,11 +140,16 @@ def seed_demo_data(
     password: str,
     now: datetime,
     directory: Path | None = None,
+    iterations: int | None = None,
 ) -> SeedResult:
     """Insert missing synthetic rows; existing rows are left untouched.
 
     Idempotent by primary key: a second call creates nothing, changes no password
     hash and leaves every fixture value identical.
+
+    ``iterations`` exists only so tests can pin a cheap PBKDF2 work factor; the
+    default (:data:`app.core.security.PASSWORD_ITERATIONS`, 600 000) is what the
+    CLI and the demo path use. It is never read from the fixtures or the network.
 
     Raises:
         SeedConfigurationError: if ``password`` is empty, because an account
@@ -136,15 +157,20 @@ def seed_demo_data(
     """
     if not password.strip():
         raise SeedConfigurationError("a non-empty demo seed password is required")
+    work_factor = PASSWORD_ITERATIONS if iterations is None else iterations
 
     bundle = load_fixtures(directory)
     # Phase 1: staff accounts (no self scope), which patients reference.
-    created_users = _seed_staff_accounts(db, fixture=bundle.users, password=password, now=now)
+    created_users = _seed_staff_accounts(
+        db, fixture=bundle.users, password=password, now=now, iterations=work_factor
+    )
     # Phase 2: patient rows, whose ``assigned_doctor_id`` resolves to phase 1.
     created_patients = _seed_patients(db, fixture=bundle.patients, now=now)
     # Phase 3: patient accounts, which require their patient row to exist because
     # ``user.patient_id`` must be non-NULL exactly when the role is ``patient``.
-    created_users += _seed_patient_accounts(db, fixture=bundle.users, password=password, now=now)
+    created_users += _seed_patient_accounts(
+        db, fixture=bundle.users, password=password, now=now, iterations=work_factor
+    )
     created_encounters = _seed_encounters(db, fixture=bundle.encounters, now=now)
     encounter_ids = {record.ref: record.id for record in bundle.encounters.encounters}
     created_observations = _seed_observations(
@@ -164,7 +190,7 @@ def seed_demo_data(
     )
 
 
-def _new_account(record: object, *, password: str, now: datetime) -> User:
+def _new_account(record: object, *, password: str, now: datetime, iterations: int) -> User:
     """Build a user row from a fixture record."""
     return User(
         id=record.id,  # type: ignore[attr-defined]
@@ -172,7 +198,7 @@ def _new_account(record: object, *, password: str, now: datetime) -> User:
         display_name=record.display_name,  # type: ignore[attr-defined]
         role=record.role.value,  # type: ignore[attr-defined]
         # A fresh salt per account: two accounts never share a hash.
-        password_hash=hash_password(password),
+        password_hash=hash_password(password, iterations=iterations),
         patient_id=record.patient_id,  # type: ignore[attr-defined]
         timezone=record.timezone,  # type: ignore[attr-defined]
         is_active=1,
@@ -182,7 +208,12 @@ def _new_account(record: object, *, password: str, now: datetime) -> User:
 
 
 def _seed_staff_accounts(
-    db: Session, *, fixture: UserFixtureFile, password: str, now: datetime
+    db: Session,
+    *,
+    fixture: UserFixtureFile,
+    password: str,
+    now: datetime,
+    iterations: int,
 ) -> int:
     """Insert doctor and demo-admin accounts (rows with no patient self scope)."""
     created = 0
@@ -191,14 +222,19 @@ def _seed_staff_accounts(
             continue
         if db.get(User, record.id) is not None:
             continue
-        db.add(_new_account(record, password=password, now=now))
+        db.add(_new_account(record, password=password, now=now, iterations=iterations))
         created += 1
     db.flush()
     return created
 
 
 def _seed_patient_accounts(
-    db: Session, *, fixture: UserFixtureFile, password: str, now: datetime
+    db: Session,
+    *,
+    fixture: UserFixtureFile,
+    password: str,
+    now: datetime,
+    iterations: int,
 ) -> int:
     """Insert patient accounts once their patient rows exist."""
     created = 0
@@ -207,7 +243,7 @@ def _seed_patient_accounts(
             continue
         if db.get(User, record.id) is not None:
             continue
-        db.add(_new_account(record, password=password, now=now))
+        db.add(_new_account(record, password=password, now=now, iterations=iterations))
         created += 1
     db.flush()
     return created
@@ -346,6 +382,7 @@ def reset_demo_data(
     password: str,
     now: datetime,
     directory: Path | None = None,
+    iterations: int | None = None,
 ) -> SeedResult:
     """Clear synthetic rows and reseed from the fixtures.
 
@@ -353,7 +390,9 @@ def reset_demo_data(
     identifiers, values and timestamps are identical after every reset.
     """
     clear_demo_data(db)
-    return seed_demo_data(db, password=password, now=now, directory=directory)
+    return seed_demo_data(
+        db, password=password, now=now, directory=directory, iterations=iterations
+    )
 
 
 def seeded_cases(db: Session) -> list[dict[str, object]]:
@@ -375,14 +414,142 @@ def seeded_cases(db: Session) -> list[dict[str, object]]:
     return cases
 
 
+#: Schema the bootstrap refuses to seed into without it. Alembic owns DDL; this
+#: command only ever inserts rows.
+REQUIRED_TABLES: frozenset[str] = frozenset({"user", "patient", "observation", "encounter"})
+
+_TRUTHY: frozenset[str] = frozenset({"1", "true", "yes", "on"})
+
+
+def _demo_mode_is_on(settings: Settings, env: Mapping[str, str]) -> bool:
+    """Return whether demo mode is enabled by settings or by ``DEMO_MODE``."""
+    raw = env.get("DEMO_MODE", "")
+    return bool(settings.demo_mode) or raw.strip().lower() in _TRUTHY
+
+
+def bootstrap_demo_accounts(
+    *,
+    settings: Settings | None = None,
+    env: Mapping[str, str] | None = None,
+    now: datetime | None = None,
+    out: TextIO | None = None,
+    err: TextIO | None = None,
+) -> int:
+    """Seed the synthetic demo accounts into an existing database.
+
+    This is the documented, offline first-run bootstrap. It is a **local CLI, not
+    an HTTP endpoint**: the API has no registration route, and this command is the
+    only way a fresh installation gets its synthetic accounts.
+
+    Refusals (exit code 2) happen before anything is written:
+
+    * ``DEMO_MODE`` is not enabled — so a production-shaped configuration cannot
+      create demo credentials by accident.
+    * ``DEMO_SEED_PASSWORD`` is missing — credentials are never defaulted or
+      committed.
+    * The schema is absent — Alembic owns DDL, so the operator is told to run
+      ``alembic upgrade head`` first.
+
+    The password is never printed, echoed or logged; only counts and usernames
+    reach the operator's terminal.
+    """
+    environment = dict(env if env is not None else os.environ)
+    resolved = settings if settings is not None else Settings()
+    out = out if out is not None else sys.stdout
+    err = err if err is not None else sys.stderr
+
+    if not _demo_mode_is_on(resolved, environment):
+        print(
+            "refusing to seed: demo mode is off. Set DEMO_MODE=true for this "
+            "local demo database and run the command again.",
+            file=err,
+        )
+        return 2
+
+    password = (
+        environment.get("DEMO_SEED_PASSWORD")
+        or (resolved.demo_seed_password.get_secret_value() if resolved.demo_seed_password else None)
+        or ""
+    )
+    if not password.strip():
+        print(
+            "refusing to seed: DEMO_SEED_PASSWORD is not set. Supply a local "
+            "demo password through the environment; it is stored only as a "
+            "salted hash and is never printed.",
+            file=err,
+        )
+        return 2
+
+    engine = create_db_engine(resolved.database_url)
+    try:
+        present = set(inspect(engine).get_table_names())
+        missing = sorted(REQUIRED_TABLES - present)
+        if missing:
+            print(
+                "refusing to seed: schema is not migrated (missing: "
+                f"{', '.join(missing)}). Run `alembic upgrade head` first.",
+                file=err,
+            )
+            return 2
+
+        with Session(engine) as session:
+            result = seed_demo_data(
+                session, password=password, now=now if now is not None else utc_now()
+            )
+            session.commit()
+            accounts = session.execute(
+                select(User.username, User.role).order_by(User.username)
+            ).all()
+    except SeedConfigurationError as exc:
+        print(f"refusing to seed: {exc}", file=err)
+        return 2
+    except Exception as exc:
+        print(f"seeding failed: {type(exc).__name__}: {exc}", file=err)
+        return 1
+    finally:
+        engine.dispose()
+
+    print(
+        "seeded synthetic demo data: "
+        f"{result.users_created} users, {result.patients_created} patients, "
+        f"{result.encounters_created} encounters, "
+        f"{result.observations_created} observations",
+        file=out,
+    )
+    if accounts:
+        print(
+            "accounts now available: " + ", ".join(f"{name} ({role})" for name, role in accounts),
+            file=out,
+        )
+    print(
+        "password: supplied via DEMO_SEED_PASSWORD (not displayed); "
+        "every credential is stored only as a salted hash",
+        file=out,
+    )
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python -m app.services.seed``."""
+    del argv  # the command takes configuration from the environment only
+    return bootstrap_demo_accounts()
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised through main()
+    raise SystemExit(main())
+
+
 __all__ = [
     "DEMO_CASES",
+    "REQUIRED_TABLES",
     "SEED_FORMAT",
     "FixtureBundle",
     "SeedConfigurationError",
     "SeedResult",
+    "bootstrap_demo_accounts",
     "clear_demo_data",
     "load_fixtures",
+    "main",
     "reset_demo_data",
     "seed_demo_data",
     "seeded_cases",
