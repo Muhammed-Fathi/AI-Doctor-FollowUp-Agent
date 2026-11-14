@@ -1,7 +1,8 @@
 # Phase Progress Tracker
 
-> Current status: **P0 IN_REVIEW** — a documentation-only baseline has been submitted for owner review.
-> Updated: 2026-11-14.
+> Current status: **P0 IN_REVIEW** — review round 1 (PR #2 review `5904454222`) returned CHANGES REQUIRED;
+> findings P0-R01…P0-R07 and the ADR-0006 agentic-depth recommendation are addressed in a follow-up commit on
+> the same PR. Owner re-review pending. Updated: 2026-11-14.
 >
 > A phase becomes `PASS` only after PR review, evidence verification, the local PowerShell gate (when
 > applicable), explicit owner approval, and merge. The implementing agent never sets `PASS` and never merges
@@ -9,7 +10,7 @@
 
 | Phase | Topic | Status | PR | Merge SHA | Test Evidence | Owner Approval |
 |---|---|---|---|---|---|---|
-| P0 | Governance / specifications | **IN_REVIEW** | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) | — | Documentation checks only (see `docs/phase-reports/PHASE_0_REPORT.md`); no application tests exist | Pending |
+| P0 | Governance / specifications | **IN_REVIEW** | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) | — | Documentation + OpenAPI checks only (round 2, see `docs/phase-reports/PHASE_0_REPORT.md` §13); no application tests exist | Pending — round 1 changes requested, round 2 submitted |
 | P1 | Foundation / reproducible startup | TODO | — | — | Not run | Pending |
 | P2 | Patient data + role-based API | TODO | — | — | Not run | Pending |
 | P3 | Document ingestion + OCR verification | TODO | — | — | Not run | Pending |
@@ -29,7 +30,8 @@
 | Not executed | Any backend/frontend test, OCR, model call, benchmark, browser E2E, Windows PowerShell gate, migration |
 | Owner-laptop required | Windows PowerShell scripts, Tesseract/Poppler install, Ollama model benchmark, offline demo |
 | PR | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) — opened 2026-11-14, base `main` @ `7d2ef73`, not merged |
-| Blocks P1 until | Owner reviews wording/safety, confirms the six ADRs, approves the demo rule parameters, and merges the PR |
+| Review round 1 | 7 findings + 1 ADR concern, all resolved in documentation (resolution matrix in the phase report §13) |
+| Blocks P1 until | Owner re-reviews the resolutions, confirms the six ADRs (incl. amended ADR-0006), approves the demo rule parameters, and merges the PR |
 
 Do not prefill future pass results, test counts, or metrics. When a phase completes, record the PR URL,
 exact base/head commits, commands with real output, and the merge SHA.

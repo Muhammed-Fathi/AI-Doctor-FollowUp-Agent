@@ -3,10 +3,10 @@
 | Field | Value |
 |---|---|
 | Document ID | `SAFE-001` |
-| Version | `0.1.0-p0` |
+| Version | `0.2.0-p0` |
 | Status | **IN REVIEW — wording requires owner (and clinician-adjacent reviewer if available) approval** |
 | Phase | `P0`; enforced from P2 onward; tested at P7 |
-| Related | `REQ-SEC-01..06`, `REQ-RULE-01..03`, `REQ-LLM-02`, ADR-0004, ADR-0005 |
+| Related | `REQ-SEC-01..06`, `REQ-RULE-01..03`, `REQ-LLM-02`, `REQ-DATA-04`, `REQ-OPS-04`, ADR-0004, ADR-0005 |
 
 > **EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE.**
 > This project is a university graduation prototype. It is not a medical device, has not been clinically
@@ -40,6 +40,8 @@ changes treatment, never contacts anyone, and never presents its output as medic
 | Summarize the patient's own quoted words | Paraphrase the patient into clinical findings |
 | Route an unreadable field to human verification | Guess a unit, a date, or a decimal separator |
 | Show the model's provider/status | Present fallback text as model output, or model text as verified fact |
+| Label a value `self-reported` versus `doctor-verified` | Call a patient check-in "verified" or "confirmed by your doctor" |
+| Show an item as a **verification issue** (`VI-*`) requiring correction | Show an unverified value as a review prompt, a fact, or a draft statement |
 | Create an in-app task after approval | Send SMS/email/WhatsApp/push or call an external API |
 | Keep an audit trail of human decisions | Let the model or a background job approve anything |
 
@@ -73,7 +75,9 @@ The disclaimer is a typed constant (`Literal[...]`) so it cannot be omitted acci
 
 | Invariant | Enforcement | Test |
 |---|---|---|
-| A doctor must verify a blocking extracted value before it is used | `fact_verify_gate` halts the graph; tool layer rejects unverified facts | `NEG-06`, `SAFE-02` |
+| A doctor must verify a blocking extracted value before it is used | `fact_verify_gate` halts the graph with `VI-*` issues; tool layer rejects unverified facts | `NEG-06`, `NEG-20`, `SAFE-02`, `VI-02` |
+| Self-reported data is never presented as doctor-verified | `trust_level` + `verified_by` constraints; message/draft suffix rules | `TRUST-01`, `NEG-21` |
+| Time-dependent demo rules are reproducible | Injected `as_of_utc` persisted on the run | `RULE-08` |
 | A doctor must approve a follow-up action before a task exists | Task requires `approval_decision_id`; unique per run | `SAFE-01`, `NEG-08` |
 | Rejection creates nothing | `reject` routes to `completed` with no task | `SAFE-03` |
 | The model cannot approve, verify, or create tasks | One tool with no side effects beyond a draft row | `SAFE-05` |
@@ -105,6 +109,8 @@ The disclaimer is a typed constant (`Literal[...]`) so it cannot be omitted acci
 | "DEMO rule with an arbitrary demo parameter" | "clinical threshold", "normal range", "guideline-based" |
 | "draft summary for doctor review" | "AI diagnosis", "AI recommendation" |
 | "has not been clinically validated" | "clinically safe", "medically accurate" |
+| "self-reported check-in value" | "verified value" (unless a doctor verified it) |
+| "verification required before this value is used" | "the system noticed something wrong" |
 | "synthetic demonstration data" | "anonymized patient data" |
 | "not for clinical use" | "ready for hospital deployment" |
 
@@ -122,7 +128,8 @@ These substitutions are required in PR descriptions, slides, and the demo script
 | Item | Status |
 |---|---|
 | Boundary documented and internally consistent with contracts | Design-reviewed in P0 |
-| Prohibited-content filter | Not implemented (P5) |
+| Prohibited-content filter (incl. self-reported labelling) | Not implemented (P5) |
+| Verification-issue vs review-item separation | Documented (`DEMO_REVIEW_RULES.md` §3); not implemented (P3/P4) |
 | Human-in-the-loop enforcement | Not implemented (P5/P6) |
 | Negative safety tests | Defined (`docs/evaluation/EVALUATION_MATRIX.md`), not executed |
 | Wording audit of repository documents | Performed in P0 by the author (see phase report); owner review pending |

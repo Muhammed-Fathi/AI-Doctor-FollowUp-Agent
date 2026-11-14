@@ -3,10 +3,11 @@
 | Field | Value |
 |---|---|
 | Document ID | `CTR-EXTRACT-001` |
-| Version | `0.1.0-p0` |
+| Version | `0.2.0-p0` |
 | Status | **IN REVIEW — design only; no parser exists** |
 | Phase | `P0` (design). Implementation: P3 |
-| Related | `REQ-ING-01..05`, `REQ-VERIFY-01..03`, `REQ-SEC-02/04`, ADR-0003 |
+| Related | `REQ-ING-01..05`, `REQ-VERIFY-01..03`, `REQ-DATA-04`, `REQ-SEC-02/04`, ADR-0003, ADR-0006 |
+| Revision | 0.2.0: document-vs-observation unit lists, optional `reference_text`, `VI-*` issue mapping, bounded extraction path selection (`P0-R03`, `P0-R06`, ADR-0006) |
 
 The governing idea: **a value without a source is not data, and a value without a human decision is not a fact.**
 
@@ -41,10 +42,12 @@ Rules:
 | Text-first | For PDFs, extract the text layer with `pypdf`. A page with ≥ 40 non-whitespace characters is considered to have a usable text layer. |
 | OCR fallback | Only pages below that threshold are rasterized and passed to Tesseract (via `pytesseract`). Rasterization uses `pdf2image`/Poppler or an equivalent installed tool — the exact dependency and version must be verified on the owner laptop before P3. |
 | Provenance of route | Each fact records `extractor ∈ {pypdf, tesseract, manual}` and each attempt is stored in `extraction_attempt` (`REQ-ING-02`). |
-| Field set | Only `report_date`, `test_name`, `value`, `unit`, `reference_text` (`REQ-ING-03`). No "impression", "diagnosis", or free-text summarization of the report. |
+| Field set | Only `report_date`, `test_name`, `value`, `unit`, `reference_text` (`REQ-ING-03`). `reference_text` is **optional**: a report without a printed reference range yields four facts, not an error. No "impression", "diagnosis", or free-text summarization of the report. |
 | Determinism | Same bytes + same extractor version → same candidate facts. No random sampling, no model in the extraction path. |
 | Bounds | ≤ 20 pages, ≤ 40 facts, 20 s per document, OCR language allowlist (`eng` in the MVP; adding `ara` requires an explicit owner decision and an install check). |
 | Failure | `E_PARSE_FAILED` / `E_TIMEOUT` / `E_DEPENDENCY_MISSING`; the document becomes `failed` or `needs_verification`, never `verified`. |
+| Path selection and bounded retry | After extraction, `extraction_triage` chooses `proceed`, `ocr_preprocess_retry` (deterministic preprocessing, max 2 attempts) or `flag_for_human`, based on text-layer coverage and engine confidence. The choice and reason are written to the run trace; the retry budget cannot grow and the triage cannot bypass verification (`ADR-0006` §3.1). |
+| Document units | `ExtractedFact.unit` accepts the document list `mmHg`, `bpm`, `mg/dL`, `g/dL`, `%`. These are report text, not `Observation` units; only BP/HR/glucose map to comparable measurements, so a hemoglobin value in `g/dL` creates no comparison (`P0-R06`). |
 
 **No LLM is used to read documents in the MVP.** If the owner later wants model-assisted extraction, it must go through a new ADR with a provenance and validation design.
 
@@ -70,14 +73,17 @@ Invariant: `verification_status` can be changed **only** through a doctor verifi
 | Flag | Trigger (deterministic) | Consequence |
 |---|---|---|
 | `clean` | Parsed with no anomaly and a valid unit/date | Still `pending` until a doctor accepts it |
-| `low_confidence` | OCR confidence below the configured demo threshold, or characters substituted (`O`/`0`, `l`/`1`) | Blocking: requires verification |
-| `ambiguous_date` | Two plausible date interpretations (`03/04/2026`) | Blocking |
-| `ambiguous_unit` | Value present but unit missing or non-allowlisted | Blocking |
-| `unparseable_value` | Numeric token cannot be parsed | Blocking; fact unusable until corrected |
-| `source_conflict` | Two documents (or a document and a check-in) disagree for the same type/date | Blocking for that field; both sources retained |
+| `low_confidence` | OCR confidence below the configured demo threshold, or characters substituted (`O`/`0`, `l`/`1`) | Blocking: `VI-005` |
+| `ambiguous_date` | Two plausible date interpretations (`03/11/2026` = 3 Nov or 11 Mar) | Blocking: `VI-003` |
+| `ambiguous_unit` | Value present but unit missing or outside the document unit list | Blocking: `VI-001` |
+| `unparseable_value` | Numeric token cannot be parsed | Blocking: `VI-005`; fact unusable until corrected |
+| `source_conflict` | A document value disagrees with an existing admissible observation (`VI-006`), or two doctor-verified sources disagree (`DR-006`, post-verification) | Blocking at intake; both sources retained |
 | `page_missing` | OCR yielded nothing usable for the page | Blocking if the field was expected there |
 
-"Blocking" means: the value cannot enter comparisons, review rules, drafts, or tasks (`REQ-SEC-04`). The gate lists blocking fact IDs so the doctor knows exactly what to fix.
+"Blocking" means: the value cannot enter comparisons, review rules, drafts, or tasks (`REQ-SEC-04`). The gate emits
+`VerificationIssue` records (`VI-*`) listing the blocking fact IDs so the doctor knows exactly what to fix; these
+are a **different output type** from post-verification `DR-*` review items and are shown in a different UI section
+(`DEMO_REVIEW_RULES.md` §3).
 
 The demo OCR-quality threshold is a **configuration value for demo mechanics**, not a clinical or accuracy claim. It must be documented as `DEMO_ONLY` wherever it appears (`docs/clinical-safety/DEMO_REVIEW_RULES.md` §6).
 
@@ -92,7 +98,7 @@ Every fact, review item, and draft claim stores evidence as `ProvenanceRef`:
   "page_index": 1,
   "char_start": 412,
   "char_end": 438,
-  "raw_text": "Glucose 1O5 mg/dL",
+  "raw_text": "Glucose 1O5",
   "extractor": "tesseract"
 }
 ```
@@ -122,6 +128,8 @@ Rules:
 
 - Only `role='doctor'` with patient scope may call the endpoint; the acting user ID is stored (`REQ-VERIFY-03`).
 - Verification is **append-only**; a second different decision on the same fact returns `409 E_FACT_ALREADY_DECIDED`.
+- A verified document fact becomes an observation with `trust_level='doctor_verified'`, `source='verified_document'`,
+  `source_fact_id` set, and `verified_by`/`verified_at` copied from the deciding doctor — never `self_reported_validated` (`REQ-DATA-04`).
 - Document status transitions: `pending_extraction → extracted → needs_verification → verified` (or `failed`). `verified` at document level requires **all blocking facts** decided and at least one fact verified.
 - A document with every fact rejected becomes `failed` with a reason; the workflow halts with `needs_verification` if that document was required.
 
@@ -143,6 +151,8 @@ Document text is untrusted data and is never concatenated into a system prompt a
 | Provenance completeness | % of stored facts with resolvable span within page bounds | All fixtures |
 | Ambiguity routing | % of ambiguous fixtures flagged blocking | `GOLD-EX-09..12` |
 | Silent-trust count | Facts reaching downstream with `pending` status | Must be 0 |
+| Pre-verification routing | `VI-001..VI-006` emitted exactly for their fixtures, with blocking fact IDs | `VI-01` |
+| Bounded extraction path | Low-confidence scan selects `ocr_preprocess_retry`, retries once, records both attempts | `AD-01` |
 
 Reported as measured values at P7 or explicitly "not measured". No accuracy claim is made in P0.
 

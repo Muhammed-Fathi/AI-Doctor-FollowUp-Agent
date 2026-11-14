@@ -45,7 +45,18 @@ The only permitted numeric trigger values are the **explicitly labelled, arbitra
 - Never request, accept, or store real credentials, tokens, or PHI in the repo, PR bodies, logs, or chat.
 - Never commit `.env`, databases, uploads, model weights, OCR temp output, or screenshots containing real data.
 
-### 3.2 Human-in-the-loop invariants
+### 3.2 Provenance, idempotency and clock invariants
+- Every observation carries a `trust_level` (`self_reported_validated` | `doctor_verified`). Never describe a
+  self-reported check-in as "verified", "confirmed", or doctor-reviewed.
+- Self-reported values must be labelled as such in review messages and draft claims (`(self-reported)`).
+- Pre-verification blockers are `VI-*` verification issues; post-verification prompts are `DR-*` review items.
+  Never mix the two types, and never emit a retired ID (`DR-002/004/007/010`).
+- Mutating actions derive their idempotency key **only** from immutable, already-persisted identifiers
+  (e.g. the approval decision ID) plus a fixed slot — never from a newly generated row ID.
+- Time-dependent demo behaviour uses the injected `as_of_utc`; do not introduce `now()` in rules, fixtures,
+  or tests.
+
+### 3.3 Human-in-the-loop invariants
 - A doctor decision is required before any follow-up task, notification, or final summary is finalized.
 - Extracted/OCR values are never silently promoted to trusted facts.
 - The LLM drafts prose only: it cannot set thresholds, decide review flags, approve, select a patient, write SQL, or call arbitrary URLs.

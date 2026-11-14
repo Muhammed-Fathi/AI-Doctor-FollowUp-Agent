@@ -3,9 +3,10 @@
 | Field | Value |
 |---|---|
 | Document ID | `ARCH-001` |
-| Version | `0.2.0-p0` |
+| Version | `0.3.0-p0` |
 | Status | **IN REVIEW — architecture baseline for owner acceptance** |
 | Phase | `P0` (documentation only; no component is implemented) |
+| Revision | 0.3.0: pre/post-verification split, observation trust levels, injected demo clock, deterministic task identity, bounded extraction/drafting decision loops (PR #2 review) |
 | Supersedes | `ARCHITECTURE.md` v0.1 draft (expanded, not contradicted) |
 
 > **EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE.** A local, single-machine academic prototype.
@@ -52,10 +53,12 @@ flowchart TB
     subgraph Orchestration["LangGraph StateGraph - single orchestrator"]
         direction LR
         G1["document_extract"]
-        G2["fact_verify_gate"]
+        G1a["extraction_triage<br/>bounded path choice"]
+        G2["fact_verify_gate<br/>VI-* issues, halt"]
         G3["monitor_compare"]
-        G4["review_rules"]
+        G4["review_rules<br/>DR-* prompts"]
         G5["draft_summary"]
+        G5a["draft_validation<br/>accept / repair / fallback"]
         G6["clinician_approval - interrupt"]
         G7["finalize_actions"]
         G8["halted - resumable"]
@@ -94,6 +97,8 @@ flowchart TB
     Adapter --> Fallback
     Orchestration --> CKPT
     Orchestration --> Audit
+    G1 -.-> G1a
+    G5 -.-> G5a
     G6 -.->|"doctor decision"| G7
     G2 -.->|"unverified facts"| G8
     G7 --> Tasks
@@ -112,7 +117,7 @@ The graph node set, edges, retry classification and interrupt semantics are norm
 | Browser/UI | Role-scoped views, evidence display, explicit uncertainty and fallback labels | Compute clinical logic, hide unverified data, call the model directly | `../contracts/API_CONTRACT.md` |
 | API | AuthN/AuthZ, typed schemas, request validation, idempotency, size limits, error envelope | Contain clinical thresholds, call Ollama | `../contracts/API_CONTRACT.md` |
 | Domain services | Deterministic parsing, comparison, rules, tasks, audit | Invent facts, call the LLM for decisions | `../contracts/DATA_DICTIONARY.md`, `../clinical-safety/DEMO_REVIEW_RULES.md` |
-| Orchestrator | Node ordering, state, checkpoint, interrupt/resume, tool dispatch | Let agents chat freely or self-approve | `../contracts/STATE_AND_GRAPH_CONTRACT.md` |
+| Orchestrator | Node ordering, state, checkpoint, interrupt/resume, tool dispatch, bounded path selection | Let agents chat freely, self-approve, or route on model opinion | `../contracts/STATE_AND_GRAPH_CONTRACT.md` |
 | Agent nodes | One bounded responsibility each, allowlisted tools | Direct SQL, shell, HTTP, approval, prescribing | `../contracts/TOOL_CONTRACTS.md` |
 | Model boundary | One method: grounded draft from verified evidence | Decide review items, approve, transmit data elsewhere | `../contracts/LLM_ADAPTER.md` |
 | Storage | SQLite app data, checkpoints, local uploads | Hold real patient data; be committed to git | `.gitignore`, `../contracts/DATA_DICTIONARY.md` |
@@ -131,8 +136,13 @@ All five run as **nodes inside one LangGraph graph** and share one typed state. 
 | 4 | `doctor_communication` | Draft a doctor-facing, evidence-linked summary (model or labelled fallback) | `read_verified_facts`, `draft_grounded_summary` | Approve, send, address the patient, or state unsupported facts |
 | 5 | `follow_up` | Materialize doctor-approved in-app tasks and notifications, idempotently | `create_in_app_task`, `list_due_tasks` | Contact anyone externally; create a task without an approval record |
 
-Shared-state shape and per-node read/write permissions are defined in
-`../contracts/STATE_AND_GRAPH_CONTRACT.md` §3.
+Only `doctor_communication` calls the model. Two **bounded decision mechanisms** provide the agentic depth:
+`extraction_triage` selects a tool path (text layer / OCR / OCR-with-preprocessing / flag-for-human) and retries
+at most twice, and `draft_validation` accepts, repairs once, or falls back. Both record their choice in the run
+trace. Semantics, trade-off and acceptance test `AD-01` are in `ADR-0006` §3–§4.
+
+Shared-state shape, per-node read/write permissions and the `VI-*`/`DR-*` separation are defined in
+`../contracts/STATE_AND_GRAPH_CONTRACT.md` §3–§4.
 
 ## 5. End-to-end sequence (with the doctor gate)
 
@@ -159,13 +169,14 @@ sequenceDiagram
     G->>DB: read verified facts + baseline
     G->>G: compare, evaluate demo rules
     alt ambiguous or unverified facts present
-        G->>DB: checkpoint state=needs_verification, halt
+        G->>DB: verification_issues VI-*, checkpoint state=needs_verification, halt
         D->>A: correct fields, resume
     end
     G->>L: draft grounded summary (schema, timeout)
     alt Ollama unavailable or invalid schema
         L->>G: fallback draft, execution_status=fallback_no_model
     end
+    G->>G: draft_validation - accept, one repair, or fallback
     G->>DB: checkpoint state=awaiting_decision, interrupt
     D->>A: review evidence, approve / edit / reject
     A->>G: resume with decision + doctor identity
@@ -192,7 +203,7 @@ Legend: **A** = allowed · **C** = allowed only within own patient scope · **S*
 | Create review item | – (human raises manually only via note) | – | – | A (deterministic rules only) |
 | Read draft summary | S | – | – | C (write own draft) |
 | Approve / edit / reject decision | S | – | – | – |
-| Create follow-up task | – | – | – | D (approved decision only) |
+| Create follow-up task | – | – | – | D (approved decision only, run `finalizing`, atomic commit) |
 | Complete task | S | – | – | – |
 | Read in-app notifications | S | C (no clinical content) | – | A (own generated) |
 | Read audit trail | S (own patients) | C (own actions only) | A (local DB/CLI only; no API endpoint in MVP) | A (write only) |
@@ -220,6 +231,8 @@ Enforcement rules:
 | Uploaded document bytes | Untrusted content | Magic-byte check, page/timeout caps, text treated as data only, never as instructions (`REQ-SEC-02`) |
 | OCR/text layer → facts | Untrusted until verified | Provenance + quality flags + human gate (`REQ-VERIFY-01/02`) |
 | Verified facts → rules/draft | Trusted *for demo purposes only* | Only `verification_status=verified` reaches these nodes (`REQ-SEC-04`) |
+| Observations → comparisons | Mixed provenance, explicitly labelled | Every observation carries `trust_level`; self-reported values are labelled in review messages and drafts and are never called doctor-verified (`REQ-DATA-04`) |
+| Clock | Injected, not implicit | `as_of_utc` is fixed per run and persisted, so staleness expectations are reproducible (`REQ-OPS-04`) |
 | API → local Ollama (`127.0.0.1:11434`) | Trusted local process, untrusted output | Schema validation, timeout, size cap, no tool access, no network egress beyond loopback |
 | Model output → UI | Displayed, never authoritative | Citations required; unsupported claims dropped; provider metadata shown (`REQ-LLM-02/03`) |
 | Runtime data → git | Forbidden | Synthetic fixtures only in repo; uploads/DBs/model weights gitignored (`REQ-SEC-06`) |
@@ -230,7 +243,12 @@ Enforcement rules:
 - A checkpoint is written after each node; the checkpoint store is a separate SQLite file guarded by `AGENTS.md`.
 - Before `finalize_actions` the graph executes an `interrupt`, persisting `state=awaiting_decision`.
 - Resumption requires `(run_id, decision, doctor_id, decision_reason)`; the resumed node re-reads verified evidence and never trusts client-supplied clinical facts.
-- Side effects are keyed by `idempotency_key = sha256(workflow_version | patient_id | decision_id | action_type | target_id)`; a unique index in SQLite makes a duplicate insert a no-op, and the response stays consistent.
+- Side effects are keyed by an `action_key` derived **only** from immutable stored values
+  (`sha256(workflow_version | patient_id | approval_decision_id | action_type | slot)`) and the task UUID is
+  derived from that key (`uuid5`), so a retry or restart recomputes the same identity; a unique index makes a
+  duplicate insert a no-op, and the response stays consistent (`P0-R04`).
+- Decision, task, notification, audit finalization and the `finalizing → completed` transition commit in **one**
+  SQLite transaction (`STATE_AND_GRAPH_CONTRACT.md` §7.2).
 - Crash or restart mid-approval must yield exactly one task and exactly one finalization audit event (`REQ-GRAPH-02/03/04`).
 
 Normative detail: `../contracts/STATE_AND_GRAPH_CONTRACT.md`.
@@ -241,6 +259,10 @@ These must be demonstrable, not merely claimed:
 
 1. Unverified or rejected facts never reach `compare_observations`, `evaluate_demo_review_rules`, or `draft_grounded_summary`.
 2. No task, notification, or finalized summary exists without an approval record referencing a doctor identity.
+2a. Pre-verification blockers appear as `VI-*` verification issues only; `DR-*` review items are computed only
+   from verified evidence — the two are never mixed (`P0-R03`).
+2b. Every observation is labelled `self_reported_validated` or `doctor_verified`; no self-reported value is
+   described as doctor-verified (`REQ-DATA-04`).
 3. A prompt-injection payload inside a document cannot change tool allowlists, system instructions, approval state, or patient scope.
 4. Cross-patient access attempts are denied and audited.
 5. Fallback output is labelled at the API and in the UI; it is never presented as model output.
@@ -258,7 +280,7 @@ Owner-facing wording: `../clinical-safety/CLINICAL_SAFETY.md`. Attack cases: `..
 | [ADR-0003](ADR-0003-sqlite-app-and-checkpoints.md) | SQLite for application data and LangGraph checkpoints, single machine only | Proposed (P0) |
 | [ADR-0004](ADR-0004-evidence-verified-review-queue.md) | Evidence-verified facts plus a deterministic review queue, never a risk prediction | Proposed (P0) |
 | [ADR-0005](ADR-0005-defer-external-comms-and-ehr.md) | Defer external communications and EHR/FHIR integration beyond the MVP | Proposed (P0) |
-| [ADR-0006](ADR-0006-five-bounded-agents-single-graph.md) | Five bounded agent nodes inside one orchestrated graph, not five model servers | Proposed (P0) |
+| [ADR-0006](ADR-0006-five-bounded-agents-single-graph.md) | Five bounded agent nodes inside one orchestrated graph, not five model servers; agentic depth via bounded path selection + repair, with acceptance test `AD-01` | Proposed (P0, extended after review) |
 
 ADR status becomes `Accepted` only when the project owner approves the P0 PR.
 

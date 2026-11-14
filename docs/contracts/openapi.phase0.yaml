@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: AI Doctor Follow-Up — Phase 0 API Proposal
-  version: 0.1.0-p0
+  version: 0.2.0-p0
   summary: Local, synthetic-data, doctor-in-the-loop follow-up workflow (proposal only; not implemented)
   description: |
     **EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE.**
@@ -15,7 +15,10 @@ info:
     * Task creation is reachable only through a doctor approval decision.
     * No endpoint sends messages, prescribes, or exports datasets.
     * Unverified extracted facts cannot be used downstream (HTTP 409 `E_UNVERIFIED_FACT`).
-    * Every workflow response exposes the run trace and the model/provider provenance.
+    * Every workflow response exposes the run trace, the injected `as_of_utc`, and the model/provider provenance.
+    * Verification issues (`VI-*`, pre-verification) and review items (`DR-*`, post-verification) are separate
+      arrays and must not be merged by clients.
+    * Observations expose a `trust_level`; self-reported values are never labelled doctor-verified.
   contact:
     name: Project owner (review pending)
     url: https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent
@@ -1032,7 +1035,7 @@ components:
     Observation:
       type: object
       additionalProperties: false
-      required: [id, patient_id, measure_type, value, unit, measured_at, source, validation]
+      required: [id, patient_id, measure_type, value, unit, measured_at, source, validation, trust_level]
       properties:
         id:
           type: string
@@ -1056,6 +1059,15 @@ components:
         validation:
           type: string
           enum: [ok, ok_with_warning, rejected]
+          description: Data check only (schema, unit, plausibility). NOT a human verification.
+        trust_level:
+          type: string
+          enum: [self_reported_validated, doctor_verified]
+          description: Provenance class. self_reported_validated values must never be described as doctor-verified.
+        verification:
+          oneOf:
+            - $ref: '#/components/schemas/ObservationVerification'
+            - type: 'null'
         note:
           type: string
           maxLength: 500
@@ -1125,6 +1137,18 @@ components:
         extractor:
           type: string
           enum: [pypdf, tesseract, manual, patient_form]
+    ObservationVerification:
+      type: object
+      additionalProperties: false
+      required: [verified_by, verified_at]
+      properties:
+        verified_by:
+          type: string
+          format: uuid
+        verified_at:
+          type: string
+          format: date-time
+      description: Present only for trust_level=doctor_verified.
     DocumentMeta:
       type: object
       additionalProperties: false
@@ -1253,7 +1277,7 @@ components:
     ExtractionResponse:
       type: object
       additionalProperties: false
-      required: [document_id, document_status, facts, attempts]
+      required: [document_id, document_status, facts, attempts, verification_issues]
       properties:
         document_id:
           type: string
@@ -1271,6 +1295,11 @@ components:
           maxItems: 10
           items:
             $ref: '#/components/schemas/ExtractionAttempt'
+        verification_issues:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/VerificationIssue'
         disclaimer:
           type: string
     VerifyRequest:
@@ -1321,13 +1350,54 @@ components:
         document_status:
           type: string
           enum: [pending_extraction, extracted, needs_verification, verified, failed]
+    VerificationIssue:
+      type: object
+      additionalProperties: false
+      required: [issue_id, issue_type, reason_code, blocking, message, evidence, created_at]
+      properties:
+        issue_id:
+          type: string
+          format: uuid
+        issue_type:
+          type: string
+          enum: [VI-001, VI-002, VI-003, VI-004, VI-005, VI-006]
+        reason_code:
+          type: string
+          maxLength: 64
+        blocking:
+          type: boolean
+          const: true
+        message:
+          type: string
+          maxLength: 240
+        document_id:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+        fact_ids:
+          type: array
+          maxItems: 8
+          items:
+            type: string
+            format: uuid
+        evidence:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/EvidenceRef'
+        created_at:
+          type: string
+          format: date-time
+      description: Pre-verification blocker. Never carries a rule_id and is never trusted downstream.
     ReviewFlagHint:
       type: string
       enum: [data_quality, verification_needed, change_to_review]
     ReviewItem:
       type: object
       additionalProperties: false
-      required: [review_item_id, rule_id, reason_code, message, evidence, policy_version, demo_only, state]
+      required: [review_item_id, rule_id, reason_code, message, trust_basis, evidence, policy_version, demo_only, state]
       properties:
         review_item_id:
           type: string
@@ -1340,7 +1410,8 @@ components:
           format: uuid
         rule_id:
           type: string
-          pattern: '^DR-[0-9]{3}$'
+          enum: [DR-001, DR-003, DR-005, DR-006, DR-008, DR-009]
+          description: Post-verification rules only. DR-002/004/007/010 are retired and reclassified as VI-* issues.
         reason_code:
           type: string
           maxLength: 64
@@ -1350,6 +1421,9 @@ components:
           type: string
           maxLength: 240
           description: Neutral wording; no clinical interpretation
+        trust_basis:
+          type: string
+          enum: [self_reported, doctor_verified, mixed]
         evidence:
           type: array
           minItems: 1
@@ -1506,7 +1580,7 @@ components:
     WorkflowRun:
       type: object
       additionalProperties: false
-      required: [run_id, patient_id, status, workflow_version, policy_version, started_at, updated_at]
+      required: [run_id, patient_id, status, workflow_version, policy_version, as_of_utc, started_at, updated_at]
       properties:
         run_id:
           type: string
@@ -1529,6 +1603,10 @@ components:
           type: string
         policy_version:
           type: string
+        as_of_utc:
+          type: string
+          format: date-time
+          description: Injected evaluation clock used by time-dependent demo rules.
         started_at:
           type: string
           format: date-time
@@ -1575,10 +1653,15 @@ components:
     WorkflowDetail:
       type: object
       additionalProperties: false
-      required: [run, review_items, events]
+      required: [run, verification_issues, review_items, events]
       properties:
         run:
           $ref: '#/components/schemas/WorkflowRun'
+        verification_issues:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/VerificationIssue'
         review_items:
           type: array
           maxItems: 20
@@ -1830,6 +1913,9 @@ components:
                 format: uuid
         provider:
           $ref: '#/components/schemas/ModelMetadata'
+        as_of_utc:
+          type: string
+          format: date-time
         disclaimer:
           type: string
     DemoResetResponse:

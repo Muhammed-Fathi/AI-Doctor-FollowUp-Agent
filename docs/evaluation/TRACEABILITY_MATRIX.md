@@ -3,10 +3,11 @@
 | Field | Value |
 |---|---|
 | Document ID | `EVAL-TRACE-001` |
-| Version | `0.1.0-p0` |
+| Version | `0.2.0-p0` |
 | Status | **IN REVIEW** |
 | Phase | `P0` (baseline). Updated every phase with real evidence |
 | Purpose | Answer "where is this requirement designed, where is it built, and what proves it?" |
+| Revision | 0.2.0: adds `REQ-DATA-04` (trust levels) and `REQ-OPS-04` (injected clock); 49 requirements total |
 
 **Status legend:** `DESIGNED` = specified in P0 docs, nothing built · `PLANNED Pn` = build phase ·
 `EXECUTED` = a real command produced real evidence (none yet outside documentation checks).
@@ -28,6 +29,7 @@ No requirement in this table is implemented or proven in Phase 0.
 | `REQ-DATA-01` | `US-02`, `US-07` | `DATA_DICTIONARY.md` §2.8 | `db/models.py`, observations service | `GOLD-A`, `VERIFY-01` | P2 | DESIGNED |
 | `REQ-DATA-02` | `US-02` | `DATA_DICTIONARY.md` §3 | check-in validation | `NEG-13` | P2 | DESIGNED |
 | `REQ-DATA-03` | `US-02`, `US-12` | `DATA_DICTIONARY.md` §1 | models + seed | `DEMO-R` | P2 | DESIGNED |
+| `REQ-DATA-04` | `US-07`, `US-08` | `DATA_DICTIONARY.md` §2.8/§3.2 | trust column + label rendering | `TRUST-01`, `NEG-19`, `NEG-21` | P2 | DESIGNED |
 
 ## 3. Ingestion and OCR
 
@@ -51,7 +53,7 @@ No requirement in this table is implemented or proven in Phase 0.
 
 | REQ | User story | Design doc | Planned component | Acceptance test | Build phase | Status |
 |---|---|---|---|---|---|---|
-| `REQ-MON-01` | `US-07` | `TOOL_CONTRACTS.md` §3.5 | `services/comparisons.py` | `MON-01` | P4 | DESIGNED |
+| `REQ-MON-01` | `US-07` | `TOOL_CONTRACTS.md` §3.5 | `services/comparisons.py` | `MON-01`, `RULE-01` | P4 | DESIGNED |
 | `REQ-MON-02` | `US-07` | `DATA_DICTIONARY.md` §3 | comparison guards | `RULE-06` | P4 | DESIGNED |
 | `REQ-MON-03` | `US-07` | `DEMO_REVIEW_RULES.md` §4 | duplicate/conflict rules | `MON-02`, `MON-03` | P4 | DESIGNED |
 
@@ -59,8 +61,8 @@ No requirement in this table is implemented or proven in Phase 0.
 
 | REQ | User story | Design doc | Planned component | Acceptance test | Build phase | Status |
 |---|---|---|---|---|---|---|
-| `REQ-RULE-01` | `US-08` | `DEMO_REVIEW_RULES.md` §3/§7 | `services/review_rules.py` | `RULE-01`, `RULE-05` | P4 | DESIGNED |
-| `REQ-RULE-02` | `US-08` | `DEMO_REVIEW_RULES.md` §5 | message templates + UI labels | `RULE-04` | P4 | DESIGNED |
+| `REQ-RULE-01` | `US-08` | `DEMO_REVIEW_RULES.md` §3/§5 | `services/review_rules.py`, `services/verification_issues.py` | `RULE-01`, `RULE-05`, `VI-01`, `VI-02` | P3/P4 | DESIGNED |
+| `REQ-RULE-02` | `US-08` | `DEMO_REVIEW_RULES.md` §6 | message templates + UI labels | `RULE-04`, `TRUST-01` | P4 | DESIGNED |
 | `REQ-RULE-03` | `US-08` | `DEMO_REVIEW_RULES.md` §7 | dedupe + idempotent persistence | `RULE-02`, `RULE-03` | P4 | DESIGNED |
 
 ## 7. Local LLM drafting
@@ -76,7 +78,7 @@ No requirement in this table is implemented or proven in Phase 0.
 
 | REQ | User story | Design doc | Planned component | Acceptance test | Build phase | Status |
 |---|---|---|---|---|---|---|
-| `REQ-GRAPH-01` | `US-10` | `STATE_AND_GRAPH_CONTRACT.md` §4 | `agents/orchestrator.py` | `NEG-06` | P5 | DESIGNED |
+| `REQ-GRAPH-01` | `US-10` | `STATE_AND_GRAPH_CONTRACT.md` §4 | `agents/orchestrator.py` | `NEG-06`, `AD-01` | P5 | DESIGNED |
 | `REQ-GRAPH-02` | `US-10` | `STATE_AND_GRAPH_CONTRACT.md` §5 | checkpointer wiring | `RESUME-01/02` | P5/P7 | DESIGNED |
 | `REQ-GRAPH-03` | `US-10` | `STATE_AND_GRAPH_CONTRACT.md` §5.2 | interrupt + decisions endpoint | `SAFE-01/03`, `NEG-08/09` | P5 | DESIGNED |
 | `REQ-GRAPH-04` | `US-10` | `STATE_AND_GRAPH_CONTRACT.md` §6/§7 | retry + idempotency guards | `NEG-07`, `RESUME-03` | P5 | DESIGNED |
@@ -106,7 +108,7 @@ No requirement in this table is implemented or proven in Phase 0.
 | `REQ-SEC-01` | `US-01` | `ARCHITECTURE.md` §6/§7 | scope guards on all routes | `NEG-01/02`, `SEC-08` | P2/P7 | DESIGNED |
 | `REQ-SEC-02` | `US-13` | `EXTRACTION_PROVENANCE.md` §7 | untrusted-data handling | `NEG-11` | P3/P5 | DESIGNED |
 | `REQ-SEC-03` | `US-11` | `ADR-0005`, `TOOL_CONTRACTS.md` §4 | absence of transport code | `NEG-15`, `SEC-07`, `RULE-07` | P6/P7 | DESIGNED |
-| `REQ-SEC-04` | `US-05`, `US-09` | `STATE_AND_GRAPH_CONTRACT.md` §3/§8 | verified-only gate | `SAFE-02/06`, `NEG-06` | P4/P5 | DESIGNED |
+| `REQ-SEC-04` | `US-05`, `US-09` | `STATE_AND_GRAPH_CONTRACT.md` §3/§8 | verified-only gate + `VI-*` issues | `SAFE-02/06`, `NEG-06`, `NEG-20`, `VI-01..03` | P3/P4/P5 | DESIGNED |
 | `REQ-SEC-05` | `US-13` | `CLINICAL_SAFETY.md` §5 | disclaimer constants + UI | `E2E-01/03` | P6 | DESIGNED |
 | `REQ-SEC-06` | `US-12` | `.gitignore`, `AGENTS.md` §3.1 | ignore rules + scan | `SEC-06` | P1/P7 | DESIGNED |
 
@@ -116,6 +118,7 @@ No requirement in this table is implemented or proven in Phase 0.
 |---|---|---|---|---|---|---|
 | `REQ-OPS-01` | `US-12` | `GOLD_FIXTURES.md` §7 | deterministic seed | `DEMO-R` | P2/P8 | DESIGNED |
 | `REQ-OPS-02` | `US-12` | `DEMO_SCENARIOS.md` §2 | PowerShell scripts | `NEG-12`, `BENCH-03` | P1/P8 | DESIGNED |
+| `REQ-OPS-04` | `US-08` | `DEMO_REVIEW_RULES.md` §7 | injected `as_of_utc` on run + policy | `RULE-08` | P4 | DESIGNED |
 | `REQ-EVAL-01` | `US-08` | `GOLD_FIXTURES.md` §6 | golden JSON + replay tests | `RULE-01` | P4/P7 | DESIGNED |
 | `REQ-EVAL-02` | `US-04` | `EVALUATION_MATRIX.md` §4 | extraction metrics | `GOLD-EX-01..12`, `VERIFY-03` | P7 | DESIGNED |
 | `REQ-EVAL-03` | `US-09` | `LOCAL_BENCHMARK_PLAN.md` §3 | runtime measurement | `BENCH-01..04`, `EVAL-03` | P5/P7 | DESIGNED |
@@ -125,7 +128,7 @@ No requirement in this table is implemented or proven in Phase 0.
 | Category | Requirements | Designed | Implemented | Executed evidence |
 |---|---|---|---|---|
 | Auth | 3 | 3 | 0 | 0 |
-| Data | 3 | 3 | 0 | 0 |
+| Data | 4 | 4 | 0 | 0 |
 | Ingestion/OCR | 5 | 5 | 0 | 0 |
 | Verification | 3 | 3 | 0 | 0 |
 | Monitoring | 3 | 3 | 0 | 0 |
@@ -135,8 +138,8 @@ No requirement in this table is implemented or proven in Phase 0.
 | UI | 3 | 3 | 0 | 0 |
 | Tasks/audit | 4 | 4 | 0 | 0 |
 | Security | 6 | 6 | 0 | 0 |
-| Ops/eval | 5 | 5 | 0 | 0 |
-| **Total** | **47** | **47** | **0** | **0** |
+| Ops/eval | 6 | 6 | 0 | 0 |
+| **Total** | **49** | **49** | **0** | **0** |
 
 The only executed checks in P0 are documentation-level: link/reference consistency, requirement-ID coverage,
 OpenAPI structural validation, and prohibited-claim scanning. Their actual commands and results are quoted in

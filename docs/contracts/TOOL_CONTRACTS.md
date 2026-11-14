@@ -3,10 +3,11 @@
 | Field | Value |
 |---|---|
 | Document ID | `CTR-TOOL-001` |
-| Version | `0.1.0-p0` |
+| Version | `0.2.0-p0` |
 | Status | **IN REVIEW — allowlist proposal, not implemented** |
 | Phase | `P0` (design). Implementation: P3–P6 |
-| Related | `REQ-GRAPH-05`, `REQ-LLM-02`, `REQ-SEC-02/03/04`, ADR-0006, ADR-0005 |
+| Related | `REQ-GRAPH-05`, `REQ-LLM-02`, `REQ-SEC-02/03/04`, `REQ-DATA-04`, ADR-0006, ADR-0005 |
+| Revision | 0.2.0: trust-aware observation reads, deterministic task identity/atomic commit (`P0-R04`), extraction confidence output for bounded triage, draft-validation note |
 
 ---
 
@@ -68,11 +69,11 @@ Invariants: `ok=True ⇒ error is None` and `ok=False ⇒ data is None`; every c
 |---|---|
 | Owner node | `medical_document` |
 | Input | `document_id: Uuid`, `fields: list[Literal["report_date","test_name","value","unit","reference_text"]]` |
-| Output | `list[ExtractedFact]` with `verification_status="pending"` always, plus `page_index`, `char_start/end`, `raw_text`, `quality_flags` |
+| Output | `list[ExtractedFact]` with `verification_status="pending"` always, plus `page_index`, `char_start/end`, `raw_text`, `quality_flags`, `confidence`, and the extraction `path` (`pypdf`/`tesseract`) used for each page |
 | Side effects | persists extraction attempts + facts (candidate, unverified) |
 | Timeout / cap | 20 s per document; ≤ 5 pages OCR; ≤ 40 facts |
 | Errors | `E_UNSUPPORTED_MEDIA`, `E_PARSE_FAILED`, `E_TIMEOUT`, `E_DEPENDENCY_MISSING` (Tesseract missing) |
-| Notes | Text-first (`pypdf`); OCR fallback only when the page text layer is insufficient. The returned facts are **never** verified. |
+| Notes | Text-first (`pypdf`); OCR fallback only when the page text layer is insufficient. Returns the confidence and path that `extraction_triage` uses for bounded retry (`ADR-0006` §3.1). The returned facts are **never** verified. |
 
 ### 3.3 `validate_structured_fields` — pure
 
@@ -90,12 +91,12 @@ Invariants: `ok=True ⇒ error is None` and `ok=False ⇒ data is None`; every c
 | Field | Value |
 |---|---|
 | Owner node | `patient_monitoring`, `intake_validate` |
-| Input | `measure_types: list[str] ≤ 4`, `from_iso: Iso`, `to_iso: Iso`, `only_verified: bool = True` |
-| Output | `list[ObservationView]` scoped to the run's patient |
+| Input | `measure_types: list[str] ≤ 4`, `from_iso: Iso`, `to_iso: Iso`, `only_admissible: bool = True` (excludes `validation='rejected'`), `trust_levels: list[Literal["self_reported_validated","doctor_verified"]] = both` |
+| Output | `list[ObservationView]` scoped to the run's patient, each with `trust_level` and `verified_by` (null for self-reported) |
 | Side effects | none |
 | Timeout / cap | 2 s; ≤ 100 rows (most recent first) |
 | Errors | `E_SCOPE_VIOLATION`, `E_VALIDATION` |
-| Notes | Cannot be called with another patient's ID: there is no such parameter. |
+| Notes | Cannot be called with another patient's ID: there is no such parameter. `only_admissible` never returns rejected rows (`REQ-DATA-04`; `NEG-19`). |
 
 ### 3.5 `compare_observations` — pure
 
@@ -140,7 +141,7 @@ Invariants: `ok=True ⇒ error is None` and `ok=False ⇒ data is None`; every c
 | Side effects | persists the draft and model metadata; no external call beyond `127.0.0.1:11434` |
 | Timeout / cap | configurable, default 45 s; ≤ 1500 output tokens; one repair attempt |
 | Errors | `E_MODEL_UNAVAILABLE` → fallback path, `E_TIMEOUT` → fallback after retry, schema violation → one repair then fallback |
-| Notes | The tool may **not** add facts, change numbers, cite a document it was not given, or address the patient. Output validation drops any claim whose evidence is not in the provided set. |
+| Notes | The tool may **not** add facts, change numbers, cite a document it was not given, or address the patient. Output validation (`draft_validation`, `ADR-0006` §3.2) drops any claim whose evidence is not in the provided set, requires `(self-reported)` wording for claims citing self-reported observations, and either accepts, repairs once, or falls back. |
 
 ### 3.9 `create_in_app_task` — mutating, idempotent
 
@@ -148,11 +149,12 @@ Invariants: `ok=True ⇒ error is None` and `ok=False ⇒ data is None`; every c
 |---|---|
 | Owner node | `follow_up` |
 | Input | `approval_decision_id: Uuid`, `title: str ≤ 160`, `due_date: date?`, `note: str ≤ 500`, `notification_text: str ≤ 240` |
-| Preconditions | run `status` paused at the approval interrupt; `approval.decision ∈ {approve, edit}`; `doctor_id` authenticated; patient in scope; title/note contain no prohibited clinical content patterns (see safety doc) |
+| Preconditions | run `status == finalizing` (reached only after a paused `awaiting_decision` run is resumed with a persisted `approve`/`edit` decision); `approval.doctor_id` authenticated and patient-scoped; title/note contain no prohibited clinical content patterns (see safety doc) |
 | Output | `{task_id, notification_id, created: bool, duplicate_ignored: bool}` |
 | Side effects | inserts one `follow_up_task` + one `in_app_notification` + audit events |
-| Idempotency | key = `sha256(workflow_version | patient_id | approval_decision_id | "task" | task_id)`; duplicate → `created=false, duplicate_ignored=true`, HTTP-equivalent success without a new row |
-| Errors | `E_APPROVAL_REQUIRED`, `E_SCOPE_VIOLATION`, `E_VALIDATION`, `E_DUPLICATE_IGNORED` |
+| Idempotency | `action_key = sha256(workflow_version | patient_id | approval_decision_id | "followup_task" | "slot:1")`; `task_id = uuid5(TASK_NAMESPACE, action_key)` is derived, never regenerated; duplicate → `created=false, duplicate_ignored=true`, existing row returned, no new row (`P0-R04`) |
+| Atomicity | decision row, task, notification, audit finalization and the `finalizing → completed` transition commit in one transaction; unique indexes make replay a no-op (`STATE_AND_GRAPH_CONTRACT.md` §7.2) |
+| Errors | `E_APPROVAL_REQUIRED` (wrong state or missing decision), `E_RUN_NOT_PAUSED`, `E_SCOPE_VIOLATION`, `E_VALIDATION`, `E_DUPLICATE_IGNORED` |
 | Notes | There is no delivery channel: the "notification" is a row. Nothing leaves the machine (`ADR-0005`). |
 
 ### 3.10 `list_due_tasks` — read-only
@@ -184,8 +186,14 @@ These must not exist as tools, helper functions, or TODO stubs (`REQ-SEC-03`):
 
 A test at P7 asserts no such symbol or outbound dependency exists (`SEC-03`).
 
-Orchestrator nodes (`intake_validate`, `fact_verify_gate`, `clinician_approval`, `halted`) read through the
-domain service layer and hold no agent tools; the allowlist below applies to the five agent nodes only.
+Orchestrator nodes (`intake_validate`, `extraction_triage`, `fact_verify_gate`, `draft_validation`,
+`clinician_approval`, `halted`) read through the domain service layer and hold no agent tools; the allowlist
+below applies to the five agent nodes only.
+
+`fact_verify_gate` calls the deterministic domain service `collect_verification_issues` (not an agent tool):
+input = candidate facts + document↔patient reference + existing admissible observations; output =
+`VerificationIssue[]` (`VI-001..VI-006`), never `ReviewFlag`. This service cannot write verified facts — only a
+doctor decision does that.
 
 ## 5. Tool permission matrix
 

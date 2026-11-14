@@ -3,13 +3,17 @@
 | Field | Value |
 |---|---|
 | Document ID | `SPEC-MVP-001` |
-| Version | `0.1.0-p0` |
+| Version | `0.2.0-p0` |
 | Status | **IN REVIEW — not signed off** |
 | Phase | `P0` (documentation and governance only) |
 | Prepared by | Arena agent (Arena session branch `arena/ee7d211b-ai-doctor-followup-agent`) |
 | Prepared on | 2026-11-14 |
 | Requires owner signature | **Yes** — see [§12 Sign-off](#12-sign-off-block) |
 | Supersedes | Draft statements in `docs/roadmap/MASTER_PLAN.md` v0.1 where they conflict |
+
+> **Revision 0.2.0** reflects PR #2 review: observation trust levels, an injected demo clock, a
+> pre-verification/post-verification output split, and deterministic task identity. Requirement IDs are stable;
+> `REQ-DATA-04` and `REQ-OPS-04` are new, giving 49 requirements.
 
 > **SCOPE NOTICE — EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE.**
 > This specification describes an academic graduation-project prototype. It is not a medical device, not diagnostic or treatment software, and must never be used with real patient data. Every clinical action in the described workflow is performed or approved by a human doctor.
@@ -78,10 +82,10 @@ Acceptance criteria are binding at the phase named in `Trace`; requirement IDs r
 | `US-02` | Patient | to submit a timestamped check-in with units | my doctor sees measurements with an explicit source | Check-in rejected without timestamp, unit, or when the unit is not in the allowlist; accepted record stores `source=patient_checkin`; response echoes stored values | `REQ-DATA-01/02` | P2 |
 | `US-03` | Patient | to upload a PDF or image for my own record | my report becomes structured information | Non-allowlisted MIME/magic type, oversize, or too many pages rejected with a typed error; accepted upload stored with hash and status `pending_extraction` | `REQ-ING-01` | P3 |
 | `US-04` | System | to extract a declared field set with page/span provenance | every fact is traceable to its source | Each accepted fact carries document ID, page index, character span, raw text, normalized value/unit; no fact is created without a source reference | `REQ-ING-02/03`, `REQ-VERIFY-01` | P3 |
-| `US-05` | Doctor | to see low-confidence, contradictory, or ambiguous fields flagged for correction | ambiguous values are never silently trusted | Ambiguous date/unit/OCR cases get a quality flag and `verification_status=pending`; unverified fields are excluded from comparisons, review rules, and drafts | `REQ-VERIFY-02`, `REQ-SEC-04` | P3 |
+| `US-05` | Doctor | to see low-confidence, contradictory, or ambiguous fields flagged as **verification issues** for correction | ambiguous values are never silently trusted | Ambiguous date/unit/OCR cases produce blocking `VI-*` verification issues and `verification_status=pending`; unverified fields are excluded from comparisons, review rules, and drafts; `DR-*` review items do not exist until verification completes | `REQ-VERIFY-02`, `REQ-SEC-04`, `REQ-RULE-01` | P3 |
 | `US-06` | Doctor | to confirm or correct an extracted field | the record reflects my judgment, not the OCR guess | Verification endpoint requires role `doctor`, patient scope, and an explicit value or rejection; audit stores before/after, verifier, and timestamp | `REQ-VERIFY-03`, `REQ-AUDIT-01` | P3 |
-| `US-07` | Doctor | to see current vs prior measurements | I can judge change without recomputing | Timeline/compare output shows prior value, current value, delta, units, and timestamps with source IDs; missing baselines are labeled, not imputed | `REQ-MON-01/02` | P2/P4 |
-| `US-08` | Doctor | a queue of items that a deterministic demo policy asked me to look at | nothing enters my attention silently or by model opinion | Each review item lists rule ID, evidence IDs, reason code, and generated-at version; the same input twice produces no duplicate item | `REQ-RULE-01/02/03` | P4 |
+| `US-07` | Doctor | to see current vs prior measurements | I can judge change without recomputing | Timeline/compare output shows prior value, current value, delta, units, timestamps, source IDs and whether each value is self-reported or doctor-verified; missing baselines are labeled, not imputed | `REQ-MON-01/02`, `REQ-DATA-04` | P2/P4 |
+| `US-08` | Doctor | a queue of post-verification items that a deterministic demo policy asked me to look at | nothing enters my attention silently or by model opinion | Each review item lists rule ID, evidence IDs, reason code, trust basis and policy version; the same input twice produces no duplicate item; pre-verification blockers are shown separately as verification issues | `REQ-RULE-01/02/03`, `REQ-DATA-04` | P4 |
 | `US-09` | Doctor | a draft summary whose every claim links to evidence | I can verify before trusting | Each factual sentence maps to ≥1 evidence reference; unsupported statements are omitted or listed as "not asserted"; provider/model/prompt version recorded | `REQ-LLM-01/02/03` | P5 |
 | `US-10` | Doctor | to approve, edit, or reject before anything is finalized | I remain the decision-maker | Workflow pauses at an interrupt; no task/notification exists before a decision; reject creates no task; resuming after a restart does not duplicate side effects | `REQ-GRAPH-03/04`, `REQ-TASK-01` | P5 |
 | `US-11` | Doctor | an in-app task and notification for an approved action only | follow-up is organized without messaging patients automatically | Task references the approval decision ID; notification is in-app; no outbound SMS/email/WhatsApp code path exists | `REQ-TASK-01/02`, `REQ-SEC-03` | P6 |
@@ -95,7 +99,8 @@ Headline rules:
 
 - `ACT-DOC` may read any **assigned** patient and write only verification, review-decision, and task-completion records.
 - `ACT-PAT` may read/write **only self-scoped** observations and documents, and may never read drafts, review items, or tasks.
-- `ACT-SYS` may read the run's scoped context and write only audit, workflow-state, review-item, draft, and (post-approval) task records.
+- `ACT-SYS` may read the run's scoped context and write only audit, workflow-state, verification-issue, review-item, draft, and (post-approval) task records.
+- No role may relabel a self-reported check-in as doctor-verified; the label is derived from provenance (`REQ-DATA-04`).
 - No actor, including `ACT-SYS`, may send an external message, prescribe, or write a clinical plan.
 
 ## 6. Non-goals (MVP, binding)
@@ -130,6 +135,7 @@ IDs are stable; each must be traceable to a component, a test, and a phase.
 | `REQ-DATA-01` | Observations store patient, encounter, measured-at (UTC), type, numeric value, unit, source, and validation result. | P2 |
 | `REQ-DATA-02` | Unit allowlist per observation type; unknown/absent units are rejected for check-ins and flagged for documents. | P2 |
 | `REQ-DATA-03` | All identifiers are stable UUIDs; all timestamps stored UTC ISO-8601; display time zone is explicit. | P2 |
+| `REQ-DATA-04` | Every observation carries `trust_level ∈ {self_reported_validated, doctor_verified}`; self-reported values are labelled as such everywhere and are never described as doctor-verified. Rejected observations are excluded from comparisons and rules. | P2 |
 
 ### 7.3 Document ingestion and OCR
 | ID | Requirement | Phase |
@@ -150,7 +156,7 @@ IDs are stable; each must be traceable to a component, a test, and a phase.
 ### 7.5 Monitoring and comparisons
 | ID | Requirement | Phase |
 |---|---|---|
-| `REQ-MON-01` | Compare current verified observation to the most recent prior verified value of the same type/unit. | P4 |
+| `REQ-MON-01` | Compare the current admissible observation (`validation != rejected`) to the **most recent prior** admissible value of the same type/unit, recording `trust_basis`; never against the oldest value and never with an imputed baseline. | P4 |
 | `REQ-MON-02` | Never impute missing baselines or convert units silently; label unit mismatch as incomparable. | P4 |
 | `REQ-MON-03` | Detect duplicate, out-of-order, and contradictory observations and surface them as data-quality items. | P4 |
 
@@ -208,6 +214,7 @@ IDs are stable; each must be traceable to a component, a test, and a phase.
 |---|---|---|
 | `REQ-OPS-01` | Deterministic seeding produces byte-stable fixture IDs for the three demo cases. | P2/P8 |
 | `REQ-OPS-02` | One-command local start/stop/test/reset on the owner's Windows laptop; documented prerequisites. | P1/P8 |
+| `REQ-OPS-04` | Demo-mode rule evaluation uses an injected `as_of_utc` fixed per run and persisted; fixtures and tests never call the wall clock, and the value used is returned by the API. | P4 |
 | `REQ-EVAL-01` | Synthetic gold fixtures with expected rule IDs and expected decisions are versioned and replayed by tests. | P4/P7 |
 | `REQ-EVAL-02` | Extraction precision/recall reported on labeled synthetic documents; ambiguous cases 100% routed to verification. | P3/P7 |
 | `REQ-EVAL-03` | Runtime and fallback behavior measured on the owner's machine and reported honestly (including "not measured"). | P5/P7 |
@@ -233,6 +240,7 @@ IDs are stable; each must be traceable to a component, a test, and a phase.
 | `OQ-04` | Should demo admin reset be reachable from the UI? | CLI/PowerShell only; endpoint disabled unless `DEMO_MODE=true` |
 | `OQ-05` | Preferred Arabic/English balance in the UI? | English UI, Arabic explanation in discussion material only |
 | `OQ-06` | Does the owner accept the numeric parameters in `DEMO_REVIEW_RULES.md` as arbitrary demo values? | Rules stay clearly non-clinical and parameterized |
+| `OQ-07` | Is accepting **self-reported validated** check-ins as comparison inputs acceptable, or must every observation be doctor-verified (adding a verification workflow)? | Self-reported values are admissible but always labelled; document values require verification |
 
 ## 10. Success criteria for the MVP (definition of demo-done)
 

@@ -2,7 +2,7 @@
 
 **Multi-Agent Clinical Workflow Assistant — DEPI Graduation Project**
 
-Doctor-centered educational demonstration. The application will take **synthetic** periodic patient measurements and mock PDF reports, extract grounded facts, compare them with history, draft source-cited summaries for the doctor, and organize doctor-approved in-app follow-up tasks.
+Doctor-centered educational demonstration. The application will take **synthetic** periodic patient measurements and mock PDF reports, extract grounded facts, compare them with history, draft source-cited summaries for the doctor, and organize doctor-approved in-app follow-up tasks. Self-reported check-ins are labelled as such and are never presented as doctor-verified.
 
 > **EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE.**
 > Academic prototype with fictitious data only. No autonomous diagnosis, treatment, prescribing, emergency
@@ -13,7 +13,7 @@ Doctor-centered educational demonstration. The application will take **synthetic
 
 | Phase | Status | Notes |
 |---|---|---|
-| **P0 — Governance and specification baseline** | **IN_REVIEW** | Documentation-only PR submitted; owner review and approval pending. Not accepted, not merged. |
+| **P0 — Governance and specification baseline** | **IN_REVIEW** | Documentation-only PR submitted; review round 1 findings (P0-R01…R07 + ADR-0006 depth) addressed in a follow-up commit; owner re-review pending. Not accepted, not merged. |
 | P1–P8 | TODO | Must not start before P0 is approved |
 
 No application code exists yet, and no test, benchmark, or demo has been executed. What exists is a
@@ -27,7 +27,7 @@ See [Phase 0 report](docs/phase-reports/PHASE_0_REPORT.md) for exactly what was 
 2. [MVP specification](docs/contracts/MVP_SPEC.md) — actors, user stories, requirements, non-goals.
 3. [Architecture baseline](docs/architecture/ARCHITECTURE.md) — diagram, layers, role/permission matrix.
 4. [Decision records](docs/architecture/ARCHITECTURE.md#10-architecture-decisions) — six ADRs.
-5. [Shared state + graph contract](docs/contracts/STATE_AND_GRAPH_CONTRACT.md) — agents, transitions, checkpoint, interrupt/resume, idempotency.
+5. [Shared state + graph contract](docs/contracts/STATE_AND_GRAPH_CONTRACT.md) — agents, transitions, checkpoint, interrupt/resume, idempotency; `VI-*` (pre-verification) vs `DR-*` (post-verification) outputs.
 6. [Tool contracts](docs/contracts/TOOL_CONTRACTS.md) and [API contract](docs/contracts/API_CONTRACT.md) + [OpenAPI proposal](docs/contracts/openapi.phase0.yaml).
 7. [Data dictionary](docs/contracts/DATA_DICTIONARY.md) and [extraction/provenance contract](docs/contracts/EXTRACTION_PROVENANCE.md).
 8. [Clinical safety](docs/clinical-safety/CLINICAL_SAFETY.md), [demo review rules](docs/clinical-safety/DEMO_REVIEW_RULES.md), [threat model](docs/clinical-safety/THREAT_MODEL.md).
@@ -39,10 +39,13 @@ Governance: [AGENTS.md](AGENTS.md) (agent rules) · [MASTER_PLAN.md](docs/roadma
 
 ## The one workflow in scope
 
-Patient check-in + optional document upload → intake validation → text-first extraction with OCR fallback →
-**doctor verification of ambiguous facts** → comparison with the prior verified value → deterministic
-`DEMO_ONLY` review prompts → cited draft summary (local Ollama, or a clearly labelled deterministic
-fallback) → **doctor approve / edit / reject** → in-app follow-up task + notification + audit trail.
+Patient check-in + optional document upload → intake validation → text-first extraction with a bounded,
+trace-recorded OCR-retry path → **verification issues (`VI-*`) and doctor correction of ambiguous facts** →
+comparison against the most recent prior admissible value (with trust labels) → deterministic `DEMO_ONLY`
+review prompts (`DR-*`, verified evidence only) → cited draft summary (local Ollama, or a clearly labelled
+deterministic fallback) → **doctor approve / edit / reject** → in-app follow-up task + notification + audit
+trail, committed exactly once. Rule evaluation uses an injected `as_of_utc`, so demo expectations do not
+drift with the calendar.
 
 Five bounded agent nodes (`medical_document`, `patient_monitoring`, `review_priority`,
 `doctor_communication`, `follow_up`) run inside **one** LangGraph graph. Only the drafting node may call a

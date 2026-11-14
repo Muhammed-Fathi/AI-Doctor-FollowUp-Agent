@@ -3,10 +3,11 @@
 | Field | Value |
 |---|---|
 | Document ID | `CTR-DATA-001` |
-| Version | `0.1.0-p0` |
+| Version | `0.2.0-p0` |
 | Status | **IN REVIEW — schema proposal; no tables exist** |
 | Phase | `P0` (design). Implementation: P2 (core), P3 (documents/facts), P4 (reviews), P5 (workflow), P6 (tasks) |
-| Related | `REQ-DATA-01/02/03`, `REQ-VERIFY-01/02/03`, `REQ-GRAPH-02`, ADR-0003 |
+| Related | `REQ-DATA-01/02/03/04`, `REQ-VERIFY-01/02/03`, `REQ-GRAPH-02`, `REQ-OPS-04`, ADR-0003 |
+| Revision | 0.2.0: observation `trust_level` (`P0-R05`), `verification_issue` table for pre-verification blockers (`P0-R03`), `as_of_utc` on runs (`P0-R07`), deterministic task identity (`P0-R04`), document-vs-observation unit split (`P0-R06`) |
 
 Conventions:
 
@@ -31,7 +32,9 @@ erDiagram
     DOCUMENT ||--o{ EXTRACTED_FACT : contains
     EXTRACTED_FACT ||--o{ FACT_VERIFICATION : verified_by
     PATIENT ||--o{ REVIEW_ITEM : has
+    DOCUMENT ||--o{ VERIFICATION_ISSUE : "raises"
     REVIEW_ITEM ||--o{ EVIDENCE_LINK : "supported by"
+    VERIFICATION_ISSUE ||--o{ EVIDENCE_LINK : "supported by"
     PATIENT ||--o{ SUMMARY_DRAFT : has
     SUMMARY_DRAFT ||--o{ SUMMARY_CLAIM : contains
     SUMMARY_CLAIM ||--o{ EVIDENCE_LINK : "supported by"
@@ -135,7 +138,7 @@ Index: `ix_attempt_document (document_id, created_at DESC)`.
 | `field_name` | TEXT(24) | NOT NULL, CHECK in (`report_date`,`test_name`,`value`,`unit`,`reference_text`) | Declared field set only (`REQ-ING-03`) |
 | `raw_text` | TEXT(300) | NOT NULL | Exactly as extracted |
 | `normalized_value` | TEXT(120) | NULL | Deterministic normalization only |
-| `unit` | TEXT(32) | NULL | |
+| `unit` | TEXT(32) | NULL | Document unit list (`mmHg`, `bpm`, `mg/dL`, `g/dL`, `%`); a document unit is text, not an `Observation` unit (`P0-R06`) |
 | `page_index` | INTEGER | NOT NULL, CHECK `>= 0` | |
 | `char_start` / `char_end` | INTEGER | NOT NULL, CHECK `char_end >= char_start` | Span in the page/OCR text |
 | `quality_flags` | TEXT(200) | NOT NULL | JSON array of `QualityFlag` values |
@@ -175,13 +178,40 @@ Index: `ix_factver_fact (fact_id, decided_at DESC)`. No UPDATE/DELETE path — a
 | `measured_at` | TEXT(20) | NOT NULL | Must be ≤ now + 5 min (clock-skew guard) |
 | `source` | TEXT(24) | NOT NULL, CHECK in (`patient_checkin`,`verified_document`,`seed_fixture`) | |
 | `source_fact_id` | TEXT(36) | NULL, FK `extracted_fact.id` | Set when derived from a verified document |
-| `validation` | TEXT(16) | NOT NULL DEFAULT `'ok'`, CHECK in (`ok`,`ok_with_warning`,`rejected`) | |
+| `validation` | TEXT(16) | NOT NULL DEFAULT `'ok'`, CHECK in (`ok`,`ok_with_warning`,`rejected`) | Data check only (schema, unit, plausibility) — **not** a human verification |
+| `trust_level` | TEXT(28) | NOT NULL, CHECK in (`self_reported_validated`,`doctor_verified`) | Provenance class (`REQ-DATA-04`) |
+| `verified_by_user_id` | TEXT(36) | NULL, FK `user.id` | Required iff `trust_level='doctor_verified'`; must be role `doctor` |
+| `verified_at` | TEXT(20) | NULL | Required iff `trust_level='doctor_verified'` |
 | `note` | TEXT(500) | NULL | Patient's own words, quoted only |
 | `created_at` | TEXT(20) | NOT NULL | |
 | `created_by_user_id` | TEXT(36) | NULL | |
 
-Indexes: `ix_obs_patient_type_time (patient_id, measure_type, measured_at DESC)`.
-CHECK: `source='verified_document'` requires `source_fact_id IS NOT NULL`.
+Indexes: `ix_obs_patient_type_time (patient_id, measure_type, measured_at DESC)`; `ix_obs_trust (patient_id, trust_level)`.
+
+CHECK constraints:
+- `source='verified_document'` requires `source_fact_id IS NOT NULL` **and** `trust_level='doctor_verified'`.
+- `trust_level='doctor_verified'` ⇔ `verified_by_user_id IS NOT NULL AND verified_at IS NOT NULL`.
+- `trust_level='self_reported_validated'` requires both verification columns to be `NULL` — a check-in cannot
+  claim doctor verification (`P0-R05`).
+- `validation='rejected'` rows are retained for audit but are inadmissible to comparisons and rules (`REQ-DATA-04`).
+
+### 2.8a `verification_issue` (pre-verification blockers)
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | TEXT(36) | PK | |
+| `patient_id` | TEXT(36) | NOT NULL, FK `patient.id` | |
+| `workflow_run_id` | TEXT(36) | NULL, FK `workflow_run.id` | NULL only for pre-run document intake views |
+| `document_id` | TEXT(36) | NULL, FK `document.id` | |
+| `issue_type` | TEXT(8) | NOT NULL, CHECK in (`VI-001`…`VI-006`) | No rule ID, no severity |
+| `reason_code` | TEXT(64) | NOT NULL | e.g. `unit_missing_or_unsupported` |
+| `blocking` | INTEGER | NOT NULL DEFAULT 1, CHECK `blocking = 1` | Structural: these issues always block |
+| `message` | TEXT(240) | NOT NULL | Neutral wording from `DEMO_REVIEW_RULES.md` §6.1 |
+| `state` | TEXT(12) | NOT NULL DEFAULT `'open'`, CHECK in (`open`,`resolved`,`superseded`) | |
+| `created_at` | TEXT(20) | NOT NULL | |
+
+Index: `ix_vi_document_state (document_id, state)`; `ix_vi_run (workflow_run_id)`.
+No `rule_id` column exists — a `VerificationIssue` can never be stored as a review item (`P0-R03`).
 
 ### 2.9 `review_item`
 
@@ -190,13 +220,14 @@ CHECK: `source='verified_document'` requires `source_fact_id IS NOT NULL`.
 | `id` | TEXT(36) | PK | |
 | `patient_id` | TEXT(36) | NOT NULL, FK `patient.id` | |
 | `workflow_run_id` | TEXT(36) | NOT NULL, FK `workflow_run.id` | |
-| `rule_id` | TEXT(8) | NOT NULL, CHECK matches `^DR-\d{3}$` | Deterministic rule (`REQ-RULE-01`) |
+| `rule_id` | TEXT(8) | NOT NULL, CHECK `^DR-\d{3}$` and in (`DR-001`,`DR-003`,`DR-005`,`DR-006`,`DR-008`,`DR-009`) | Deterministic post-verification rule (`REQ-RULE-01`); retired IDs `DR-002/004/007/010` are rejected |
 | `reason_code` | TEXT(64) | NOT NULL | e.g. `bp_delta_above_demo_parameter` |
 | `workflow_hint` | TEXT(24) | NOT NULL, CHECK in (`data_quality`,`verification_needed`,`change_to_review`) | Ordering metadata, not severity |
+| `trust_basis` | TEXT(16) | NOT NULL, CHECK in (`self_reported`,`doctor_verified`,`mixed`) | Provenance class of the evidence behind the item (`REQ-DATA-04`) |
 | `message` | TEXT(240) | NOT NULL | Neutral wording; no clinical interpretation |
 | `policy_version` | TEXT(24) | NOT NULL | |
 | `demo_only` | INTEGER | NOT NULL DEFAULT 1, CHECK `demo_only = 1` | Structural honesty |
-| `dedupe_key` | TEXT(64) | NOT NULL | `^[0-9a-f]{64}$`; UNIQUE with `workflow_run_id` |
+| `dedupe_key` | TEXT(64) | NOT NULL | `sha256(patient_id \| rule_id \| sorted evidence keys \| trust_basis)`; UNIQUE with `workflow_run_id` |
 | `state` | TEXT(16) | NOT NULL DEFAULT `'open'`, CHECK in (`open`,`decided`,`superseded`) | |
 | `created_at` | TEXT(20) | NOT NULL | |
 
@@ -207,7 +238,7 @@ Indexes: `ux_review_dedupe (workflow_run_id, dedupe_key)`; `ix_review_patient_st
 | Column | Type | Constraints | Notes |
 |---|---|---|---|
 | `id` | TEXT(36) | PK | |
-| `owner_type` | TEXT(24) | NOT NULL, CHECK in (`review_item`,`summary_claim`) | |
+| `owner_type` | TEXT(24) | NOT NULL, CHECK in (`review_item`,`verification_issue`,`summary_claim`) | |
 | `owner_id` | TEXT(36) | NOT NULL | |
 | `kind` | TEXT(24) | NOT NULL, CHECK in (`document_span`,`observation`,`checkin_note`) | Mirrors `ProvenanceRef.kind` |
 | `document_id` | TEXT(36) | NULL, FK `document.id` | Required for `document_span` |
@@ -277,7 +308,7 @@ CHECK: `decision='edit' ⇒ edited_body IS NOT NULL`.
 | `note` | TEXT(500) | NULL | |
 | `due_date` | TEXT(10) | NULL | Doctor-chosen |
 | `status` | TEXT(12) | NOT NULL DEFAULT `'open'`, CHECK in (`open`,`completed`,`cancelled`) | |
-| `idempotency_key` | TEXT(64) | NOT NULL UNIQUE | `REQ-GRAPH-04` |
+| `idempotency_key` | TEXT(64) | NOT NULL UNIQUE | `action_key = sha256(workflow_version \| patient_id \| approval_decision_id \| "followup_task" \| "slot:1")`; `id` is `uuid5(TASK_NAMESPACE, action_key)` so a retry recomputes the same row (`REQ-GRAPH-04`, `P0-R04`) |
 | `created_at` / `completed_at` | TEXT(20) | NOT NULL / NULL | |
 
 CHECK: `status='completed' ⇒ completed_at IS NOT NULL`.
@@ -307,6 +338,7 @@ There is no transport column, no provider column, and no "sent" status — by de
 | `workflow_version` | TEXT(12) | NOT NULL | |
 | `state_schema_version` | TEXT(12) | NOT NULL | |
 | `policy_version` | TEXT(24) | NOT NULL | |
+| `as_of_utc` | TEXT(20) | NOT NULL | Injected evaluation clock used by every time-dependent rule (`REQ-OPS-04`) |
 | `status` | TEXT(24) | NOT NULL | Mirrors `RunStatus` |
 | `current_node` | TEXT(32) | NULL | |
 | `halt_reason` | TEXT(32) | NULL | |
@@ -337,6 +369,8 @@ No UPDATE/DELETE in the application layer; only the demo reset removes rows (who
 
 ## 3. Units and validation rules
 
+### 3.1 Observation units (comparable measurements)
+
 | Measure | Allowed unit | Demo plausibility band (data-quality heuristic, **not** a clinical range) | Notes |
 |---|---|---|---|
 | `systolic_bp` | `mmHg` | 50–300 | Outside band → `ok_with_warning`, never a diagnosis |
@@ -344,12 +378,22 @@ No UPDATE/DELETE in the application layer; only the demo reset removes rows (who
 | `heart_rate` | `bpm` | 20–250 | |
 | `glucose` | `mg/dL` | 10–900 | Unit `mmol/L` **rejected at intake** in MVP with a typed error |
 
+### 3.2 Document units (extracted report text)
+
+`ExtractedFact.unit` is wider than the observation allowlist because a report may legitimately print other units:
+`mmHg`, `bpm`, `mg/dL`, `g/dL`, `%`. These are **strings in document context**; they never become an
+`Observation` unit unless an explicit mapping exists (`systolic_bp`/`diastolic_bp` → `mmHg`, `heart_rate` →
+`bpm`, `glucose` → `mg/dL`). A hemoglobin value in `g/dL` is therefore a verified fact used in the summary and
+**not** a comparable measurement — it produces no `DR-*` item (`P0-R06`).
+
 Rules:
 
 1. The band exists to catch typos and unit confusion (e.g. `1200 mmHg`); it is not a normal/abnormal judgement and must be labelled that way in code comments and UI.
-2. Unknown or missing units are never assumed. Documents keep `unit=NULL` + `ambiguous_unit` flag and require doctor verification.
-3. No unit conversion in the MVP; a mismatched unit yields `comparable=false`.
+2. Unknown or missing units are never assumed. Documents keep `unit=NULL` + `ambiguous_unit` flag and produce blocking `VI-001`.
+3. No unit conversion in the MVP; a mismatched unit yields `comparable=false`. A document unit outside the list (`mmol/L`) produces `VI-001`, never a conversion.
 4. The demo values in `docs/clinical-safety/DEMO_REVIEW_RULES.md` consume these typed values; they do not redefine them.
+5. `validation` (data check) and `trust_level` (provenance class) are independent: a self-reported check-in can be
+   `validation='ok'` and `trust_level='self_reported_validated'`, and the UI must say "self-reported" (`REQ-DATA-04`).
 
 ## 4. Migration and reset policy
 

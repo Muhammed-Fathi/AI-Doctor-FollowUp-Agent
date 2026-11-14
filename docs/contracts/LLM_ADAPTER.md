@@ -3,10 +3,10 @@
 | Field | Value |
 |---|---|
 | Document ID | `CTR-LLM-001` |
-| Version | `0.1.0-p0` |
+| Version | `0.2.0-p0` |
 | Status | **IN REVIEW — design only; no model call has been made from this repository** |
 | Phase | `P0` (design). Implementation and measurement: P5; hardening: P7 |
-| Related | `REQ-LLM-01..04`, ADR-0002, `docs/evaluation/LOCAL_BENCHMARK_PLAN.md` |
+| Related | `REQ-LLM-01..04`, `REQ-DATA-04`, ADR-0002, ADR-0006, `docs/evaluation/LOCAL_BENCHMARK_PLAN.md` |
 
 > Nothing in this document claims a model works, is fast, or is installed. All performance statements are
 > plans to be measured on the owner's laptop (`ASM-01`, `ASM-02`) and reported as measured or not measured.
@@ -81,10 +81,13 @@ The fallback is a **feature**, not a failure: it guarantees the demo can run off
 1. **Evidence in, prose out.** The model receives only verified facts, comparisons, and rule items — never raw document text, never unverified values, never another patient's data.
 2. **Citation obligation.** Every claim must reference at least one supplied evidence ID. Post-processing drops claims that reference unknown evidence IDs, and the count is recorded.
 3. **No new numbers.** Any number in a claim must appear in the supplied evidence; a mismatch drops the claim.
-4. **No advice, no diagnosis, no thresholds.** The prompt forbids recommendations, risk statements, and patient-directed language; a content filter rejects drafts containing prohibited patterns (e.g. "you should", "take", "diagnosis", "urgent", "dose").
-5. **Uncertainty is explicit.** Missing baselines, pending facts, and incomparable units must appear in `uncertainties`/`not_asserted`, never be smoothed over.
-6. **Untrusted data.** Document-derived strings are delimited and labelled as data. A detected instruction-like string is preserved verbatim in evidence but never executed (`REQ-SEC-02`).
-7. **Deterministic validation before display.** A draft passes a validator (schema, citations, prohibited content, length) or it is replaced by the fallback.
+4. **Provenance wording.** A claim that cites a `self_reported_validated` observation must include
+   `(self-reported)`; a validator drops or repairs a claim that presents such a value as doctor-verified
+   (`REQ-DATA-04`, `TRUST-01`).
+5. **No advice, no diagnosis, no thresholds.** The prompt forbids recommendations, risk statements, and patient-directed language; a content filter rejects drafts containing prohibited patterns (e.g. "you should", "take", "diagnosis", "urgent", "dose").
+6. **Uncertainty is explicit.** Missing baselines, pending facts, and incomparable units must appear in `uncertainties`/`not_asserted`, never be smoothed over.
+7. **Untrusted data.** Document-derived strings are delimited and labelled as data. A detected instruction-like string is preserved verbatim in evidence but never executed (`REQ-SEC-02`).
+8. **Deterministic validation before display.** A draft passes a validator (schema, citations, prohibited content, length) or it is replaced by the fallback.
 
 ## 4. Reproducibility and provenance
 

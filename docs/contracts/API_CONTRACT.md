@@ -3,11 +3,12 @@
 | Field | Value |
 |---|---|
 | Document ID | `CTR-API-001` |
-| Version | `0.1.0-p0` |
+| Version | `0.2.0-p0` |
 | Status | **IN REVIEW — proposal only; no server exists in P0** |
 | Phase | `P0` (design). Implementation: P2 (auth/data), P3 (documents), P5 (workflows), P6 (UI) |
 | Machine-readable companion | [`openapi.phase0.yaml`](openapi.phase0.yaml) |
-| Related | `REQ-AUTH-01..03`, `REQ-ING-01`, `REQ-VERIFY-03`, `REQ-GRAPH-03`, `REQ-TASK-01/02`, `REQ-AUDIT-02` |
+| Related | `REQ-AUTH-01..03`, `REQ-ING-01`, `REQ-VERIFY-03`, `REQ-GRAPH-03`, `REQ-TASK-01/02`, `REQ-AUDIT-02`, `REQ-DATA-04`, `REQ-OPS-04` |
+| Revision | 0.2.0: exposes observation `trust_level`, `verification_issues[]` (pre-verification), review `trust_basis`, run `as_of_utc`, and the deterministic `finalizing` state (`P0-R03`, `P0-R04`, `P0-R05`, `P0-R07`) |
 
 > All endpoints below are proposals. Nothing is binding until the OpenAPI file is validated at P1 and
 > contract tests exist (P2+). No endpoint is implemented in Phase 0.
@@ -28,7 +29,8 @@
 | Pagination | `?limit=` (default 20, max 100) and `?cursor=`; responses include `next_cursor` |
 | Errors | RFC-9457-style problem object (below), stable machine-readable `code` |
 | Rate/size limits | Upload ≤ 10 MiB, ≤ 20 pages; JSON body ≤ 256 KiB |
-| Traceability | Every response that depends on a run includes `run_id`; every clinical fact carries evidence references |
+| Traceability | Every response that depends on a run includes `run_id` and `as_of_utc`; every clinical fact carries evidence references |
+| Provenance labels | Observations expose `trust_level`; review items expose `trust_basis`; the API never calls a self-reported value doctor-verified |
 | Prohibited | No endpoint sends messages, prescribes, exports datasets, or returns model-only clinical conclusions |
 
 ### 1.1 Error envelope
@@ -100,7 +102,7 @@ Login is rate-limited and constant-time-ish in failure messaging (details at P2)
 | GET | `/api/v1/patient/check-ins` | patient (self) | – | `200 {items[]}` | `401` |
 | POST | `/api/v1/documents/upload` | patient (self) | `multipart/form-data`: `file`, `declared_type?` | `202 {document_id, status:"pending_extraction", sha256, page_count}` | `400 E_VALIDATION`, `413 E_FILE_TOO_LARGE`, `415 E_UNSUPPORTED_MEDIA`, `422 E_PAGE_LIMIT_EXCEEDED`, `409 E_DUPLICATE_DOCUMENT` |
 | GET | `/api/v1/documents/{document_id}` | patient (self) / doctor (assigned) | – | `200 {document metadata, extraction_status}` | `403`, `404` |
-| GET | `/api/v1/documents/{document_id}/extraction` | doctor (assigned) | – | `200 {facts[], attempts[], document_status}` | `403`, `404`, `409 E_EXTRACTION_PENDING` |
+| GET | `/api/v1/documents/{document_id}/extraction` | doctor (assigned) | – | `200 {facts[], attempts[], verification_issues[], document_status}` | `403`, `404`, `409 E_EXTRACTION_PENDING` |
 | POST | `/api/v1/documents/{document_id}/verify` | doctor (assigned) | `{fact_id, decision:"verified"\|"rejected"\|"corrected", corrected_value?, corrected_unit?, reason?}` | `200 {fact, verification, document_status}` | `400 E_VALIDATION`, `403`, `404`, `409 E_FACT_ALREADY_DECIDED` |
 | GET | `/api/v1/documents/{document_id}/file` | doctor (assigned) / patient (self) | – | `200` binary | `403`, `404` |
 
@@ -113,15 +115,20 @@ Upload validation order (fixed): declared size → magic bytes → allowed MIME 
 | Method | Path | Auth | Body | Success | Errors |
 |---|---|---|---|---|---|
 | POST | `/api/v1/workflows/follow-up` | doctor (assigned) | `{patient_id, observation_ids?, document_ids?, client_request_id}` + `Idempotency-Key` | `202 {run_id, status, current_node}` or `200` existing run on repeat | `400`, `403`, `409 E_IDEMPOTENCY_CONFLICT`, `409 E_UNVERIFIED_FACT`, `422 E_RUN_LIMIT_REACHED`, `503 E_MODEL_UNAVAILABLE` (only if fallback also disabled) |
-| GET | `/api/v1/workflows/{run_id}` | doctor (assigned) | – | `200 {run, draft?, review_items[], blocking_facts[], model_metadata, events[]}` | `403`, `404` |
-| GET | `/api/v1/workflows/{run_id}/trace` | doctor (assigned) | – | `200 {events[]}` | `403`, `404` |
+| GET | `/api/v1/workflows/{run_id}` | doctor (assigned) | – | `200 {run, draft?, verification_issues[], review_items[], blocking_facts[], model_metadata, events[]}` | `403`, `404` |
+| GET | `/api/v1/workflows/{run_id}/trace` | doctor (assigned) | – | `200 {events[]}` incl. `path_selected`/`path_reason` and `validation_outcome` | `403`, `404` |
 | POST | `/api/v1/workflows/{run_id}/decisions` | doctor (assigned) | `{decision:"approve"\|"edit"\|"reject", edited_summary?, reason?}` | `200 {run, decision, task?, notification?}` | `400`, `403`, `404`, `409 E_APPROVAL_CONFLICT`, `409 E_RUN_NOT_PAUSED`, `409 E_WORKFLOW_VERSION_MISMATCH` |
 | POST | `/api/v1/workflows/{run_id}/resume` | doctor (assigned) | `{resume_reason:"facts_verified"}` | `202 {run, status}` | `400`, `403`, `404`, `409 E_RUN_NOT_PAUSED`, `409 E_UNVERIFIED_FACT` |
 
 Rules:
 
 1. `POST /decisions` is the **only** path to task creation. `patient_id`, `doctor_id`, and facts are never taken from the request body.
-2. `approve` and `edit` return the created task + notification; `reject` returns neither (`US-10`).
+1a. A decision moves the run `awaiting_decision → finalizing`; task, notification, audit finalization and the
+   `finalizing → completed` transition commit atomically (unique indexes make replay a no-op).
+1b. `verification_issues[]` (pre-verification, blocking) and `review_items[]` (post-verification, `DR-*`) are
+   separate arrays with separate UI sections; a client must not merge or relabel them.
+2. `approve` and `edit` return the created task + notification; `reject` returns neither (`US-10`). The task ID is
+   derived deterministically from the stored decision, so a retried or restarted request cannot create a second task.
 3. A duplicate identical decision returns `200` with the stored result (idempotent); a conflicting decision returns `409 E_APPROVAL_CONFLICT`.
 4. `503 E_MODEL_UNAVAILABLE` is returned only when the fallback is explicitly disabled by configuration; the default demo returns a labelled fallback draft instead (`REQ-LLM-04`).
 
@@ -156,12 +163,13 @@ Full JSON Schemas live in `openapi.phase0.yaml`. Field-level meaning lives in `D
 | Schema | Key fields |
 |---|---|
 | `User` | `id, username, display_name, role, patient_id?, timezone` |
-| `Observation` | `id, patient_id, measure_type, value, unit, measured_at, source, validation` |
+| `Observation` | `id, patient_id, measure_type, value, unit, measured_at, source, validation, trust_level, verification (nullable object: `verified_by`, `verified_at`)` |
 | `DocumentMeta` | `id, patient_id, filename, mime_type, sha256, size_bytes, page_count, extraction_status, uploaded_at` |
-| `ExtractedFact` | `fact_id, document_id, field_name, raw_text, normalized_value, unit, page_index, char_start, char_end, quality_flags, verification_status, evidence` |
-| `ReviewItem` | `review_item_id, rule_id, reason_code, workflow_hint, message, evidence[], policy_version, demo_only:true, state` |
+| `ExtractedFact` | `fact_id, document_id, field_name, raw_text, normalized_value, unit, page_index, char_start, char_end, quality_flags, confidence, verification_status, evidence` |
+| `VerificationIssue` | `issue_id, issue_type (VI-001…VI-006), reason_code, blocking:true, message, document_id, fact_ids[], evidence[]` — never has a `rule_id` |
+| `ReviewItem` | `review_item_id, rule_id (DR-001/003/005/006/008/009), reason_code, workflow_hint, message, trust_basis, evidence[], policy_version, demo_only:true, state` |
 | `DraftSummary` | `draft_id, provider, model, execution_status, prompt_version, latency_ms, body, claims[], uncertainties[], not_asserted[], disclaimer` |
-| `WorkflowRun` | `run_id, status, current_node, workflow_version, policy_version, halt_reason, started_at, updated_at` |
+| `WorkflowRun` | `run_id, status, current_node, workflow_version, policy_version, as_of_utc, halt_reason, started_at, updated_at` |
 | `ApprovalDecision` | `decision_id, decision, edited_summary?, reason?, doctor_id, decided_at` |
 | `FollowUpTask` | `id, patient_id, approval_decision_id, title, note?, due_date?, status` |
 | `Notification` | `id, text, task_id?, read_at?, created_at` |
@@ -220,6 +228,12 @@ Full JSON Schemas live in `openapi.phase0.yaml`. Field-level meaning lives in `D
 | `NEG-13` | Check-in with unit `mmol/L` for glucose | `400 E_UNIT_NOT_ALLOWED` | `REQ-DATA-02` |
 | `NEG-14` | Response/log inspector over a seeded demo run for document text | No document body in audit `safe_detail` | `REQ-AUDIT-02` |
 | `NEG-15` | Search repository for `smtp`, `sendgrid`, `twilio`, `requests.post` to external hosts | None found | `REQ-SEC-03` |
+| `NEG-16` | Patient calls `GET /doctor/review-items` | `403`, no review or verification content | `REQ-AUTH-02` |
+| `NEG-17` | Patient calls `POST /workflows/follow-up` | `403` | `REQ-AUTH-02` |
+| `NEG-18` | Re-upload identical bytes for the same patient | `409 E_DUPLICATE_DOCUMENT`, existing document reused | `REQ-ING-04` |
+| `NEG-19` | Use an observation with `validation=rejected` as a comparison baseline | Excluded from `read_observations`; no comparison, no `DR-*` item | `REQ-DATA-04` |
+| `NEG-20` | Request a document extraction where a fact is pending | Blocking `VI-002`; no `review_items[]` entries and no draft | `REQ-SEC-04` |
+| `NEG-21` | Self-reported observation in a review message or draft claim | Rendered with `(self-reported)`; never described as verified | `REQ-DATA-04` |
 
 None of these are executed in P0. They become executable at the phase listed in
 [`../evaluation/EVALUATION_MATRIX.md`](../evaluation/EVALUATION_MATRIX.md).

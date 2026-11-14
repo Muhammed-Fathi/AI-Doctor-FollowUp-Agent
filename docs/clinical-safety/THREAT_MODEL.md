@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document ID | `SAFE-TM-001` |
-| Version | `0.1.0-p0` |
+| Version | `0.2.0-p0` |
 | Status | **IN REVIEW — mitigations are design commitments; only documentation checks were executed in P0** |
 | Phase | `P0` (design). Mitigations implemented P2–P6; verified P7 |
 | Related | `REQ-SEC-01..06`, `REQ-AUDIT-02`, ADR-0005 |
@@ -49,7 +49,7 @@ isolation, DDoS, cloud IAM) are out of scope and listed as such.
 | `T-07` | Restart mid-approval loses the gate or resumes with stale state | Medium | High | Checkpoint before interrupt; resume validates status and version; kill/restart test | `RESUME-01` (P7) |
 | `T-08` | Malicious or oversized upload exhausts resources or crashes the parser | Medium | Medium | Magic-byte check, 10 MiB cap, 20-page cap, 20 s parse timeout, per-page OCR cap, fail-closed errors | `NEG-03..05` (P3/P7) |
 | `T-09` | Silent unit/date misinterpretation (e.g. `03/04`, `mmol/L`, OCR `1O5`) | High | High | Unit allowlist, ambiguity flags, blocking verification, no conversion | `GOLD-EX-09..12`, `SAFE-02` (P3/P7) |
-| `T-10` | Wrong-patient document filed under the current patient | Medium | Critical | Document↔patient reference check (`DR-010`), mismatch blocks, explicit confirmation | `SAFE-06` (P3/P4) |
+| `T-10` | Wrong-patient document filed under the current patient | Medium | Critical | Document↔patient reference check (`VI-004`), blocking before any use, explicit re-attribution only | `SAFE-06`, `VI-03` (P3/P4) |
 | `T-11` | Audit trail contains sensitive text or is tampered with | Medium | Medium | `safe_detail` only; no body text; append-only; unique idempotency key; reviewer grep test | `NEG-14` (P7) |
 | `T-12` | Secrets, runtime DBs, uploads, or model weights committed | Medium | High | `.gitignore`, synthetic-only fixtures, PR review, repo scan | `SEC-06` (P1/P7) |
 | `T-13` | External messaging added accidentally or via a dependency | Low | Critical | No transport code; dependency allowlist review; repository scan for SMTP/Twilio/etc. | `NEG-15` (P6/P7) |
@@ -57,6 +57,9 @@ isolation, DDoS, cloud IAM) are out of scope and listed as such.
 | `T-15` | Demo data reset while a run is active, producing inconsistent state | Low | Medium | Reset refused when a run is active; full rebuild of DB/checkpoints/uploads | `NEG-12` (P6) |
 | `T-16` | Credential stuffing / brute force on local demo login | Low | Low | Seeded accounts, rate limit, no public exposure | `NEG-10` (P2/P7) |
 | `T-17` | Reviewer misreads demo output as clinical advice | Medium | High | Persistent disclaimer in UI/drafts/fixtures; neutral wording rules; demo script wording lock | Wording audit (P0/P8) |
+| `T-19` | A self-reported check-in is displayed or described as doctor-verified | Medium | High | `trust_level` + `verified_by` constraints; explicit `(self-reported)` suffix in messages and drafts; wording rules | `TRUST-01`, `NEG-21` (P4/P5/P7) |
+| `T-20` | Time-dependent demo rules drift on the defence date, changing expected outputs | High | Low | Injected `as_of_utc`, persisted per run and exposed by the API | `RULE-08` (P4) |
+| `T-21` | Retry after restart creates a duplicate task because the idempotency key contained a generated ID | Medium | High | Key derived only from the persisted decision + fixed slot; derived UUIDv5 task ID; atomic commit | `NEG-07`, `RESUME-01` (P7) |
 | `T-18` | Agent silently expands scope or auto-approves during a later phase | Low | Critical | `AGENTS.md` phase/scope rules, PR review, no auto-merge, phase gate statuses | Process (every PR) |
 
 ## 4. Threat-to-requirement mapping
@@ -66,11 +69,14 @@ isolation, DDoS, cloud IAM) are out of scope and listed as such.
 | `REQ-AUTH-01..03` | `T-01`, `T-16` |
 | `REQ-ING-01..05` | `T-08`, `T-09` |
 | `REQ-VERIFY-01..03` | `T-02`, `T-09`, `T-10` |
-| `REQ-RULE-01..03` | `T-02`, `T-05` |
+| `REQ-RULE-01..03` | `T-02`, `T-05`, `T-20` |
 | `REQ-GRAPH-01..05` | `T-06`, `T-07`, `T-18` |
 | `REQ-LLM-01..04` | `T-04`, `T-05`, `T-14` |
 | `REQ-TASK-01/02`, `REQ-AUDIT-01/02` | `T-03`, `T-11` |
 | `REQ-SEC-01..06` | `T-01`, `T-04`, `T-12`, `T-13`, `T-17` |
+| `REQ-DATA-04` | `T-19` |
+| `REQ-OPS-04` | `T-20` |
+| `REQ-GRAPH-04` (idempotency) | `T-21` |
 
 ## 5. Out of scope
 
@@ -85,7 +91,7 @@ isolation, DDoS, cloud IAM) are out of scope and listed as such.
 |---|---|
 | Threat table and mitigations documented | Done in P0 |
 | Repository wording/dependency audit | Documentation-level checks only (see phase report) |
-| Negative tests `NEG-01..15` | **Not executed** — defined for P2–P7 |
+| Negative tests `NEG-01..21` | **Not executed** — defined for P2–P7 |
 | Restart/resume test | **Not executed** — P7 |
 | Injection fixture | **Not executed** — P3/P5 |
 
