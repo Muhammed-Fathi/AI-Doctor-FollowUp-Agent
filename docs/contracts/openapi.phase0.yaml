@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: AI Doctor Follow-Up — Phase 0 API Proposal
-  version: 0.3.0-p0
+  version: 0.4.0-p0
   summary: Local, synthetic-data, doctor-in-the-loop follow-up workflow (proposal only; not implemented)
   description: |
     **EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE.**
@@ -1257,9 +1257,22 @@ components:
           maxItems: 4
           items:
             $ref: '#/components/schemas/EvidenceRef'
-    ExtractionAttempt:
+    ExtractionAttemptSummary:
       type: object
       additionalProperties: false
+      description: |
+        **Intentionally redacted projection** of the persisted extraction attempt (`DATA_DICTIONARY.md` §2.5),
+        served on the document detail endpoint. It exposes the route and outcome only.
+
+        The typed attempt metadata that the triage router consumes (`attempt_id`, `document_id`,
+        `preprocessing`, `engine_confidence`, `text_char_count`, `page_from`, `page_to`) is deliberately **not**
+        part of this DTO: a document response has no need for it, and keeping it out limits what a client can
+        infer. The doctor-visible *decision* derived from those attempts is exposed as
+        `TraceEvent.detail` (`TriageEventDetail`), where `engine_confidence` is nullable and only ever
+        engine-reported (`null` = the engine reported none — never estimated or back-filled).
+
+        State/DB shape (`ExtractionAttempt`) and this projection are related by a strict subset rule, asserted
+        by a contract check in `MAP-01`/`AD-01`.
       required: [path, succeeded, duration_ms, created_at]
       properties:
         path:
@@ -1269,11 +1282,13 @@ components:
           type: boolean
         error_code:
           type: [string, 'null']
+          maxLength: 48
         duration_ms:
           type: integer
           minimum: 0
         tool_version:
           type: [string, 'null']
+          maxLength: 64
         created_at:
           type: string
           format: date-time
@@ -1296,8 +1311,9 @@ components:
         attempts:
           type: array
           maxItems: 10
+          description: Redacted attempt projection; typed decision metadata is in the run trace.
           items:
-            $ref: '#/components/schemas/ExtractionAttempt'
+            $ref: '#/components/schemas/ExtractionAttemptSummary'
         verification_issues:
           type: array
           maxItems: 20

@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document ID | `CTR-API-001` |
-| Version | `0.3.0-p0` |
+| Version | `0.4.0-p0` |
 | Status | **IN REVIEW — proposal only; no server exists in P0** |
 | Phase | `P0` (design). Implementation: P2 (auth/data), P3 (documents), P5 (workflows), P6 (UI) |
 | Machine-readable companion | [`openapi.phase0.yaml`](openapi.phase0.yaml) |
@@ -51,6 +51,14 @@
 Rules:
 
 1. `code` is stable and documented in §4; `detail` never contains document body text, secrets, stack traces, or another patient's data.
+1a. **DTO redaction is explicit (`P0-R13`).** Document detail exposes `attempts[]` as `ExtractionAttemptSummary` —
+   route, outcome, duration, tool version, timestamp only. Typed attempt metadata (`preprocessing`,
+   `engine_confidence`, `text_char_count`, `page_from/to`, `attempt_id`) stays in the state/DB contract and is
+   surfaced to a doctor solely through `TraceEvent.detail` (`TriageEventDetail`), where
+   `engine_confidence` is nullable and engine-reported (`null` = not reported, never invented). A client must not
+   expect extraction metrics on the document endpoint.
+1b. `mapping_version` is internal in the MVP: it is persisted on the run for replay/explanation but is **not**
+   exposed by any endpoint, so no client contract depends on it.
 2. `401` responses do not reveal whether a patient exists (`REQ-AUTH-03`, `REQ-SEC-01`).
 3. `403` and `404` are used deliberately: `403` when the actor is authenticated but out of scope; `404` when the resource must not be acknowledged at all.
 4. Every denial appends an `access.denied` audit event with a `request_id`, never with the requested payload.

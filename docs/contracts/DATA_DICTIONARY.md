@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document ID | `CTR-DATA-001` |
-| Version | `0.3.0-p0` |
+| Version | `0.4.0-p0` |
 | Status | **IN REVIEW — schema proposal; no tables exist** |
 | Phase | `P0` (design). Implementation: P2 (core), P3 (documents/facts), P4 (reviews), P5 (workflow), P6 (tasks) |
 | Related | `REQ-DATA-01/02/03/04`, `REQ-VERIFY-01/02/03`, `REQ-GRAPH-02`, `REQ-OPS-04`, ADR-0003 |
@@ -353,7 +353,7 @@ There is no transport column, no provider column, and no "sent" status — by de
 | `halt_reason` | TEXT(32) | NULL | |
 | `idempotency_key` | TEXT(64) | NOT NULL UNIQUE | Repeat start returns this run |
 | `retry_counts` | TEXT(500) | NOT NULL DEFAULT `'{}'` | JSON, capped |
-| `mapping_version` | TEXT(12) | NOT NULL | Version of the closed fact → observation mapping used by the run (`REQ-DATA-05`) |
+| `mapping_version` | TEXT(16) | NOT NULL, `CHECK (mapping_version LIKE 'map-%.%.%')` | Version of the closed fact → observation mapping used by the run (`REQ-DATA-05`). Format `map-<major>.<minor>.<patch>`; the exact form is app-validated against `^map-\d+\.\d+\.\d+$` (SQLite cannot express a regex, so the CHECK is a shape guard only). Not exposed by the API in the MVP — it is persisted for replay/explanation (`P0-R12`) |
 | `checkpoint_ref` | TEXT(120) | NULL | Last checkpoint id/label — **advisory only**, never used to decide status (`P0-R09`) |
 | `started_at` / `updated_at` / `ended_at` | TEXT(20) | NOT NULL / NOT NULL / NULL | |
 
@@ -486,13 +486,30 @@ Rules:
    observation (`P0-R03`).
 9. Self-reported check-ins never travel this path: they are created by intake with
    `source='patient_checkin'`, `trust_level='self_reported_validated'` and no `source_fact_id`.
+10. **One measurement tuple per document (association rule, `P0-R14`).** Candidate facts are individual fields
+    (`test_name`, `value`, `unit`, `report_date`), so a report printing **two** tests would otherwise leave the
+    service unable to know which value belongs to which test. The MVP therefore refuses to guess:
+
+    - A document may contribute **at most one** `(test_name, value, unit)` mapping candidate.
+    - If the verified facts of a document contain **more than one distinct** `test_name`, or more than one value
+      that cannot be attributed to a single test, the document is **not mapped**: no observation is created
+      from it, and the gate raises a blocking `VI-002` with `reason_code=multi_measurement_document`
+      (message template reused, count = candidate facts). The document can still be verified field-by-field
+      for the summary, and its values remain `VerifiedFact`-only.
+    - Resolution is manual and explicit: the doctor may verify/reject facts so that exactly one measurement
+      tuple remains, after which the mapping rule above applies normally.
+    - This is a **declared MVP limitation**, not a clinical-NLP feature: there is no table or column
+      detection, no language parsing, and no heuristic association. A future association model would be a
+      mapping-version change with its own provenance.
+    - Test: `MAP-01` includes a two-test document fixture (`GOLD-NEG-10`) asserting 0 observations and the
+      blocking issue.
 
 Per-fixture expectation (`MAP-01`):
 
 | Fixture | Verified document facts | Observations created |
 |---|---|---|
 | Case A `REPORT-A-01` | `hemoglobin 13.4 g/dL`, reference range, report date, test name | **0** (unmapped name/unit — document-only) |
-| Case B `REPORT-B-02` | `glucose 104 mg/dL`, report date, test name | **1** (`glucose`, 2026-11-02T00:00:00Z) |
+| Case B `REPORT-B-01` | `glucose 104 mg/dL`, report date, test name | **1** (`glucose`, 2026-11-02T00:00:00Z) |
 | Case C `REPORT-C-01` (after correction) | `glucose 105 mg/dL`, report date `2026-11-03`, test name | **1** (`glucose`, 2026-11-03T00:00:00Z) — and **0** while the run is halted at `needs_verification` |
 
 ## 4. Migration and reset policy

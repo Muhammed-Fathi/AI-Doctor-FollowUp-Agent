@@ -3,11 +3,11 @@
 | Field | Value |
 |---|---|
 | Document ID | `CTR-STATE-001` |
-| Version | `0.3.0-p0` |
+| Version | `0.4.0-p0` |
 | Status | **IN REVIEW — proposal, not implemented** |
 | Phase | `P0` (design). Implementation: P5 |
-| Related | `REQ-GRAPH-01..05`, `REQ-LLM-02`, `REQ-RULE-03`, `REQ-DATA-04`, `REQ-OPS-04`, ADR-0006 |
-| Revision | 0.2.0 added `VerificationIssue` vs `ReviewFlag` separation (`P0-R03`), trust level and injected as-of clock (`P0-R05`, `P0-R07`), deterministic task identity (`P0-R04`) and the bounded decision loops (ADR-0006). 0.3.0 adds **typed trace detail payloads and typed extraction attempts** (`P0-R08`), the **app-DB source-of-truth / checkpoint reconciliation contract** (`P0-R09`), the **closed verified-fact → observation mapping version** (`P0-R10`) and the **observation admissibility predicate** (`P0-R11`) |
+| Related | `REQ-GRAPH-01..05`, `REQ-LLM-02`, `REQ-RULE-03`, `REQ-DATA-04`, `REQ-DATA-05`, `REQ-OPS-04`, ADR-0006 |
+| Revision | 0.2.0 added `VerificationIssue` vs `ReviewFlag` separation (`P0-R03`), trust level and injected as-of clock (`P0-R05`, `P0-R07`), deterministic task identity (`P0-R04`) and the bounded decision loops (ADR-0006). 0.3.0 adds **typed trace detail payloads and typed extraction attempts** (`P0-R08`), the **app-DB source-of-truth / checkpoint reconciliation contract** (`P0-R09`), the **closed verified-fact → observation mapping version** (`P0-R10`) and the **observation admissibility predicate** (`P0-R11`). 0.4.0 adds the distinct **`MappingVersion`** type (`P0-R12`), the **redacted API projection** note for attempts (`P0-R13`) and the **one-measurement-tuple-per-document association rule** (`P0-R14`) |
 | Runtime assumption | Python 3.12 on the owner's laptop; LangGraph + `langgraph-checkpoint-sqlite` (versions unverified — see `DEPENDENCIES.md`) |
 
 > This is a **contract proposal**. Nothing here is executed in P0. API details of LangGraph
@@ -40,7 +40,7 @@ Out of scope: prompt text, SQL schema (see `DATA_DICTIONARY.md`), HTTP shapes (s
 | `policy_version` | Version of the demo rule policy file | `demo-policy-1.1.0` |
 | `as_of_utc` | Injected evaluation clock: policy value in demo mode, real instant otherwise; persisted on the run | `2026-11-14T12:00:00Z` |
 | `prompt_version` | Version tag of the draft prompt/template | `draft-v1` |
-| `mapping_version` | Version of the closed verified-fact → observation mapping table (`DATA_DICTIONARY.md` §3.3) | `map-1.0.0` |
+| `mapping_version` | Version of the closed verified-fact → observation mapping table (`DATA_DICTIONARY.md` §3.3). Typed as **`MappingVersion`**, not `SemVer`: the format is `map-<major>.<minor>.<patch>` (`^map-\d+\.\d+\.\d+$`) | `map-1.0.0` |
 | `idempotency_key` | Server-computed SHA-256 over stable inputs (§7) | hex digest |
 
 Rules:
@@ -64,6 +64,9 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 SemVer = Annotated[str, StringConstraints(pattern=r"^\d+\.\d+\.\d+$")]
+# The mapping table is versioned with a prefixed id, so it needs its own annotated type:
+# a bare SemVer would reject the published default "map-1.0.0" (resolves `P0-R12`).
+MappingVersion = Annotated[str, StringConstraints(pattern=r"^map-\d+\.\d+\.\d+$")]
 Uuid = Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F-]{36}$")]
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 Iso = Annotated[str, StringConstraints(pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")]
@@ -273,6 +276,11 @@ class ExtractionAttempt(Strict):
     This is the *only* input `extraction_triage` may read (besides the candidate facts). It exists
     because attempt metadata is not derivable from `ExtractedFact` and must not be inferred from free
     text. Values are reported by the extractor at runtime; nothing here is promised in P0 (`P0-R08`).
+
+    This is the **internal** shape. The HTTP document endpoint exposes only a redacted projection
+    (`ExtractionAttemptSummary` in `openapi.phase0.yaml`): route/outcome/duration/tool version/timestamp.
+    Doctors see the derived decision through `TraceEvent.detail`; `engine_confidence` there is nullable and
+    engine-reported (`P0-R13`).
     """
     attempt_id: Uuid
     document_id: Uuid
@@ -286,6 +294,7 @@ class ExtractionAttempt(Strict):
     error_code: str | None = Field(default=None, max_length=48)
     duration_ms: int = Field(ge=0)
     tool_version: str | None = Field(default=None, max_length=64)
+    created_at: Iso                                     # attempt timestamp (also in the DB row)
 
 
 class TriageDetail(Strict):
@@ -348,7 +357,7 @@ class SharedGraphState(Strict):
     policy_version: str
     prompt_version: str
     as_of_utc: Iso
-    mapping_version: SemVer
+    mapping_version: MappingVersion
     idempotency_key: Sha256
     started_at: Iso
 
@@ -409,7 +418,10 @@ Design notes:
   (`ocr_transient_error`) rather than inventing a number.
 - **Mapping is closed and versioned.** Only a fixed alias/unit table (`map-1.0.0`, `DATA_DICTIONARY.md` §3.3)
   turns a verified fact into an observation; `mapping_version` is persisted with the run so a later mapping
-  change cannot silently reinterpret old data (`REQ-DATA-05`).
+  change cannot silently reinterpret old data (`REQ-DATA-05`). `MappingVersion` accepts exactly
+  `^map-\d+\.\d+\.\d+$`, so `"map-1.0.0"` validates while `"1.0.0"`, `"map-1.0"` and `"map-1.0.0-rc1"`
+  are rejected. `mapping_version` and `state_schema_version` are deliberately different types: one names a
+  policy table, the other a schema (`P0-R12`).
 
 ## 4. Nodes, reads/writes, and transitions
 
@@ -668,9 +680,14 @@ Additional invariants:
     is a data-quality defect. Triage never reads the document itself (`P0-R08`).
 12. Run status, the approval decision, tasks and notifications are read from the **app DB**; a checkpoint that
     disagrees is reconciled per §7.3 and never trusted for status (`P0-R09`).
-13. `mapping_version` is immutable per run; an observation may only be created from a verified fact whose
-    normalized test name **and** unit appear in the closed table for that `mapping_version` (`P0-R10`,
-    `REQ-DATA-05`).
+13. `mapping_version` is immutable per run and must satisfy `^map-\d+\.\d+\.\d+$` (`MappingVersion`); an
+    observation may only be created from a verified fact whose normalized test name **and** unit appear in the
+    closed table for that `mapping_version` (`P0-R10`, `P0-R12`, `REQ-DATA-05`).
+13a. **One measurement tuple per document** (`P0-R14`): a document contributes at most one
+    `(test_name, value, unit)` mapping candidate. A document whose verified facts hold more than one distinct
+    measurement tuple is not mapped at all; it raises a blocking `VI-002` with
+    `reason_code=multi_measurement_document` and stays document-only until exactly one tuple is verified. The
+    rule is a **declared limitation for this MVP**, not an extraction feature. Asserted by `MAP-01`.
 14. Observations handed to `compare_observations` pass the admissibility predicate
     (`TOOL_CONTRACTS.md` §3.4): `validation != rejected`, patient scope match, unit equals the measure's unit,
     parseable `measured_at`. `self_reported_validated` is **admissible and labelled**, never promoted

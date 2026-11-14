@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document ID | `EVAL-GOLD-001` |
-| Version | `0.3.0-p0` |
+| Version | `0.4.0-p0` |
 | Status | **IN REVIEW — fixture specification; files are created in P3/P4, none exist in P0** |
 | Phase | `P0` (spec). Authoring: P3 (documents) / P4 (rule cases) / P8 (demo seeding) |
 | Related | `REQ-EVAL-01/02`, `REQ-OPS-01`, `REQ-DATA-04`, `REQ-DATA-05`, `REQ-OPS-04`, `DEMO_REVIEW_RULES.md`, `DEMO_SCENARIOS.md` |
@@ -27,7 +27,7 @@
 | **Observation units** (comparable measurements) | Only `mmHg`, `bpm`, `mg/dL` — the `Observation` allowlist (`REQ-DATA-02`) |
 | **Document units** (extracted report text) | A separate, wider list for `ExtractedFact.unit`: `mmHg`, `bpm`, `mg/dL`, `g/dL`, `%`. Documents are **not** converted into observations except where an explicit mapping exists (BP, heart rate, glucose) |
 | Trust | Seeded check-ins are `self_reported_validated`; document values become `doctor_verified` only after a doctor verifies them (`REQ-DATA-04`) |
-| Fact → observation | Only mapped tuples create observations (`map-1.0.0`, `DATA_DICTIONARY.md` §3.3). Each case below states its expected count, asserted by `MAP-01` (`REQ-DATA-05`) |
+| Fact → observation | Only mapped tuples create observations (`map-1.0.0`, `DATA_DICTIONARY.md` §3.3). **At most one measurement tuple per document**; multi-test documents are not mapped and are flagged for manual verification (`GOLD-NEG-10`). Each case below states its expected count, asserted by `MAP-01` (`REQ-DATA-05`) |
 | Documents | Authored at P3 by a deterministic local generator from declared text; scans produced by rasterizing that same text with deliberate synthetic degradation (no real scans) |
 | Golden JSON | One expected-output file per case (`*.expected.json`) reviewed like code |
 | Storage | `data/synthetic/{patients,observations,reports,golden_cases}/`; runtime copies are gitignored |
@@ -308,6 +308,7 @@ Additional `AD-01` assertions:
 | `GOLD-NEG-07` | Report with `Glucose 105 mmol/L` | unit not in the document unit list → `VI-001`, no conversion |
 | `GOLD-NEG-08` | Exact duplicate of `REPORT-A-01` for the same patient | `NEG-18` (`E_DUPLICATE_DOCUMENT`) |
 | `GOLD-NEG-09` | Observation manually marked `validation=rejected` | `NEG-19` (cannot be used as baseline or comparison input) |
+| `GOLD-NEG-10` | Single synthetic report printing **two** tests (`Hemoglobin 13.4 g/dL` and `Fasting glucose 104 mg/dL`) for one patient | `MAP-01` association rule (`P0-R14`): **0** observations are created, the gate raises blocking `VI-002` with `reason_code=multi_measurement_document`, and both values remain `VerifiedFact`-only until exactly one tuple is verified |
 
 All negative fixtures are synthetic and generated locally. None contains a real record.
 

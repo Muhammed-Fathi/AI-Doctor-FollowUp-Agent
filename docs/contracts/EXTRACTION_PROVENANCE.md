@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document ID | `CTR-EXTRACT-001` |
-| Version | `0.3.0-p0` |
+| Version | `0.4.0-p0` |
 | Status | **IN REVIEW — design only; no parser exists** |
 | Phase | `P0` (design). Implementation: P3 |
 | Related | `REQ-ING-01..05`, `REQ-VERIFY-01..03`, `REQ-DATA-04`, `REQ-SEC-02/04`, ADR-0003, ADR-0006 |
@@ -137,6 +137,12 @@ Rules:
   `verified_by`/`verified_at` copied from the deciding doctor — never `self_reported_validated` (`REQ-DATA-04`).
   Insertion is in the same app-DB transaction as the verification row, and `ux_obs_source_fact` makes a replay a
   no-op.
+- **One measurement tuple per document** (`P0-R14`). Candidate facts are individual fields, so a report with
+  two tests has no reliable value↔test association. The MVP therefore maps **at most one**
+  `(test_name, value, unit)` tuple per document; a document with more than one distinct verified tuple is
+  **not mapped** and raises a blocking `VI-002` with `reason_code=multi_measurement_document`. Resolution is
+  manual (verify/reject facts until exactly one tuple remains). No table detection, no heuristic association,
+  no language parsing — this is a declared limitation, asserted by `MAP-01` with fixture `GOLD-NEG-10`.
 - **Every other verified fact stays document-only.** A `hemoglobin 13.4 g/dL` fact (Case A), a `%` unit, or any
   unrecognized test name remains a `VerifiedFact` that the draft may cite; it produces no `Observation`, no
   comparison and no `DR-*` item. Unmapped names are counted as `unmapped_test_name` in the extraction summary

@@ -61,7 +61,9 @@ The only permitted numeric trigger values are the **explicitly labelled, arbitra
   `E_UNVERIFIED_FACT` is for extracted facts only.
 - **Mapping is closed.** A verified document fact becomes an observation only via the versioned alias/unit table
   (`DATA_DICTIONARY.md` §3.3). Unmapped values (`g/dL`, `%`, unknown names) stay document-only; never coerce them
-  onto a nearby measure type.
+  onto a nearby measure type. The mapping version has its own type (`map-<major>.<minor>.<patch>`, never a bare
+  semver), and **a document contributes at most one measurement tuple** — a multi-test report is flagged for
+  manual verification, never heuristically associated.
 - **The app DB is the source of truth for run status.** The LangGraph checkpoint file is replay state and cannot
   join an app-DB transaction; reconcile on restart (`STATE_AND_GRAPH_CONTRACT.md` §7.3) instead of trusting a
   checkpoint's status.

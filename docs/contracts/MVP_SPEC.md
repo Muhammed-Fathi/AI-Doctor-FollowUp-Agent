@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document ID | `SPEC-MVP-001` |
-| Version | `0.3.0-p0` |
+| Version | `0.4.0-p0` |
 | Status | **IN REVIEW — not signed off** |
 | Phase | `P0` (documentation and governance only) |
 | Prepared by | Arena agent (Arena session branch `arena/ee7d211b-ai-doctor-followup-agent`) |
@@ -138,7 +138,7 @@ IDs are stable; each must be traceable to a component, a test, and a phase.
 | `REQ-DATA-02` | Unit allowlist per observation type; unknown/absent units are rejected for check-ins and flagged for documents. | P2 |
 | `REQ-DATA-03` | All identifiers are stable UUIDs; all timestamps stored UTC ISO-8601; display time zone is explicit. | P2 |
 | `REQ-DATA-04` | Every observation carries `trust_level ∈ {self_reported_validated, doctor_verified}`; self-reported values are labelled as such everywhere and are never described as doctor-verified. Rejected observations are excluded from comparisons and rules. | P2 |
-| `REQ-DATA-05` | A verified document fact becomes an observation **only** when its normalized test name and unit both match the closed, versioned mapping table (`map-1.0.0`); every other verified fact stays document-only. `measured_at` derives from the verified report date, derivation is atomic with the verification and idempotent per fact. | P3 |
+| `REQ-DATA-05` | A verified document fact becomes an observation **only** when its normalized test name and unit both match the closed, versioned mapping table (`map-1.0.0`, format `^map-\d+\.\d+\.\d+$`); every other verified fact stays document-only. A document contributes at most **one** measurement tuple — a document with several is flagged for manual verification and not mapped. `measured_at` derives from the verified report date, derivation is atomic with the verification and idempotent per fact. | P3 |
 
 ### 7.3 Document ingestion and OCR
 | ID | Requirement | Phase |

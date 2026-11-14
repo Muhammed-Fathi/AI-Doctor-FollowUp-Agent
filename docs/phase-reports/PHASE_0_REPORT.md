@@ -4,11 +4,11 @@
 |---|---|
 | Report ID | `REPORT-P0-001` |
 | Phase | **P0 only** — documentation and governance |
-| Status | **IN_REVIEW — round 3 submitted after a second review; not accepted, not merged, P1 not started** |
-| Review round | 1 — PR #2 review `5904454222` (P0-R01…P0-R07 + ADR-0006 depth) → resolved; 2 — PR #2 review `5904505998` (P0-R08…P0-R11 + 3 test-realism points) → resolved; both matrices in §10 |
+| Status | **IN_REVIEW — round 4 submitted after a third review (R12–R14); not accepted, not merged, P1 not started** |
+| Review round | 1 — review `5904454222` (P0-R01…P0-R07 + ADR-0006 depth) → resolved; 2 — review `5904505998` (P0-R08…P0-R11 + 3 test-realism points) → resolved; 3 — review `5904552354` (P0-R12…P0-R14) → resolved. Matrices in §10.1–§10.3 |
 | Branch | `arena/ee7d211b-ai-doctor-followup-agent` |
 | Base commit | `7d2ef73dae50c7404b46f653942eb99351053059` |
-| Head commit | round 1: `8e342546ec26acc1382e2916b25affed7c660dc2`; round 2 content: `81df966b2fe80ab842f3405b32cfabc2f1b3a5e7`; round 3 content: `b3605ec484a38b15aec5bb153586fecda187ea1d`, plus a documentation-linkage commit (the exact PR head is listed at the top of PR #2) |
+| Head commit | round 1: `8e342546ec26acc1382e2916b25affed7c660dc2`; round 2 content: `81df966b2fe80ab842f3405b32cfabc2f1b3a5e7`; round 3 content: `b3605ec484a38b15aec5bb153586fecda187ea1d`; round 4 content and linkage commits are listed at the top of PR #2 (the exact head SHA is returned with this submission) |
 | Pull request | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) — targeting `main`, **not merged** |
 | Tracking issue | GitHub issue #1 (referenced by number only — see §4.7 for an access limitation) |
 | Author | Arena agent (implementer) |
@@ -127,6 +127,14 @@ the same contract set, so the file list is identical to round 2's. The substanti
 | `docs/roadmap/PHASE_PROGRESS.md` | round-2 review row and evidence note |
 | `AGENTS.md` | four new standing invariants (admissibility, mapping, app-DB truth, typed trace) |
 | `README.md` | round-3 status and review path wording |
+
+**Round 4 (R12–R14) modified 12 existing files, adding none:** `docs/contracts/STATE_AND_GRAPH_CONTRACT.md`
+(`MappingVersion`, redaction note, §8 invariants 13/13a), `docs/contracts/openapi.phase0.yaml`
+(`ExtractionAttemptSummary` + description), `docs/contracts/API_CONTRACT.md` (§1.1 rules 1a/1b),
+`docs/contracts/DATA_DICTIONARY.md` (§2.16 column, §3.3 rule 10, `REPORT-B-01`), 
+`docs/contracts/EXTRACTION_PROVENANCE.md` §6, `docs/contracts/MVP_SPEC.md` (`REQ-DATA-05` text),
+`docs/evaluation/GOLD_FIXTURES.md` (`GOLD-NEG-10`), `docs/evaluation/EVALUATION_MATRIX.md` (`MAP-01` assertions),
+`docs/roadmap/PHASE_PROGRESS.md`, `README.md`, `AGENTS.md`, this report.
 
 **Not touched:** no backend, frontend, database, migration, dependency manifest, lockfile, script, workflow,
 fixture, or model file was created or modified. `docs/arena/ARENA_PHASE_0_PROMPT.md` was read, not edited.
@@ -383,7 +391,23 @@ state `COMMENTED` ("substantive corrections confirmed; 4 contract reconciliation
 | ADR-0006 is an orchestrated multi-component system, not five independently reasoning LLM agents | ADR-0006 §2/§3.3 keeps that wording verbatim and states the limitation; the reviewer's "cannot guarantee an evaluator's separate multi-LLM rubric" is recorded in §7 open questions |
 | Owner ratification required; do not mark P0 PASS | P0 remains `IN_REVIEW`, P1 `TODO`, no merge, no approval |
 
-## 11. Verification evidence for round 3 (executed in this session)
+## 10.3 Review round 3 — finding-by-finding resolution matrix (`P0-R12`…`P0-R14`)
+
+Review: [PR #2, review `5904552354`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2#pullrequestreview-5904552354),
+state `COMMENTED` — "core R08–R11 resolved; final bounded contract cleanup before merge" at head
+`80adadb9108493872f6f80b45066608f369c8b2d`.
+
+| ID | Finding (abbreviated) | Resolution | Paths changed | Evidence in this round | Status |
+|---|---|---|---|---|---|
+| **P0-R12** | `mapping_version` was typed `SemVer` (`^\d+\.\d+\.\d+$`) while the published default is `map-1.0.0`, so the documented default would fail validation | Added a distinct annotated type **`MappingVersion`** (`^map-\d+\.\d+\.\d+$`) next to `SemVer`, and declared `SharedGraphState.mapping_version: MappingVersion`. §2 now states the format and why the two types differ; §8 invariant 13 requires the pattern; the DB column is `TEXT(16)` with a shape CHECK plus app-side regex validation (SQLite cannot express a regex — stated, not pretended); §3/§8 note that `mapping_version` is **not** exposed by the API in the MVP, so no client contract depends on it. P5 assertion added to the `MAP-01` schema row | `STATE_AND_GRAPH_CONTRACT.md` §2/§3/§8, `DATA_DICTIONARY.md` §2.16, `API_CONTRACT.md` §1.1 rule 1b, `EVALUATION_MATRIX.md` | **Executed, not grepped:** the two patterns were parsed out of the document and run through real `pydantic` 2.14.3 `Annotated[str, StringConstraints(...)]` models — `mapping_version="map-1.0.0"` **validates**, `"1.0.0"`/`"map-1.0"`/`"map-1.0.0-rc1"`/`""` raise `ValidationError`, and the pre-fix shape (bare `SemVer`) fails on `"map-1.0.0"` with `String should match pattern '^\d+\.\d+\.\d+$'` | **Fixed** |
+| **P0-R13** | OpenAPI `ExtractionAttempt` still had the old six-field shape and silently diverged from the state/DB attempt record | Chose the **redacted projection** option and made it explicit: the schema is renamed `ExtractionAttemptSummary`, carries a description stating what it is and why, and `DocumentDetail.attempts` points at it with an inline note. State/DB keep the full typed record (`ExtractionAttempt`), and its docstring now says the API exposes only the projection and that doctors see decisions via `TraceEvent.detail`. `engine_confidence` stays nullable and engine-reported. `created_at` was added to the state model so the projection is a genuine subset. `API_CONTRACT.md` §1.1 rule 1a states the rule client-side. Assertion added to `MAP-01`/`AD-01` | `openapi.phase0.yaml`, `STATE_AND_GRAPH_CONTRACT.md` §3, `API_CONTRACT.md` §1.1, `DATA_DICTIONARY.md` §2.5 (unchanged, cross-referenced), `EVALUATION_MATRIX.md` | **Executed:** field-set comparison from the actual YAML — `set(ExtractionAttemptSummary.properties)` = `{path, succeeded, error_code, duration_ms, tool_version, created_at}` is a **strict subset** of the 13 internal attempt fields; the withheld set is exactly `{attempt_id, document_id, preprocessing, engine_confidence, text_char_count, page_from, page_to}`; `engine_confidence` appears in `TriageEventDetail` with type `[number, null]`. OpenAPI still validates | **Fixed** |
+| **P0-R14a** | The closed mapping needs a `test_name`↔`value`↔`unit` association the field-based `ExtractedFact` model cannot guarantee for a two-test report | Chose the **declared MVP restriction** (not a new extraction feature): a document may contribute **at most one** measurement tuple; a document with more than one distinct verified tuple is **not mapped** and raises blocking `VI-002` with `reason_code=multi_measurement_document`, staying document-only until exactly one tuple is verified. Stated as a limitation with no table detection, no heuristics and no NLP; a future association model would require a new `mapping_version`. Test expectation added to `MAP-01`, new negative fixture `GOLD-NEG-10` (two tests in one report), `REQ-DATA-05` extended in place (no new requirement ID) | `DATA_DICTIONARY.md` §3.3 rule 10, `EXTRACTION_PROVENANCE.md` §6, `STATE_AND_GRAPH_CONTRACT.md` §8 invariant 13a, `MVP_SPEC.md` `REQ-DATA-05`, `GOLD_FIXTURES.md` §1/§7 (`GOLD-NEG-10`), `EVALUATION_MATRIX.md` `MAP-01` | Rule text present in three contracts with identical semantics; fixture list shows `GOLD-NEG-10` → 0 observations + `VI-002/multi_measurement_document`; `MAP-01` row carries the assertion; the requirement text now includes "at most one measurement tuple" without a new ID (requirement count stays **50**) | **Fixed** |
+| **P0-R14b** | `DATA_DICTIONARY.md` §3.3 called Case B's report `REPORT-B-02`, while the fixture, matrix and demo use `REPORT-B-01` | Corrected the identifier in the mapping table | `DATA_DICTIONARY.md` §3.3 | `grep -rn "REPORT-B-02" docs \| grep -v PHASE_0_REPORT.md` → **0 hits**; the surviving `REPORT-B-01` occurrences are the fixture (§3.2), the mapping table and this report's own quotation of the defect | **Fixed** |
+
+No scope was added: no new requirement ID, no new ADR, no new endpoint, and no change to the demo policy, the ADRs'
+`Proposed` status, or the safety boundaries.
+
+## 11. Verification evidence for rounds 3–4 (executed in this session)
 
 Environment unchanged: Linux sandbox, Python 3.11.2, Node 22.22.3, no Tesseract/Poppler/Ollama/PowerShell.
 
@@ -393,7 +417,7 @@ schemas, so the numbers below differ **because the documents changed**, not beca
 for the same inputs. The checker's test-ID pattern was extended in round 3 to include the `MAP`/`TRUST`/`AD`/`VI`/
 `OCR-LIVE` families and to stop counting `VI-001…VI-006` (issue types, not tests) as tests.
 
-| # | Command | Observed result (round 3) |
+| # | Command | Observed result (round 3, rows 1–14; round 4, rows 15–19) |
 |---|---|---|
 | 1 | `/tmp/docsenv/bin/python /tmp/check_docs.py` | `[links] markdown files: 29 \| relative links checked: 41 \| broken: 0 \| bad anchors: 0`; `[req] defined: 50 \| traceability rows: 50 \| used repo-wide: 50`, all three gap lists empty; `[tests] declared (range-expanded): 96 \| referenced by trace/spec: 60 \| referenced-not-declared: []`; `0 files missing H1`; `5 mermaid diagrams` (syntax NOT validated) |
 | 2 | `yaml.safe_load` + `openapi_spec_validator.validate` | `VALID \| openapi 3.1.0 \| paths 30 \| schemas 56` |
@@ -410,18 +434,27 @@ for the same inputs. The checker's test-ID pattern was extended in round 3 to in
 | 13 | `git ls-files \| grep -niE "\.env$\|\.sqlite\|\.db$\|\.gguf\|\.safetensors\|\.key$\|\.pem$\|secret\|credential\|node_modules\|__pycache__\|/uploads/"` | no matches |
 | 14 | `git status --porcelain` before commit | modified Markdown/YAML only — 0 files added, 0 deleted (count stated in the commit/PR) |
 
+| 15 | Extract both annotated patterns **from the document** and validate with real `pydantic` 2.14.3 | `SemVer = ^\d+\.\d+\.\d+$`, `MappingVersion = ^map-\d+\.\d+\.\d+$`. `SharedGraphState(state_schema_version="1.0.0", mapping_version="map-1.0.0")` → **valid**; `"1.0.0"`, `"map-1.0"`, `"map-1.0.0-rc1"`, `""` → `ValidationError` each; the pre-fix bare-`SemVer` shape rejects `"map-1.0.0"` with `String should match pattern '^\d+\.\d+\.\d+$'` (the reported defect, reproduced then fixed) |
+| 16 | Projection subset check against the actual `openapi.phase0.yaml` | `ExtractionAttemptSummary.properties` = `['created_at','duration_ms','error_code','path','succeeded','tool_version']`; strict subset of the 13 internal attempt fields = **True**; withheld = `['attempt_id','document_id','engine_confidence','page_from','page_to','preprocessing','text_char_count']`; `TriageEventDetail.engine_confidence.type` = `['number','null']` |
+| 17 | `yaml.safe_load` + `openapi_spec_validator.validate` | `VALID \| openapi 3.1.0 \| paths 30 \| schemas 56` (schema count unchanged: `ExtractionAttempt` renamed to `ExtractionAttemptSummary`, nothing added) |
+| 18 | `grep -rn "REPORT-B-02" docs \| grep -v PHASE_0_REPORT.md` | **0 hits** outside this report's own quotation of the old identifier; `grep -rn "REPORT-B-01" docs` → 7 hits (fixture, dictionary table, matrix, tracker, this report) |
+| 19 | `grep -rn "multi_measurement_document" docs` | 6 hits outside this report: the same `reason_code` in all three contracts (`DATA_DICTIONARY.md` §3.3 rule 10, `EXTRACTION_PROVENANCE.md` §6, `STATE_AND_GRAPH_CONTRACT.md` §8 invariant 13a) plus `GOLD_FIXTURES.md` `GOLD-NEG-10` and `EVALUATION_MATRIX.md` `MAP-01` — one tag, one meaning (cross-document consistency of the association rule) |
+
 **How `extraction_triage` gets its input (explicit answer to `P0-R08`).** N1 `document_extract` writes one
 `ExtractionAttempt` per pass into `SharedGraphState.extraction_attempts[]` (`path`, `preprocessing`,
 `engine_confidence` or `null`, `text_char_count`, `succeeded`, `error_code`, `duration_ms`) and the same rows into
 `extraction_attempt` (app DB). N1a reads **only** that list plus `retry_counts`; it never re-reads the document and
 never invents a confidence. The decision is emitted as a `TriageDetail` on the event and persisted to `node_event`.
 
-## 12. What remains NOT RUN after round 3
+## 12. What remains NOT RUN after round 4
 
 Unchanged: no backend/frontend test, Ruff/type check, database or migration, OCR run, model call, benchmark,
-browser E2E, PowerShell gate, CI job, or Mermaid rendering was executed. Round 3 changes documentation only, so
-none of the newly declared tests (`MAP-01`, `TRUST-02`, `RESUME-04`, `RESUME-05`, `OCR-LIVE-01`, and the sharpened
-`AD-01`) can run yet — they are specifications for P3–P7.
+browser E2E, PowerShell gate, CI job, or Mermaid rendering was executed. Rounds 3–4 change documentation only, so
+none of the declared tests (`MAP-01`, `TRUST-02`, `RESUME-04`, `RESUME-05`, `OCR-LIVE-01`, and the sharpened
+`AD-01`) can run yet — they are specifications for P3–P7. Round 4 adds no new test IDs; it adds assertions to
+`MAP-01` (the `MappingVersion` pattern, the attempt-projection subset rule, the multi-test association case). The
+**document-level** form of the first two was executed now (§11 rows 15–16); their P5 unit-test form and every
+runtime, OCR, model, benchmark, browser and PowerShell check remain NOT RUN.
 
 Specifically **not run and not claimed**: `AD-01` (needs the graph + mocked extractor from P5), `OCR-LIVE-01` (needs
 the owner's Tesseract install), `RESUME-04/05` (need the real checkpoint + process-kill harness), and every
@@ -431,7 +464,7 @@ evidence about real OCR quality.
 **Requires the owner Windows laptop:** dependency installation, Tesseract/Poppler, Ollama/model benchmark,
 offline run, PowerShell gate, live-OCR measurement, and the machine record sheet.
 
-## 13. Owner review checklist (round 3)
+## 13. Owner review checklist (round 4)
 
 - [ ] Re-read `DEMO_REVIEW_RULES.md` §3–§6: confirm the `VI-*` (pre-verification) vs `DR-*` (post-verification) split and the retirement of `DR-002/004/007/010`.
 - [ ] Confirm the corrected Case B arithmetic (146 → 158 = 12 mmHg) and Case C chronology (`03/11/2026` → 2026-11-03, baseline 2026-10-10).
@@ -448,12 +481,15 @@ offline run, PowerShell gate, live-OCR measurement, and the machine record sheet
 - [ ] Confirm the document-vs-observation unit split (`g/dL` is document-only) and the seed-vs-live Case A split.
 - [ ] Re-check the permission matrix, tool contracts and API/OpenAPI deltas introduced in round 2.
 - [ ] Ratify the demo parameters in `DEMO_REVIEW_RULES.md` §9 (or supply your own).
+- [ ] Confirm the **`MappingVersion`** type (`P0-R12`): format `map-<major>.<minor>.<patch>`, deliberately not a bare semver, persisted but not exposed by the API.
+- [ ] Confirm the **attempt redaction** decision (`P0-R13`): the document endpoint exposes route/outcome/duration/tool-version/timestamp only; extraction confidence reaches a doctor solely through `TraceEvent.detail`.
+- [ ] Confirm the **one-measurement-tuple-per-document** limitation (`P0-R14`): a multi-test report yields 0 observations and a blocking `VI-002`/`multi_measurement_document` until exactly one tuple is verified. Say if your synthetic reports will ever print two tests.
 - [ ] Approve and merge **yourself**, then record the merge SHA and set P0 `PASS` in `PHASE_PROGRESS.md`.
 - [ ] Do not start P1 until that approval is recorded.
 
 ## 14. Compliance statement for this phase
 
-- Rounds 2 and 3 changed documentation only: no file was added or deleted, and no code, dependency, migration, fixture, script or workflow was introduced (file counts are in the commit list and §11 item 14).
+- Rounds 2–4 changed documentation only: no file was added or deleted, and no code, dependency, migration, fixture, script or workflow was introduced (file counts are in the commit list and §11 item 14).
 - No model was trained, downloaded, or called; no paid service, quota, or credential was used; no real patient data was created, requested, or stored.
 - The clinical-safety constraints were preserved and strengthened: verified-only gating, doctor approval, no external messaging, no clinical thresholds, explicit non-claims, an explicit trust/provenance distinction for self-reported data, a closed document-value mapping, and a trace that structurally cannot carry patient text.
 - No PR was merged, no phase was marked `PASS`, no approval was fabricated, and Phase 1 was not started.

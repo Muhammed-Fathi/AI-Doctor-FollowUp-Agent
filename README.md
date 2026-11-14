@@ -13,7 +13,7 @@ Doctor-centered educational demonstration. The application will take **synthetic
 
 | Phase | Status | Notes |
 |---|---|---|
-| **P0 — Governance and specification baseline** | **IN_REVIEW** | Documentation-only PR submitted; review rounds 1–2 addressed in follow-up commits (R01–R07 + ADR-0006 depth, then R08–R11 contract reconciliations and test-realism fixes). Owner re-review pending. Not accepted, not merged. |
+| **P0 — Governance and specification baseline** | **IN_REVIEW** | Documentation-only PR submitted; review rounds 1–3 addressed in follow-up commits (R01–R07 + ADR-0006 depth; R08–R11 contract reconciliations and test-realism fixes; R12–R14 mapping-version type, attempt-DTO projection and the one-measurement-per-document association rule). Owner re-review pending. Not accepted, not merged. |
 | P1–P8 | TODO | Must not start before P0 is approved |
 
 No application code exists yet, and no test, benchmark, or demo has been executed. What exists is a

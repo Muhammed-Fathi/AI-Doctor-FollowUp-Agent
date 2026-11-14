@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document ID | `EVAL-001` |
-| Version | `0.3.0-p0` |
+| Version | `0.4.0-p0` |
 | Status | **IN REVIEW — every test below is DESIGNED, none is executed in Phase 0** |
 | Phase | `P0` (definition). Execution: P2–P7; final evidence matrix: P7/P8 |
 | Related | all `REQ-*` in `docs/contracts/MVP_SPEC.md` §7; `docs/evaluation/GOLD_FIXTURES.md`; `docs/evaluation/TRACEABILITY_MATRIX.md` |
@@ -73,7 +73,8 @@
 | `VERIFY-02` | Double decision on the same fact | `409 E_FACT_ALREADY_DECIDED` | `REQ-VERIFY-03` | P3 | NOT RUN |
 | `VERIFY-03` | Provenance completeness metric over all gold fixtures | 100% facts with in-bounds span | `REQ-VERIFY-01` | P7 | NOT RUN |
 
-| `MAP-01` | Closed fact → observation mapping (`map-1.0.0`) | Case A hemoglobin `g/dL` creates **0** observations (document-only, no `DR-*`); Case B `glucose 104 mg/dL` creates exactly 1 at `2026-11-02T00:00:00Z`; Case C creates 0 while halted and 1 (`glucose`, `2026-11-03T00:00:00Z`) after correction; an `HbA1c 5.6 %` fact creates 0; re-verifying the same fact is a no-op (unique `source_fact_id`); `measured_at` never equals the upload time or `as_of_utc` | `REQ-DATA-05` | P3 | NOT RUN |
+| `MAP-01` | Closed fact → observation mapping (`map-1.0.0`) and the association rule | Case A hemoglobin `g/dL` creates **0** observations (document-only, no `DR-*`); Case B `REPORT-B-01` `glucose 104 mg/dL` creates exactly 1 at `2026-11-02T00:00:00Z`; Case C creates 0 while halted and 1 (`glucose`, `2026-11-03T00:00:00Z`) after correction; an `HbA1c 5.6 %` fact creates 0; **multi-test document (`GOLD-NEG-10`) creates 0 observations and raises blocking `VI-002` with `reason_code=multi_measurement_document`**; re-verifying the same fact is a no-op (unique `source_fact_id`); `measured_at` never equals the upload time or `as_of_utc` | `REQ-DATA-05` | P3 | NOT RUN |
+| `MAP-01` (schema part) | `MappingVersion` type and the attempt-projection subset rule | `SharedGraphState(mapping_version="map-1.0.0")` validates; `"1.0.0"`, `"map-1.0"`, `"map-1.0.0-rc1"` and `""` all raise `ValidationError`; a bare `SemVer` field **fails** on `"map-1.0.0"` (regression guard, `P0-R12`); `set(ExtractionAttemptSummary.properties) ⊂ set(ExtractionAttempt fields)` with the withheld set exactly `{attempt_id, document_id, preprocessing, engine_confidence, text_char_count, page_from, page_to}` (`P0-R13`) | `REQ-DATA-05` | P5 | NOT RUN (the same assertions were executed at document level in P0 — report §11) |
 
 ## 5. Comparison and rule tests
 
