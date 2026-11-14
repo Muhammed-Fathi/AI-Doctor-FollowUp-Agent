@@ -1,0 +1,522 @@
+"""Static checks for the Windows PowerShell scripts.
+
+**These are static inspections only.** PowerShell cannot be executed in the
+Linux authoring sandbox, so no test here proves that a script runs. Real
+execution evidence must come from the owner's Windows laptop
+(``docs/runbooks/WINDOWS_SETUP.md`` §5).
+
+What is verified here (cheap and deterministic):
+
+* all five required scripts exist and are dot-sourcing the shared helper;
+* no broad/unsafe process termination idiom is present;
+* no script changes the PowerShell execution policy or security settings;
+* no script uses ``npm`` directly (``npm.ps1`` is blocked on the owner machine);
+* every ``.ps1`` path referenced from another script exists;
+* the helper resolves the repository root relative to ``$PSScriptRoot``.
+
+Requirement mapping: ``REQ-OPS-02`` (one-command start/stop/test), ``REQ-SEC-06``.
+"""
+
+from __future__ import annotations
+
+import re
+
+import pytest
+
+from app.core.paths import REPO_ROOT
+
+SCRIPTS_DIR = REPO_ROOT / "scripts" / "powershell"
+
+REQUIRED_SCRIPTS = (
+    "preflight.ps1",
+    "setup.ps1",
+    "start.ps1",
+    "stop.ps1",
+    "test_all.ps1",
+)
+
+#: Idioms that would terminate unrelated processes on the machine.
+UNSAFE_KILL_PATTERNS = (
+    r"Stop-Process\s+-Name\b",
+    r"Get-Process\s+\w+\s*\|\s*Stop-Process",
+    r"Get-Process\s*\|\s*Where-Object[^\n]*\|\s*Stop-Process",
+    r"taskkill\s+/IM\b",
+    r"taskkill\s+/F\s+/IM\b",
+    r"Stop-Process\s+-Id\s+\$\w+\s+-Force\s*-ErrorAction\s+SilentlyContinue\s*#\s*all",
+)
+
+
+@pytest.mark.parametrize("script_name", REQUIRED_SCRIPTS)
+def test_script_exists(script_name: str) -> None:
+    """Every P1 deliverable script is present."""
+    assert (SCRIPTS_DIR / script_name).is_file()
+
+
+@pytest.mark.parametrize("script_name", REQUIRED_SCRIPTS)
+def test_script_dot_sources_common_helper(script_name: str) -> None:
+    """Scripts share one helper instead of duplicating path logic."""
+    text = (SCRIPTS_DIR / script_name).read_text(encoding="utf-8")
+    assert '. "$PSScriptRoot\\_common.ps1"' in text
+
+
+def test_common_helper_anchors_repository_root() -> None:
+    """The helper derives the root from ``$PSScriptRoot``, never from ``$PWD``."""
+    text = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    assert "Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\\..')" in text
+    assert "Set-StrictMode -Version Latest" in text
+    assert "$ErrorActionPreference = 'Stop'" in text
+
+
+@pytest.mark.parametrize("script_name", [*REQUIRED_SCRIPTS, "_common.ps1"])
+def test_no_broad_process_termination(script_name: str) -> None:
+    """No script may kill by image name or kill everything on a port."""
+    text = (SCRIPTS_DIR / script_name).read_text(encoding="utf-8")
+    for pattern in UNSAFE_KILL_PATTERNS:
+        assert re.search(pattern, text) is None, f"{script_name} matches unsafe idiom {pattern}"
+
+
+@pytest.mark.parametrize("script_name", [*REQUIRED_SCRIPTS, "_common.ps1"])
+def test_does_not_weaken_powershell_security(script_name: str) -> None:
+    """Scripts must not change the execution policy or other machine settings."""
+    text = (SCRIPTS_DIR / script_name).read_text(encoding="utf-8").lower()
+    forbidden = (
+        "set-executionpolicy",
+        "unrestricted",
+        "bypassremoting",
+        "new-itemproperty -path hklm",
+        "set-mppreference",
+    )
+    for term in forbidden:
+        assert term not in text, f"{script_name} must not contain {term!r}"
+
+
+@pytest.mark.parametrize("script_name", [*REQUIRED_SCRIPTS, "_common.ps1"])
+def test_uses_npm_cmd_not_npm_ps1(script_name: str) -> None:
+    """The owner machine blocks ``npm.ps1``; scripts must call ``npm.cmd``."""
+    text = (SCRIPTS_DIR / script_name).read_text(encoding="utf-8")
+    # A bare `npm <verb>` (not `npm.cmd`) would resolve to npm.ps1.
+    bare_npm = re.search(r"(?<![\w.])npm\s+(?![.\w])", text)
+    assert bare_npm is None, f"{script_name} invokes bare `npm`"
+
+
+def test_only_owned_processes_are_stopped() -> None:
+    """``stop.ps1`` verifies ownership before stopping any PID (P1-R07)."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    # Ownership is proven from recorded identity + verified command lines.
+    assert "Test-ProcessIdentity" in text or "ConvertTo-CreationStamp" in text
+    assert "Test-ViteCommandLine" in text
+    assert "Test-NpmWrapperCommandLine" in text
+    # It must refuse to act without a state file instead of guessing.
+    assert "never falls back to killing" in text
+
+
+def test_stop_collects_the_verified_process_tree() -> None:
+    """npm.cmd spawns cmd.exe -> node.exe, so the Vite child must be stopped too.
+
+    The tree walk is only allowed *after* the root PID's command line was
+    verified, which is why it lives in the same block as the ownership check.
+    """
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    assert "Get-DescendantProcessIds" in text
+    # The snapshot (Win32_Process) lives in the shared helper.
+    assert "Win32_Process" in (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    # The tree walk must come after the ownership decision, never before it.
+    assert text.index("wrapperAccepted") < text.index("$descendants = @(Get-DescendantProcessIds")
+
+
+def test_start_records_state_for_safe_shutdown() -> None:
+    """``start.ps1`` writes ``run-state.json`` with PIDs and command lines."""
+    text = (SCRIPTS_DIR / "start.ps1").read_text(encoding="utf-8")
+    assert "run-state.json" in text
+    # Identity now comes from the snapshot (name + creation time + command line).
+    assert "Get-ProcessSnapshot" in text
+    # Rollback only touches the PIDs it started.
+    assert "Stop-StartedProcesses" in text
+
+
+@pytest.mark.parametrize("script_name", REQUIRED_SCRIPTS)
+def test_extension_is_lowercase_ps1(script_name: str) -> None:
+    """File names follow the documented lowercase convention."""
+    assert script_name.endswith(".ps1")
+    assert script_name == script_name.lower()
+
+
+def test_python_helpers_referenced_by_test_all_exist() -> None:
+    """``test_all.ps1`` calls helper scripts that must actually exist."""
+    text = (SCRIPTS_DIR / "test_all.ps1").read_text(encoding="utf-8")
+    referenced = set(re.findall(r"scripts\\python\\([\w_]+\.py)", text))
+    assert referenced, "test_all.ps1 should call at least one python helper"
+    for name in referenced:
+        assert (REPO_ROOT / "scripts" / "python" / name).is_file(), name
+
+
+def test_scripts_are_ascii_only() -> None:
+    """ASCII-only scripts avoid Windows PowerShell 5.1 encoding pitfalls."""
+    for script in sorted(SCRIPTS_DIR.glob("*.ps1")):
+        data = script.read_bytes()
+        assert data.decode("ascii", errors="strict"), f"{script.name} contains non-ASCII bytes"
+
+
+def test_scripts_have_no_placeholder_markers() -> None:
+    """No unfinished ``TODO``/``FIXME`` marker ships in a quality-gate script."""
+    for script in sorted(SCRIPTS_DIR.glob("*.ps1")):
+        text = script.read_text(encoding="utf-8").upper()
+        for marker in ("TODO", "FIXME", "XXX", "PLACEHOLDER"):
+            assert marker not in text, f"{script.name} contains {marker}"
+
+
+# --- P1-R06: Invoke-Native must return ONLY the numeric exit code -------------
+# Regression guard for the Windows defect where a native command's stdout was
+# emitted alongside the exit code, so `$code = Invoke-Native ...` produced a
+# multi-element array and every successful gate was reported as FAIL.
+# Executable proof lives in ``scripts/powershell/tests/invoke_native.tests.ps1``.
+
+
+def test_invoke_native_discards_native_output_from_the_pipeline() -> None:
+    """Native stdout must be piped to ``Out-Host``, never left in the pipeline."""
+    text = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    function = text.split("function Invoke-Native", 1)[1].split("function Get-NativeOutput", 1)[0]
+    assert "| Out-Host" in function, "Invoke-Native must route native stdout to Out-Host"
+    # The raw `& $FilePath @Arguments` must never appear unbounded in the wrapper.
+    for line in function.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("& $FilePath @Arguments"):
+            assert stripped.endswith("| Out-Host"), f"unpiped native call: {stripped!r}"
+
+
+def test_invoke_native_returns_a_scalar_and_resets_last_exit_code() -> None:
+    """The wrapper initialises its exit code so a stale value cannot leak."""
+    text = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    function = text.split("function Invoke-Native", 1)[1].split("function Get-NativeOutput", 1)[0]
+    assert "$code = 0" in function
+    assert "return $code" in function
+    # Broadcasting an array would reintroduce the multi-value pipeline bug.
+    assert "return ," not in function and "return @(" not in function
+
+
+def test_invoke_native_does_not_merge_stderr_into_the_pipeline() -> None:
+    """``2>&1`` under $ErrorActionPreference='Stop' can break PowerShell 5.1."""
+    text = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    function = text.split("function Invoke-Native", 1)[1].split("function Get-NativeOutput", 1)[0]
+    assert "2>&1" not in function
+
+
+def test_get_native_output_still_captures_stdout() -> None:
+    """Capture semantics of ``Get-NativeOutput`` stay intact (it returns an object)."""
+    text = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    function = text.split("function Get-NativeOutput", 1)[1].split(
+        "function ConvertTo-QuotedArgument"
+    )[0]
+    assert "@(& $FilePath @Arguments 2>&1)" in function
+    assert "ExitCode = $code" in function
+    assert "Output =" in function
+
+
+def test_test_all_validates_the_exit_code_type() -> None:
+    """``test_all.ps1`` refuses to classify a gate from a non-numeric value."""
+    text = (SCRIPTS_DIR / "test_all.ps1").read_text(encoding="utf-8")
+    assert "function Get-ExitCodeValue" in text
+    assert "-is [int]" in text
+    # Every gate must go through the tripwire: Invoke-Gate (7 gates) plus the
+    # three gates that call Invoke-Native directly (alembic, openapi, scan).
+    gate_function = text.split("function Invoke-Gate", 1)[1].split("# --- 1. Ruff", 1)[0]
+    assert "Get-ExitCodeValue -Gate" in gate_function
+    assert text.count("Get-ExitCodeValue -Gate") >= 4
+
+
+def test_executable_powershell_regression_script_covers_the_three_cases() -> None:
+    """The Windows-runnable test covers output, silence, and non-zero failure."""
+    path = SCRIPTS_DIR / "tests" / "invoke_native.tests.ps1"
+    assert path.is_file(), "missing executable regression script for Invoke-Native"
+    text = path.read_text(encoding="utf-8")
+    for case in (
+        "successful command that prints output",
+        "silent successful command",
+        "failing command",
+    ):
+        assert case in text, f"regression script does not cover: {case}"
+
+
+# --- P1-R03: paths containing spaces ------------------------------------------
+
+
+def test_start_quotes_every_start_process_argument() -> None:
+    """``-ArgumentList`` must receive a quoted command-line string (P1-R03)."""
+    text = (SCRIPTS_DIR / "start.ps1").read_text(encoding="utf-8")
+    start_process_calls = text.count("Start-Process -FilePath")
+    assert start_process_calls >= 2
+    # Each Start-Process that launches our own binaries quotes its arguments.
+    for block in text.split("Start-Process -FilePath")[1:]:
+        if "http://" in block.split("-ArgumentList")[0]:
+            continue  # browser launcher, no -ArgumentList
+        assert "-ArgumentList (ConvertTo-CommandLine" in block, block.splitlines()[0]
+
+
+def test_common_exposes_command_line_quoting_helpers() -> None:
+    """A single quoting helper is shared instead of ad-hoc string building."""
+    text = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    assert "function ConvertTo-QuotedArgument" in text
+    assert "function ConvertTo-CommandLine" in text
+    # Arguments without whitespace stay unquoted for readable logs.
+    assert "'[\\s\"]'" in text or "-notmatch '[\\s\"]'" in text
+
+
+# --- P1-R05: frontend identity when the cmd.exe wrapper omits the repo path ---
+
+
+def test_stop_accepts_npm_wrapper_identity_without_repo_path() -> None:
+    """npm.cmd -> cmd.exe may not carry the repository path (P1-R05, P1-R07).
+
+    The wrapper classifier lives in ``_common.ps1`` now, so the rule is written
+    once and exercised by the executable regression script.
+    """
+    common = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    wrapper = common.split("function Test-NpmWrapperCommandLine", 1)[1].split(
+        "function Test-PortListening"
+    )[0]
+    assert "run\\s+dev" in wrapper
+    assert "--port" in wrapper
+    # Backend identity stays strict: uvicorn AND the app target.
+    uvicorn = common.split("function Test-UvicornCommandLine", 1)[1].split(
+        "function Test-NpmWrapperCommandLine"
+    )[0]
+    assert "uvicorn" in uvicorn
+    assert "app\\.main:app" in uvicorn
+
+
+# --- P1-R07: shutdown must handle the npm.cmd -> cmd.exe -> node.exe tree ----
+# The owner's Windows run left Vite on port 5173 because stop.ps1 rejected the
+# recorded cmd.exe wrapper (no "vite"/"node_modules" token in its command line).
+# Executable coverage: ``scripts/powershell/tests/stop_identity.tests.ps1``.
+
+
+def test_common_exposes_the_ownership_classifiers() -> None:
+    """Classification lives in one place and is unit-testable."""
+    text = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    for helper in (
+        "function Get-ProcessSnapshot",
+        "function Get-DescendantProcessIds",
+        "function Test-ProcessIdentity",
+        "function ConvertTo-CreationStamp",
+        "function Test-ViteCommandLine",
+        "function Test-UvicornCommandLine",
+        "function Test-NpmWrapperCommandLine",
+    ):
+        assert helper in text, f"missing {helper}"
+
+
+def test_stop_accepts_the_npm_wrapper_from_its_own_command_line() -> None:
+    """The wrapper is owned by npm-run-dev identity, not by a vite token."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    assert "Test-NpmWrapperCommandLine" in text
+    # The frontend branch must consult the wrapper classifier before giving up.
+    # The frontend branch sets wrapperAccepted, then uses it to gate the tree walk
+    # and to decide the wrapper itself.
+    assert "wrapperAccepted" in text
+    first_use = min(
+        text.index("if (-not $root -or $wrapperAccepted)"),
+        text.index("if ($root -and $wrapperAccepted"),
+    )
+    assert text.index("$wrapperAccepted = $true") < first_use
+
+
+def test_stop_verifies_descendants_by_their_own_command_line() -> None:
+    """A descendant is stopped only when IT is this repository's Vite."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    assert "Get-DescendantProcessIds" in text
+    # Each descendant must pass Test-ViteCommandLine before being targeted.
+    block = text.split("foreach ($childId in $descendants)", 1)[1]
+    assert "if (-not $freshSnapshot.ContainsKey($childId)) { continue }" in block
+    # The Vite check must decide the case BEFORE the PID is added to the targets.
+    assert block.index("Test-ViteCommandLine -CommandLine $child.CommandLine") < block.index(
+        "targets.Add($childId)"
+    )
+
+
+def test_stop_never_kills_by_port_or_image_name() -> None:
+    """Port-based or name-based termination is explicitly forbidden."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    lowered = text.lower()
+    # Get-NetTCPConnection may appear only as guidance printed for the operator,
+    # never as part of a stop decision.
+    for line in lowered.splitlines():
+        if "get-nettcpconnection" in line:
+            assert "write-host" in line or "write-warn" in line or "write-step" in line, line
+    assert "stop-process -name" not in lowered
+    assert "taskkill" not in lowered
+    # Ports are only ever *observed*, never used as an identity source.
+    assert "Test-PortListening" in text
+    assert "never by port alone" in lowered or "never by port" in lowered
+
+
+def test_stop_returns_nonzero_when_a_process_survives() -> None:
+    """Requirement 4: incomplete shutdown must not exit 0."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    assert "exit 1" in text  # a recorded process could not be stopped
+    assert "exit 2" in text  # a port is still occupied
+    # The success path must be guarded by both conditions.
+    tail = text.split("Stop result: PASS")[0]
+    assert "if ($failed.Count -gt 0)" in tail
+    assert "if ($busyPorts.Count -gt 0)" in tail
+
+
+def test_stop_preserves_tracking_state_on_partial_shutdown() -> None:
+    """Requirement 3: identity information survives a failed stop.
+
+    ``Save-StopState`` now lives in ``_common.ps1`` (so it is reachable from the
+    executable regression script), and it deletes files only for a CLEAN result.
+    """
+    common = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    assert "function Save-StopState" in common
+    save = common.split("function Save-StopState", 1)[1].split("function Ensure-RuntimeDir", 1)[0]
+    assert "if ($survivors.Count -eq 0)" in save
+    assert "if ($Clean)" in save
+    assert "Remove-Item -LiteralPath $StatePath" in save
+    assert "partial" in save
+    # The caller must pass the verdict through.
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    assert "-Clean $verdict.Clean" in text
+
+
+def test_stop_guards_against_pid_reuse() -> None:
+    """Creation time + image name defeat PID recycling."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    assert "ConvertTo-CreationStamp" in text
+    assert "different process" in text
+    assert "startedAt" in text
+
+
+def test_stop_does_not_trust_a_falsy_json_property() -> None:
+    """PS 5.1 ConvertFrom-Json adds a falsy PSComputerName to every object."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    assert "$null -ne $_" in text
+    assert "PSComputerName" in text
+
+
+def test_start_records_identity_for_safe_shutdown() -> None:
+    """start.ps1 must persist name + creation time, not just the PID."""
+    text = (SCRIPTS_DIR / "start.ps1").read_text(encoding="utf-8")
+    assert "function New-StartedRecord" in text
+    assert "imageName" in text
+    assert "startedAt" in text
+    assert "ConvertTo-CreationStamp" in text
+
+
+def test_start_rollback_stops_the_verified_child_tree() -> None:
+    """Requirement 7: rollback must not leak the Vite child either."""
+    text = (SCRIPTS_DIR / "start.ps1").read_text(encoding="utf-8")
+    rollback = text.split("function Stop-StartedProcesses", 1)[1].split("try {", 1)[0]
+    assert "Get-DescendantProcessIds" in rollback
+    assert "Get-ProcessSnapshot" in rollback
+    # Rollback must not kill a PID that has been reused.
+    assert "startedAt" in rollback
+
+
+def test_executable_stop_identity_script_covers_the_owner_evidence() -> None:
+    """The Windows-runnable test pins the command lines from the review."""
+    path = SCRIPTS_DIR / "tests" / "stop_identity.tests.ps1"
+    assert path.is_file(), "missing executable regression script for stop identity"
+    text = path.read_text(encoding="utf-8")
+    assert "npm.cmd" in text and "run dev" in text
+    assert "vite.js" in text
+    for case in ("wrapper is recognised", "Vite command line", "rejected", "descendant"):
+        assert case in text, f"regression script does not cover: {case}"
+
+
+# --- P1-R08: tracking state must not be deleted before the port check --------
+# The defect: `stop.ps1` deleted run-state.json whenever no process was identified
+# as a survivor, *then* checked the ports and exited 2. An occupied port with no
+# reported survivor therefore destroyed the provenance needed to diagnose it.
+# Executable coverage: cases 12-15 of ``scripts/powershell/tests/stop_identity.tests.ps1``.
+
+
+def test_verdict_is_computed_before_state_is_touched() -> None:
+    """The outcome decision must precede any tracking-file write (P1-R08)."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    verdict_at = text.index("$verdict = Get-ShutdownVerdict")
+    save_at = text.index("Save-StopState -Remaining")
+    ports_at = text.index("$busyPorts = @(")
+    assert ports_at < verdict_at < save_at, "verdict must be derived from the ports, then saved"
+    # Nothing may delete tracking before the verdict exists.
+    for line in text.splitlines():
+        if "Remove-Item" in line and ("StateFile" in line or "PidFile" in line):
+            assert text.index(line) > verdict_at, f"state removed before the verdict: {line}"
+
+
+def test_state_is_only_deleted_by_a_clean_verdict() -> None:
+    """`Save-StopState` clears files exclusively on the clean path."""
+    common = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    save = common.split("function Save-StopState", 1)[1].split("function Ensure-RuntimeDir")[0]
+    # The delete block is nested under `if ($Clean)`.
+    assert "if ($survivors.Count -eq 0)" in save
+    assert "if ($Clean)" in save
+    assert save.index("if ($Clean)") < save.index("Remove-Item -LiteralPath $StatePath")
+    # And it returns immediately afterwards, so no other path can reach it.
+    delete_block = save.split("if ($Clean)", 1)[1].split("return", 1)[0]
+    assert "Remove-Item -LiteralPath $StatePath" in delete_block
+
+
+def test_incomplete_stop_preserves_original_metadata() -> None:
+    """The occupied-port-with-no-survivor case keeps the original reasoning data."""
+    common = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    save = common.split("function Save-StopState", 1)[1].split("function Ensure-RuntimeDir")[0]
+    # The keep-branch re-reads the previous file instead of deleting it.
+    keep = save.split("Incomplete, but nothing identifiable survived", 1)[1].split("return", 1)[0]
+    assert "Get-Content -LiteralPath $StatePath -Raw" in keep
+    assert "partial" in keep
+    assert "incompleteReason" in keep
+    # A parse failure must never destroy the evidence.
+    assert "it was left unchanged" in keep
+
+
+def test_verdict_maps_the_documented_exit_codes() -> None:
+    """0 clean / 1 failed-or-blocked / 2 incomplete, in one testable helper."""
+    common = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    verdict = common.split("function Get-ShutdownVerdict", 1)[1].split("function Save-StopState")[0]
+    assert "ExitCode = 0" in verdict
+    assert "ExitCode = 1" in verdict
+    assert "ExitCode = 2" in verdict
+    assert "'PASS'" in verdict and "'FAILED'" in verdict
+    assert "'BLOCKED'" in verdict and "'INCOMPLETE'" in verdict
+
+
+def test_live_unverified_pid_is_not_reported_as_success() -> None:
+    """A recorded PID that is still alive blocks a PASS even with free ports."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    assert "Get-ShutdownVerdict -FailedCount $failed.Count -BlockedCount $notOurs.Count" in text
+    assert "'BLOCKED'" in text
+    # Survivors are kept only when the recorded PID is actually still alive.
+    assert "Get-Process -Id $recordedPid -ErrorAction SilentlyContinue" in text
+
+
+def test_executable_script_covers_the_r08_counterexample() -> None:
+    """The Windows-runnable script reproduces the exact review counterexample."""
+    text = (SCRIPTS_DIR / "tests" / "stop_identity.tests.ps1").read_text(encoding="utf-8")
+    assert "THE COUNTEREXAMPLE from the review" in text
+    assert "Get-ShutdownVerdict -FailedCount 0 -BlockedCount 0 -BusyPorts @(5173)" in text
+    assert "run-state.json is KEPT" in text
+    assert "clean stop removes run-state.json" in text
+
+
+def test_start_rollback_verifies_before_claiming_cleanup() -> None:
+    """P1-R08 class of bug in start.ps1: never assert a cleanup that was not verified."""
+    text = (SCRIPTS_DIR / "start.ps1").read_text(encoding="utf-8")
+    handler = text.split("catch {", 1)[1]
+    # Leftovers are detected...
+    assert "$leftovers" in handler
+    # ...the removal is conditional on there being none...
+    assert handler.index("if ($leftovers.Count -eq 0)") < handler.index(
+        "Remove-Item -LiteralPath $script:StateFile"
+    )
+    # ...and the incomplete branch keeps the tracking files and says so.
+    incomplete = handler.split("if ($leftovers.Count -eq 0)", 1)[1]
+    assert "rollback was INCOMPLETE" in incomplete
+    assert "Tracking kept" in incomplete
+    # The incomplete branch must contain no state deletion at all. Everything
+    # before the `exit 1` that closes the clean branch is excluded first.
+    clean_branch, incomplete_branch = incomplete.split("exit 1", 1)
+    # The clean branch is the only one allowed to delete tracking files.
+    assert "Remove-Item -LiteralPath $script:StateFile" in clean_branch
+    body = incomplete_branch.split("Write-Fail", 1)[1]
+    assert "Remove-Item -LiteralPath $script:StateFile" not in body
+    assert "Remove-Item -LiteralPath $pidFile" not in body

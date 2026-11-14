@@ -1,0 +1,127 @@
+# =============================================================================
+# AI Doctor Follow-Up Agent — Phase 1 CI
+# EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
+#
+# Deliberately minimal and free-tier friendly:
+#   * no local model runtime, no accelerator, no OCR engine, no paid API, no dataset,
+#   * no matrix explosion, no artifact upload, no secrets required,
+#   * every job is deterministic and offline except package installation.
+#
+# Two jobs:
+#   backend  — Python 3.12: install hash-locked deps, Ruff, pytest, Alembic
+#              smoke test, generated OpenAPI contract check, repository scan.
+#   frontend — Node 22: npm ci, ESLint, Vitest, TypeScript, production build.
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main, "arena/**", "feat/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push to the same ref cancels the previous run: keeps Actions minutes low.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Never depend on an interactive terminal or coloured output in CI logs.
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  APP_ENV: ci
+  APP_GIT_SHA: ${{ github.sha }}
+
+jobs:
+  backend:
+    name: Backend (Python 3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install hash-locked development dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --require-hashes --no-deps -r requirements/requirements-dev.lock
+          python -m pip install --no-build-isolation --no-deps -e .
+
+      - name: Show resolved versions
+        run: |
+          python -V
+          python -m pip list --format=columns | grep -Ei "fastapi|pydantic|sqlalchemy|alembic|uvicorn|pytest|ruff"
+
+      - name: Ruff lint
+        run: python -m ruff check .
+
+      - name: Ruff format check
+        run: python -m ruff format --check .
+
+      - name: Backend tests
+        run: python -m pytest -q
+
+      - name: Alembic migration smoke test (upgrade, downgrade, upgrade)
+        env:
+          SMOKE_DB: ${{ runner.temp }}/alembic-smoke.db
+        run: |
+          URL="sqlite:///$SMOKE_DB"
+          python -m alembic -c backend/migrations/alembic.ini -x "database_url=$URL" upgrade head
+          python -m alembic -c backend/migrations/alembic.ini -x "database_url=$URL" downgrade base
+          python -m alembic -c backend/migrations/alembic.ini -x "database_url=$URL" upgrade head
+          python scripts/python/check_alembic_smoke.py "$SMOKE_DB"
+
+      - name: Generated OpenAPI contract check
+        run: python scripts/python/check_openapi.py
+
+      - name: Repository secret and artefact scan
+        run: python scripts/python/scan_repository.py
+
+  frontend:
+    name: Frontend (Node 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+        working-directory: frontend
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install from package-lock.json
+        run: npm ci --no-audit --no-fund
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Vitest
+        run: npm test
+
+      - name: Production build
+        run: npm run build
