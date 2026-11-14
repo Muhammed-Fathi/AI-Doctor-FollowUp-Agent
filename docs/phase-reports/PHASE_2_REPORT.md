@@ -244,7 +244,7 @@ iterations=600000 hash=271ms verify=204ms (CPython 3.11.2, this sandbox)
 | P2 HTTP lifecycle (auth, doctor, patient, demo) through the production app | **PASS** (29 tests) |
 | Two-writer concurrency, both interleavings | **PASS** (and fail without the recovery path) |
 | Migration round trip + ORM/metadata parity | **PASS** (7 tests) |
-| GitHub Actions CI (Python 3.12 + frontend) | **see §9** — run recorded on the PR |
+| GitHub Actions CI (Python 3.12 + frontend) | **BLOCKED / NOT OBSERVED** — Actions+Checks APIs return 403 to this session's credentials; owner must read PR #7 → Checks (§9) |
 | Windows `scripts/powershell/test_all.ps1` | **NOT RUN — owner-laptop required** |
 | Windows PBKDF2 timing at 600 000 iterations | **NOT RUN — owner-laptop required** |
 | Ollama / Tesseract / Playwright | **N/A** (P3+/optional) |
@@ -257,12 +257,28 @@ iterations=600000 hash=271ms verify=204ms (CPython 3.11.2, this sandbox)
 
 The 3.12 CI leg runs `ruff check`, `ruff format --check`, `pytest`,
 `alembic upgrade → downgrade base → upgrade` + `check_alembic_smoke.py`, and
-`check_openapi.py`. Results are read from the workflow run attached to PR #7 and
-quoted here only once observed; nothing in this report assumes a green run.
+`check_openapi.py`.
 
-- Run URL / conclusion: **see the `CI` status on PR #7** (this file is updated by
-  a follow-up commit if the first run fails, with the failure text rather than a
-  claim of success).
+**Result: NOT OBSERVABLE from the implementation environment — BLOCKED, not
+claimed.** The automation credentials available to the implementing agent cannot
+read Actions/Checks data. Every attempt returned HTTP 403
+`Resource not accessible by integration`:
+
+```
+$ gh run list --branch arena/a8844cc2-ai-doctor-followup-agent
+failed to get runs: HTTP 403: Resource not accessible by integration
+$ gh pr checks 7
+GraphQL: Resource not accessible by integration (…statusCheckRollup…)
+$ gh api repos/…/commits/<sha>/check-runs     → 403
+$ gh api repos/…/commits/<sha>/status         → 403
+$ gh api repos/…/actions/runs?per_page=2      → 403
+```
+
+The workflow is triggered normally on the branch (`push` → `CI`), and the pushes
+succeeded (`58b60f8..69f12ae..b079090`), but this report does **not** assert a
+green run. The owner must read the conclusion on PR #7 → *Checks*. If the run
+reports a failure, that failure is unresolved work: nothing here should be read
+as CI evidence until it is observed green.
 
 ---
 
