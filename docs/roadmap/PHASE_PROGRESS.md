@@ -1,6 +1,6 @@
 # Phase Progress Tracker
 
-> **Current status: P0 PASS (owner-approved and merged 2026-11-14); P1 IN_REVIEW.**
+> **Current status: P0 PASS; P1 PASS (owner-approved and merged 2026-11-14). P2 TODO — not started.**
 >
 > Phase 0 (Governance and Specifications) completed its documentation review process and was merged into `main` through [PR #2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2).
 >
@@ -14,9 +14,9 @@
 >
 > **Final technical review:** `5904590155` — P0 architecture and governance documentation ready for owner sign-off, with no remaining blocking documentation findings.
 >
-> **Current phase:** P1 — Foundation and Reproducible Startup, PR [#4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4), status `IN_REVIEW`. The owner has completed Windows verification at `eec6642`; owner approval and merge are **still pending**.
+> **Last accepted phase:** P1 — Foundation and Reproducible Startup, PR [#4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4), status `PASS`. Windows verification at `eec6642`, final docs-only PR head `58a0652`; merge commit `2c85db4d9fe9f17080146d12adfbd030a05cc75d`. Owner approved on 2026-11-14.
 >
-> **Next phase:** P2 — Patient data and role-based API. **Not started.** P2 begins only after [PR #4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4) is approved and merged.
+> **Next phase:** P2 — Patient data and role-based API. **TODO — not started.** P1 acceptance prerequisites are now satisfied; P2 requires its own scoped implementation branch and review.
 >
 > **Important:** P0 approval applies to the architecture, requirements, contracts, documentation and synthetic-demo scope. It does not represent completed application implementation, clinical validation or successful runtime testing.
 
@@ -31,7 +31,7 @@ The implementing agent never self-approves, marks phases `PASS` or merges pull r
 | Phase | Topic | Status | PR | Merge SHA | Test Evidence | Owner Approval |
 |---|---|---|---|---|---|---|
 | P0 | Governance / specifications | **PASS** | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) | `442256606fd2465439409cc9b4d42f1bec09a723` | Documentation consistency, traceability, OpenAPI validation and targeted contract checks completed. No runtime implementation tests applicable to P0. | **Approved — 2026-11-14** |
-| P1 | Foundation / reproducible startup | **IN_REVIEW** | [#4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4) | — *(unset — phase not merged)* | **Owner Windows gate PASSED at `eec6642`:** `test_all.ps1` 12 PASS / 0 FAIL / 1 optional SKIP; `invoke_native.tests.ps1` 14 checks; `stop_identity.tests.ps1` 38 checks; live setup/start/stop PASS on both the normal path and the space-containing path (`E:\DEPI\AI Doctor FollowUp Agent Space Test`); ports 8000/5173 free and all three tracking files removed. GitHub Actions run [`43615782079`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43615782079) SUCCESS. Backend 121 tests, frontend 13, Ruff, Alembic, OpenAPI, scan, Vite build also pass locally. Optional Playwright smoke NOT EXECUTED. | **Pending — owner sign-off not yet recorded** |
+| P1 | Foundation / reproducible startup | **PASS** | [#4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4) | `2c85db4d9fe9f17080146d12adfbd030a05cc75d` | **Owner Windows gate PASSED at `eec6642`:** `test_all.ps1` 12 PASS / 0 FAIL / 1 optional SKIP; `invoke_native.tests.ps1` 14 checks; `stop_identity.tests.ps1` 38 checks; live setup/start/stop PASS on both the normal path and the space-containing path (`E:\DEPI\AI Doctor FollowUp Agent Space Test`); ports 8000/5173 free and all three tracking files removed. GitHub Actions run [`43615782079`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43615782079) SUCCESS. Backend 121 tests, frontend 13, Ruff, Alembic, OpenAPI, scan, Vite build also pass locally. Optional Playwright smoke NOT EXECUTED. | **Approved — 2026-11-14; license and DEPENDENCIES sync deferred; Playwright SKIP acknowledged** |
 | P2 | Patient data + role-based API | TODO | — | — | Not run | Pending |
 | P3 | Document ingestion + OCR verification | TODO | — | — | Not run | Pending |
 | P4 | Monitoring + demo review rules | TODO | — | — | Not run | Pending |
@@ -228,11 +228,7 @@ This safeguard must be checked during P3 implementation before the document-inge
 
 **Phase:** P1 — Foundation and Reproducible Startup
 
-**Current status:** `IN_REVIEW` — PR [#4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4)
-is open against `main`. The owner has completed Windows verification (gate, regression
-suites, live setup/start/stop on both the normal and space-containing paths) and CI is
-green; **owner approval and merge are still pending**. Evidence:
-`docs/phase-reports/PHASE_1_REPORT.md` (current state §7, owner Windows appendix §8).
+**Current status:** `PASS` — PR [#4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4) **merged** on 2026-11-14 at `2c85db4d9fe9f17080146d12adfbd030a05cc75d`. Owner verified Windows tests and both normal/spaced-path lifecycles, reviewed CI, approved the documented limitations and authorized the merge. Evidence: `docs/phase-reports/PHASE_1_REPORT.md` §13 (Windows), §14 (post-merge record).
 
 **Prerequisite:** P0 accepted and merged — satisfied.
 **Base commit of the P1 branch:** `a33e693ba16560836312351787769ec5ee18b469`.
@@ -284,9 +280,7 @@ Project virtual environments, local runtime files, dependencies and test artifac
 
 ### P1 Acceptance Gate
 
-P1 must not be marked `PASS` until every item below holds. Each bullet states the
-evidence as of head `eec6642`; **`PASS` itself is still withheld pending the owner's
-explicit decision**.
+P1 is now **PASS**. The checks below were satisfied on the owner-verified code head `eec6642`, followed by the final docs-only head `58a0652` and owner-approved merge `2c85db4d9fe9f17080146d12adfbd030a05cc75d`.
 
 - A clean installation can reproduce the documented environment. — **Met:** clean clone
   reproducibility on Linux, plus `setup.ps1` PASS from a clean space-containing path on
@@ -307,9 +301,8 @@ explicit decision**.
   repository scan PASS.
 - The P1 pull request passes independent review. — **Met on functionality:** P1-R01–R09
   addressed; no open functional blockers identified.
-- The project owner explicitly approves and merges the P1 pull request. — **NOT YET.**
-- The exact merge SHA and execution evidence are recorded. — Execution evidence is
-  recorded; **the merge SHA does not exist yet and is deliberately left unset.**
+- The project owner explicitly approves and merges the P1 pull request. — **Met:** owner approval recorded in the review and [PR #4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4) merged 2026-11-14.
+- The exact merge SHA and execution evidence are recorded. — **Met:** `2c85db4d9fe9f17080146d12adfbd030a05cc75d`; Windows verification and CI are documented here and in the P1 report.
 
 **Optional, not part of the gate:** the Playwright browser smoke test was **NOT
 EXECUTED** — browser binaries were unavailable in the authoring environment. It is
@@ -321,17 +314,18 @@ The implementation agent must use a dedicated P1 branch and PR.
 
 ---
 
-## P1 Evidence — Submitted for Review
+## P1 Evidence — Accepted and Merged
 
-**Status:** `IN_REVIEW`. Nothing below is an owner approval.
+**Status:** `PASS`. Owner approval and merge were confirmed on 2026-11-14. Historical pre-merge execution evidence remains attributed to its actual code head.
 
 | Item | Value |
 |---|---|
 | Scope | Foundation only: monorepo layout, FastAPI `/health` + `/version`, React/TS/Vite status page, SQLite + Alembic baseline, hash-pinned locks, Windows scripts, CI, guides |
 | Branch | `arena/d86c4f98-ai-doctor-followup-agent` |
 | Base commit | `a33e693ba16560836312351787769ec5ee18b469` |
-| Head commit | `eec6642ba700be25f8be1d645bb099f51a665441` (owner-verified) |
-| Merge SHA | **unset — the phase is not merged** |
+| Owner-tested code head | `eec6642ba700be25f8be1d645bb099f51a665441` |
+| Final PR head | `58a0652469fbea9f7ad3a13752993a908b5373ea` (docs-only delta from owner-tested head) |
+| Merge SHA | `2c85db4d9fe9f17080146d12adfbd030a05cc75d` |
 | Deliverables | 13/13 addressed; see `docs/phase-reports/PHASE_1_REPORT.md` §3 |
 | Backend tests | `python -m pytest -q` -> 121 passed (exit 0); also green in CI on Python 3.12 |
 | Frontend tests | `npm test` -> 13 passed (exit 0) |
@@ -348,11 +342,22 @@ The implementation agent must use a dedicated P1 branch and PR.
 | Playwright browser smoke | **NOT EXECUTED** — optional gate; browser binaries unavailable in the authoring environment (and not installed on the owner's run). Reported `SKIP`, never as a pass |
 | Python 3.12 execution | **Executed on Windows (3.12.9) and in CI**; the authoring sandbox used 3.11.2 |
 | Application scope | No patient, auth, OCR, monitoring, agent, task or messaging code exists in P1 |
-| Owner decision | **Pending** — Windows evidence is complete; explicit owner approval and merge are still required |
+| Owner decision | **Approved 2026-11-14** — docs-scope exception accepted, private-repo license selection and historical dependency-doc sync deferred, optional Playwright SKIP acknowledged, PR #4 merged |
 
 See `docs/phase-reports/PHASE_1_REPORT.md` §7 for exact commands, exit codes and the list of
 checks that were *not* executed and why. No test count, timing or result in this table is
 estimated; each came from a command actually run in the implementation session.
+
+---
+
+## P1 Owner Acceptance and Merge Record — 2026-11-14
+
+- **Phase result:** `PASS`. Owner gave explicit approval after independent technical review and green Windows / GitHub CI checks.
+- **Merged PR:** [#4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4), final PR head `58a0652469fbea9f7ad3a13752993a908b5373ea`, merge SHA `2c85db4d9fe9f17080146d12adfbd030a05cc75d`.
+- **Owner Windows evidence:** regression suites 14/14 and 38/38; full `test_all.ps1` **12 PASS / 0 FAIL / 1 SKIP**; FastAPI and Vite normal-path and spaced-path setup/start/stop PASSED, ports free, state/PID files removed after clean shutdown.
+- **CI:** final-head [run 43618740952](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43618740952) succeeded on backend Python 3.12 and frontend Node 22.
+- **Owner governance decisions:** P1 documentation path exception (`P1-OPEN-02`) accepted; no license is granted at present and license/copyright convention (`P1-OPEN-01/08`) explicitly deferred while the repository remains private, to be decided before public distribution or a separately agreed gate; historical `DEPENDENCIES.md` sync (`P1-OPEN-03`) deferred to P2; optional Playwright browser smoke **NOT EXECUTED** and accepted as a non-blocking SKIP.
+- **Safety boundary:** educational, synthetic-only, local-first foundation; no clinical validation or patient data handling claimed. P2 has **not started**.
 
 ---
 
@@ -377,19 +382,15 @@ Do not prefill future pass results, test counts, benchmarks or model metrics.
 
 ## Next Authorized Workflow
 
-1. Preserve the verified P0 merge commit and owner approval evidence — done.
-2. P1 implementation submitted on `arena/d86c4f98-ai-doctor-followup-agent`; PR open, status `IN_REVIEW`.
-3. Owner/reviewer: inspect the P1 diff, the changed-file list and `docs/phase-reports/PHASE_1_REPORT.md`.
-4. Run `preflight.ps1`, `setup.ps1`, `test_all.ps1`, `start.ps1`, `stop.ps1` on the owner's Windows laptop.
-5. Confirm the GitHub Actions run on the PR head is green.
-6. Record the P1 decision (accept/reject), the merge SHA and the local evidence only after verification.
-7. P2 must not start until P1 is accepted.
+1. P0 and P1 accepted; preserve the verified merge SHAs and owner decision records.
+2. Synchronize the owner's local `main` from `origin/main` after checking for uncommitted changes.
+3. Begin P2 planning against the merged foundation in a new scoped branch/PR; follow P0 governance and synthetic-data constraints.
+4. Carry forward the deferred license/public-distribution decision, `DEPENDENCIES.md` sync, and optional Playwright smoke without claiming they passed.
+5. Do not mark P2 `PASS` without its own evidence, owner approval, and merge.
 
-**Current accepted baseline:** P0 architecture and governance.
+**Current accepted baseline:** P0 governance plus **P1 foundation (PASS)**.
 
-**Phase under review:** P1 — Foundation and Reproducible Startup.
-
-**Next implementation milestone (not authorized yet):** P2 — Patient data domain and role-scoped API.
+**Next implementation milestone (not started):** P2 — Patient data domain and role-scoped API.
 
 **Project classification:** Educational, synthetic-data, local-first multi-agent workflow assistant.
 
