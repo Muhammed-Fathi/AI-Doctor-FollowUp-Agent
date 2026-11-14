@@ -4,15 +4,16 @@
 |---|---|
 | Report ID | `REPORT-P1-001` |
 | Phase | **P1 only** — repository foundation, reproducible startup, `/health` + `/version`, frontend status page, SQLite + Alembic baseline, Windows scripts, CI |
-| Status | **IN_REVIEW — owner Windows verification complete; owner approval and merge still pending. Not `PASS`, not merged.** |
+| Status | **PASS — owner-approved and merged 2026-11-14; no clinical validation implied** |
 | Branch | `arena/d86c4f98-ai-doctor-followup-agent` |
 | Base commit | `a33e693ba16560836312351787769ec5ee18b469` (verified `main` HEAD before any change) |
-| Head commit | `eec6642ba700be25f8be1d645bb099f51a665441` — the commit the owner verified on Windows |
-| Merge SHA | **unset — the phase is not merged** |
+| Owner-verified code head | `eec6642ba700be25f8be1d645bb099f51a665441` — owner Windows test baseline |
+| Final PR head | `58a0652469fbea9f7ad3a13752993a908b5373ea` — only two Markdown files changed after Windows verification |
+| Merge SHA | `2c85db4d9fe9f17080146d12adfbd030a05cc75d` — verified GitHub merge commit |
 | Pull request | [#4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4) against `main`, title `P1: Foundation and reproducible local startup` |
 | GitHub Actions | run [`43615782079`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43615782079) — **SUCCESS** |
 | Author | Arena agent (implementer) |
-| Reviewer | Project owner — Windows verification complete; **sign-off pending** |
+| Reviewer | Independent mentor review complete; owner gave explicit approval on 2026-11-14 |
 
 > **EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE.** This report describes infrastructure
 > work. No clinical feature, no patient data and no model integration exists. Nothing here was
@@ -596,6 +597,8 @@ PowerShell regression scripts (executed by the owner on Windows, §13.1):
 
 ## 10. Open questions, risks and limitations
 
+> Post-merge owner decisions on 2026-11-14: the required P1 docs-path exception is **accepted**; license choice remains **explicitly deferred while private** (before public distribution or separately agreed gate); synchronization of historical `DEPENDENCIES.md` is **deferred to P2**; optional Playwright remains **SKIP / NOT EXECUTED**. These are acknowledged non-blockers, not completed tests.
+
 | ID | Item | Proposed default |
 |---|---|---|
 | `P1-OPEN-01` | Project license still unset (`DEPENDENCIES.md` §7). `pyproject.toml` deliberately declares none. | Owner chooses before P2 (or explicitly defers to P8). |
@@ -640,18 +643,16 @@ the tick reflects the owner's own reported evidence, not an agent claim.
 - [x] `stop.ps1` leaves ports 8000/5173 free and stops nothing else — on **both** the normal and the space-containing path.
 - [x] CI workflow added by the owner (§7.5); run [`43615782079`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43615782079) is green.
 - [x] `git ls-files | Select-String -Pattern '\.env$|\.db$|node_modules'` returns nothing.
-- [ ] **Open:** scope question `P1-OPEN-02` explicitly accepted or rejected.
-- [ ] **Open:** decide `P1-OPEN-01` (license) before P2.
-- [ ] **Open:** explicit owner approval of P1 and the merge itself.
+- [x] **Accepted by owner:** P1 documentation scope exception `P1-OPEN-02`.
+- [x] **Owner decision:** defer `P1-OPEN-01/08` license/copyright choice while repo is private; determine before public distribution or a separately agreed later gate. No license granted.
+- [x] **Owner approval and merge verified:** PR #4 merged at `2c85db4d9fe9f17080146d12adfbd030a05cc75d`.
 - [ ] **Open (optional):** run the Playwright smoke with `-IncludeE2E` if you want that gate executed (§13.4).
 
-**Phase status: `IN_REVIEW`. Owner approval is pending and the merge SHA is unset.**
-The agent did not merge, did not self-approve and did not start P2. Merging and phase
-acceptance are owner decisions (`AGENTS.md` §2).
+**Phase status: `PASS`.** The owner approved P1 after independent technical review and the authorized merge of PR #4 is verified at `2c85db4d9fe9f17080146d12adfbd030a05cc75d`. The implementing Arena agent did not merge, did not self-approve and did not start P2. Phase acceptance remains an owner decision (`AGENTS.md` §2).
 
 ---
 
-## 13. Owner Windows verification — final appendix
+## 13. Owner Windows verification — pre-merge evidence appendix
 
 This appendix records evidence **produced by the project owner on Windows**, reported in
 PR #4 review `5905950006` and the accompanying owner notes. The agent did not execute any
@@ -744,7 +745,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\test_al
 
 ### 13.6 Phase disposition
 
-**`IN_REVIEW`. Owner approval is PENDING. The merge SHA is deliberately unset.**
+**`PASS`. Owner approval was recorded on 2026-11-14; GitHub confirmed PR #4 merged at `2c85db4d9fe9f17080146d12adfbd030a05cc75d`.**
 
 | Item | State |
 |---|---|
@@ -752,9 +753,33 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\test_al
 | Functional findings P1-R01…R09 | Addressed |
 | Windows runtime validation | **Passed** (§13.1–§13.3) |
 | GitHub Actions | **Green** — run `43615782079` |
-| Owner approval | **Pending** |
-| Merge | **Not merged**; `main` is unchanged at `a33e693` |
+| Owner approval | **Approved — 2026-11-14** |
+| Merge | **Merged** — `2c85db4d9fe9f17080146d12adfbd030a05cc75d` |
 | P2 | **Not started** |
 
-Nothing in this appendix may be read as an approval, and no future result has been
-claimed: the merge SHA does not exist yet.
+This appendix's Windows results were recorded before merge; owner approval and the actual GitHub merge are recorded in §14. No optional Playwright pass or clinical validation is claimed.
+
+---
+
+## 14. P1 owner authorization and post-merge acceptance — 2026-11-14
+
+This section records the owner's explicit approval after independent technical review, and the actual GitHub merge. It supersedes **historical pre-merge status descriptions** elsewhere in this report; earlier test results remain attributed to the head at which they ran.
+
+| Decision field | Verified outcome |
+|---|---|
+| Phase status | **P1 PASS — owner approved, merged** |
+| Pull request | [PR #4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4), GitHub status **merged** |
+| Windows-verified functional head | `eec6642ba700be25f8be1d645bb099f51a665441` |
+| Final PR head | `58a0652469fbea9f7ad3a13752993a908b5373ea` (documentation-only delta) |
+| GitHub merge commit | `2c85db4d9fe9f17080146d12adfbd030a05cc75d` |
+| Final-head CI | [run 43618740952](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43618740952), **SUCCESS** (backend Python 3.12 + frontend Node 22) |
+| Windows quality gate | `test_all.ps1` **12 PASS / 0 FAIL / 1 optional SKIP**; regression suites **14/14** and **38/38** |
+| Windows runtime | Normal path and spaced path clean setup/start/stop **PASS**; ports 8000/5173 free; clean-shutdown tracking files absent |
+| Owner approval | **Explicit approval — 2026-11-14**, after recommendation by independent mentor reviewer |
+| P1-OPEN-02 | Documentation scope exception **accepted** |
+| P1-OPEN-01/08 | License/copyright convention **deferred**, no public license claimed; decide before public distribution or a separately agreed later gate |
+| P1-OPEN-03 | Sync historical `DEPENDENCIES.md` in **P2**; P1 lock manifests and phase report remain authoritative |
+| Browser Playwright | **NOT EXECUTED**; optional P1 acceptance skip, not falsely recorded as pass |
+| P2 | **TODO — not started**; requires its own scoped branch/PR and evidence |
+
+Safety scope unchanged: synthetic-data, educational, local-first foundation; **NOT FOR CLINICAL USE**. P1 acceptance does not approve clinical deployment or authorize real patient data.
