@@ -9,7 +9,7 @@ ticked by the implementer. Acceptance, merge and any PASS marking are the owner'
 | Approved baseline | `main` @ `d1ec0b9b481dca313c8ea2f21f97872582fc5a86` (P0 PASS, P1 PASS) |
 | Branch | `arena/a8844cc2-ai-doctor-followup-agent` |
 | Pull request | [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) — **draft**, base `main` |
-| Implementation commits | `4f661de` (in-scope core), `58b60f8` (review round 1), `69f12ae` (routes, migration, gates) |
+| Commits | implementation `4f661de`, `58b60f8`, `69f12ae`; documentation `b079090`, `7b0b822` + this report correction. The branch head at handback is stated in the PR #7 handback comment |
 | Scope authorization | [owner comment 6881832444](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6881832444) — recorded verbatim in `docs/roadmap/PHASE_PROGRESS.md` |
 | Authorized exceptions | A1–A3, B1–B2, C1–C2, D1–D2, E1–E2, F1–F2, G1–G3, H1–H3 (19 physical paths) |
 | Executed here | Debian 12 sandbox, **Python 3.11.2** |
@@ -196,7 +196,7 @@ $ PYTHONPATH=backend python scripts/python/check_openapi.py
 OpenAPI contract check: PASS (11 paths / 12 operations, 22 schemas)
 
 $ PYTHONPATH=backend python scripts/python/scan_repository.py
-Secret/artefact scan: PASS (142 tracked files; 7 secret patterns, 4 claim patterns)
+Secret/artefact scan: PASS (143 tracked files; 7 secret patterns, 4 claim patterns)
 ```
 
 Migration sequence (fresh SQLite each time, `-x database_url=...`):
