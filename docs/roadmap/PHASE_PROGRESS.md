@@ -30,7 +30,7 @@
 | Not executed | Any backend/frontend test, OCR, model call, benchmark, browser E2E, Windows PowerShell gate, migration |
 | Owner-laptop required | Windows PowerShell scripts, Tesseract/Poppler install, Ollama model benchmark, offline demo |
 | PR | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) — opened 2026-11-14, base `main` @ `7d2ef73`, not merged |
-| Review round 1 | 7 findings + 1 ADR concern, all resolved in documentation (resolution matrix in the phase report §13) |
+| Review round 1 | 7 findings + 1 ADR concern, all resolved in documentation (resolution matrix in the phase report §10); round 2 content commit `81df966b2fe80ab842f3405b32cfabc2f1b3a5e7` |
 | Blocks P1 until | Owner re-reviews the resolutions, confirms the six ADRs (incl. amended ADR-0006), approves the demo rule parameters, and merges the PR |
 
 Do not prefill future pass results, test counts, or metrics. When a phase completes, record the PR URL,

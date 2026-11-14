@@ -8,7 +8,7 @@
 | Review round | 1 — PR #2 review `5904454222` (7 findings + ADR-0006 depth concern) → resolved in documentation; see §10 |
 | Branch | `arena/ee7d211b-ai-doctor-followup-agent` |
 | Base commit | `7d2ef73dae50c7404b46f653942eb99351053059` |
-| Head commit | round 1: `8e342546ec26acc1382e2916b25affed7c660dc2`; round 2: recorded in the PR body at the top (two commits: content + linkage) |
+| Head commit | round 1: `8e342546ec26acc1382e2916b25affed7c660dc2`; round 2 content: `81df966b2fe80ab842f3405b32cfabc2f1b3a5e7`, plus a documentation-linkage commit (the exact PR head is listed at the top of PR #2) |
 | Pull request | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) — targeting `main`, **not merged** |
 | Tracking issue | GitHub issue #1 (referenced by number only — see §4.7 for an access limitation) |
 | Author | Arena agent (implementer) |
