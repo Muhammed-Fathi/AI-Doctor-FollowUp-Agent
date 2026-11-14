@@ -89,8 +89,19 @@ function Write-Banner {
 }
 
 # --- external command execution ----------------------------------------------
-# Runs a native command, streams its output, and fails the script if the exit
-# code is non-zero. Never uses `exit` itself so callers stay in control.
+# Runs a native command, streams its output to the console, and returns ONLY the
+# numeric exit code.
+#
+# IMPORTANT (P1-R06): a native command's stdout is written into the caller's
+# *success pipeline*. Without the explicit `Out-Host` below, output such as
+# "All checks passed!" is emitted next to the exit code, so a caller doing
+# `$code = Invoke-Native ...` receives an array whose comparison with 0 is false
+# even when the command succeeded. `Out-Host` writes the same text to the same
+# console (visible, unaltered) while keeping it out of the pipeline.
+#
+# stderr is deliberately NOT redirected: it already goes to the console, and
+# merging it (`2>&1`) under $ErrorActionPreference='Stop' would turn benign
+# native stderr writes into terminating errors on Windows PowerShell 5.1.
 function Invoke-Native {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
@@ -99,10 +110,15 @@ function Invoke-Native {
         [switch]$AllowFailure
     )
 
+    # Never let a stale value from an earlier command leak into the result.
+    $code = 0
+
     Push-Location -LiteralPath $WorkingDirectory
     try {
-        & $FilePath @Arguments
-        $code = $LASTEXITCODE
+        & $FilePath @Arguments | Out-Host
+        if ($null -ne $LASTEXITCODE) {
+            $code = [int]$LASTEXITCODE
+        }
     }
     finally {
         Pop-Location
@@ -114,8 +130,12 @@ function Invoke-Native {
     return $code
 }
 
-# Captures stdout of a native command. Returns $null when the command fails and
-# -AllowFailure is not set (the caller then decides), never a fake value.
+# Captures stdout of a native command. Returns an object with the numeric exit
+# code and the trimmed output; never a fake value.
+#
+# `$LASTEXITCODE` is read into a variable and the captured pipeline is flattened
+# with `-join` before anything else runs, so a value written by the command that
+# happens to look numeric can never be mistaken for the exit code.
 function Get-NativeOutput {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
@@ -123,16 +143,64 @@ function Get-NativeOutput {
         [string]$WorkingDirectory = $script:RepoRoot
     )
 
+    $code = 0
+    $output = @()
+
     Push-Location -LiteralPath $WorkingDirectory
     try {
-        $output = & $FilePath @Arguments 2>&1
-        $code = $LASTEXITCODE
+        $output = @(& $FilePath @Arguments 2>&1)
+        if ($null -ne $LASTEXITCODE) {
+            $code = [int]$LASTEXITCODE
+        }
     }
     finally {
         Pop-Location
     }
 
-    return [pscustomobject]@{ ExitCode = $code; Output = ($output -join "`n").Trim() }
+    return [pscustomobject]@{ ExitCode = $code; Output = (@($output) -join "`n").Trim() }
+}
+
+# Quotes a single argument for the Windows command line.
+#
+# `Start-Process -ArgumentList` joins the array with spaces and hands the result
+# to CreateProcess as ONE string; an element such as
+# `--app-dir E:\My Projects\repo\backend` therefore splits on the space and the
+# child receives a truncated path (P1-R03). Every element is quoted explicitly.
+#
+# Only arguments that contain whitespace, quotes or are empty are quoted, so
+# ordinary flags stay readable in logs and error messages.
+function ConvertTo-QuotedArgument {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Argument)
+
+    if ($Argument.Length -eq 0) {
+        return '""'
+    }
+    if ($Argument -notmatch '[\s"]') {
+        return $Argument
+    }
+
+    # Escape embedded double quotes the way the C runtime expects: \" -> \\"
+    $escaped = $Argument -replace '(\\*)"', '$1$1\"'
+
+    # A run of backslashes immediately before the closing quote would escape it,
+    # so those are doubled. (Only matters for arguments ending in `\`.)
+    $trailing = [Regex]::Match($escaped, '\\+$')
+    if ($trailing.Success) {
+        $escaped = $escaped.Substring(0, $escaped.Length - $trailing.Length) + ($trailing.Value * 2)
+    }
+
+    return '"' + $escaped + '"'
+}
+
+# Joins an argument array into a single correctly quoted command line.
+function ConvertTo-CommandLine {
+    param([string[]]$Arguments = @())
+
+    $quoted = @()
+    foreach ($argument in $Arguments) {
+        $quoted += (ConvertTo-QuotedArgument -Argument ([string]$argument))
+    }
+    return ($quoted -join ' ')
 }
 
 function Assert-CommandExists {

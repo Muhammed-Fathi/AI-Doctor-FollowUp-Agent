@@ -61,6 +61,23 @@ function Add-Result {
     }
 }
 
+function Get-ExitCodeValue {
+    # Tripwire for P1-R06: `Invoke-Native` must return exactly one integer.
+    # If a future edit reintroduces pipeline contamination the value becomes an
+    # object[] and every gate would silently be classified wrongly, so fail loudly.
+    param(
+        [Parameter(Mandatory = $true)][string]$Gate,
+        [Parameter(Mandatory = $false)]$Value
+    )
+    if ($Value -is [int]) { return $Value }
+    if ($null -eq $Value) {
+        Write-Fail "$Gate : command wrapper returned no exit code."
+        return 1
+    }
+    Write-Fail "$Gate : command wrapper returned $($Value.GetType().Name) instead of a numeric exit code."
+    return 1
+}
+
 function Invoke-Gate {
     param(
         [Parameter(Mandatory = $true)][string]$Gate,
@@ -69,7 +86,8 @@ function Invoke-Gate {
         [string]$WorkingDirectory = $script:RepoRoot
     )
     Write-Step $Gate
-    $code = Invoke-Native -FilePath $FilePath -Arguments $Arguments -WorkingDirectory $WorkingDirectory -AllowFailure
+    $raw = Invoke-Native -FilePath $FilePath -Arguments $Arguments -WorkingDirectory $WorkingDirectory -AllowFailure
+    $code = Get-ExitCodeValue -Gate $Gate -Value $raw
     if ($code -eq 0) {
         Add-Result -Gate $Gate -Status 'PASS'
     }
@@ -89,6 +107,20 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
 # `setup.ps1` also installs the package editable, so this is belt-and-braces.
 $env:PYTHONPATH = $script:BackendDir
 $env:APP_ENV = 'test'
+
+# --- 0. command-wrapper self-test (P1-R06) ------------------------------------
+# Runs first: if Invoke-Native ever misreports an exit code again, every gate
+# below would be classified wrongly, so the harness is validated before use.
+$harnessTest = Join-Path $script:ScriptsDir 'tests\invoke_native.tests.ps1'
+if (Test-Path -LiteralPath $harnessTest) {
+    $powershellExe = (Get-Process -Id $PID).Path
+    if (-not $powershellExe) { $powershellExe = 'powershell' }
+    Invoke-Gate -Gate 'Command wrapper self-test' -FilePath $powershellExe `
+        -Arguments @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $harnessTest) | Out-Null
+}
+else {
+    Add-Result -Gate 'Command wrapper self-test' -Status 'FAIL' -Detail "missing $harnessTest"
+}
 
 # --- 1. Ruff ------------------------------------------------------------------
 $ruff = Join-Path (Get-VenvDir) 'Scripts\ruff.exe'
@@ -116,9 +148,10 @@ $alembicOk = $true
 $alembicDetail = ''
 foreach ($action in @('upgrade:head', 'downgrade:base', 'upgrade:head')) {
     $parts = $action.Split(':')
-    $code = Invoke-Native -FilePath $venvPython `
+    $raw = Invoke-Native -FilePath $venvPython `
         -Arguments @('-m', 'alembic', '-c', $script:AlembicIni, '-x', "database_url=$smokeUrl", $parts[0], $parts[1]) `
         -AllowFailure
+    $code = Get-ExitCodeValue -Gate "Alembic migration smoke ($action)" -Value $raw
     if ($code -ne 0) {
         $alembicOk = $false
         $alembicDetail = "failed at $action (exit $code)"
@@ -136,7 +169,8 @@ else {
 # --- 4. generated openapi contract -------------------------------------------
 Write-Step 'OpenAPI surface check (/health, /version only)'
 $openapiScript = Join-Path $script:RepoRoot 'scripts\python\check_openapi.py'
-$code = Invoke-Native -FilePath $venvPython -Arguments @($openapiScript) -AllowFailure
+$raw = Invoke-Native -FilePath $venvPython -Arguments @($openapiScript) -AllowFailure
+$code = Get-ExitCodeValue -Gate 'OpenAPI surface check' -Value $raw
 if ($code -eq 0) {
     Add-Result -Gate 'OpenAPI surface check' -Status 'PASS'
 }
@@ -189,7 +223,8 @@ else {
 # --- 8. secret / artifact scan ------------------------------------------------
 Write-Step 'Secret and runtime-artifact scan of tracked files'
 $scanScript = Join-Path $script:RepoRoot 'scripts\python\scan_repository.py'
-$code = Invoke-Native -FilePath $venvPython -Arguments @($scanScript) -AllowFailure
+$raw = Invoke-Native -FilePath $venvPython -Arguments @($scanScript) -AllowFailure
+$code = Get-ExitCodeValue -Gate 'Secret/artifact scan' -Value $raw
 if ($code -eq 0) {
     Add-Result -Gate 'Secret/artifact scan' -Status 'PASS'
 }

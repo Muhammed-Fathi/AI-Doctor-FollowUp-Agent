@@ -161,3 +161,116 @@ def test_scripts_have_no_placeholder_markers() -> None:
         text = script.read_text(encoding="utf-8").upper()
         for marker in ("TODO", "FIXME", "XXX", "PLACEHOLDER"):
             assert marker not in text, f"{script.name} contains {marker}"
+
+
+# --- P1-R06: Invoke-Native must return ONLY the numeric exit code -------------
+# Regression guard for the Windows defect where a native command's stdout was
+# emitted alongside the exit code, so `$code = Invoke-Native ...` produced a
+# multi-element array and every successful gate was reported as FAIL.
+# Executable proof lives in ``scripts/powershell/tests/invoke_native.tests.ps1``.
+
+
+def test_invoke_native_discards_native_output_from_the_pipeline() -> None:
+    """Native stdout must be piped to ``Out-Host``, never left in the pipeline."""
+    text = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    function = text.split("function Invoke-Native", 1)[1].split("function Get-NativeOutput", 1)[0]
+    assert "| Out-Host" in function, "Invoke-Native must route native stdout to Out-Host"
+    # The raw `& $FilePath @Arguments` must never appear unbounded in the wrapper.
+    for line in function.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("& $FilePath @Arguments"):
+            assert stripped.endswith("| Out-Host"), f"unpiped native call: {stripped!r}"
+
+
+def test_invoke_native_returns_a_scalar_and_resets_last_exit_code() -> None:
+    """The wrapper initialises its exit code so a stale value cannot leak."""
+    text = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    function = text.split("function Invoke-Native", 1)[1].split("function Get-NativeOutput", 1)[0]
+    assert "$code = 0" in function
+    assert "return $code" in function
+    # Broadcasting an array would reintroduce the multi-value pipeline bug.
+    assert "return ," not in function and "return @(" not in function
+
+
+def test_invoke_native_does_not_merge_stderr_into_the_pipeline() -> None:
+    """``2>&1`` under $ErrorActionPreference='Stop' can break PowerShell 5.1."""
+    text = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    function = text.split("function Invoke-Native", 1)[1].split("function Get-NativeOutput", 1)[0]
+    assert "2>&1" not in function
+
+
+def test_get_native_output_still_captures_stdout() -> None:
+    """Capture semantics of ``Get-NativeOutput`` stay intact (it returns an object)."""
+    text = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    function = text.split("function Get-NativeOutput", 1)[1].split(
+        "function ConvertTo-QuotedArgument"
+    )[0]
+    assert "@(& $FilePath @Arguments 2>&1)" in function
+    assert "ExitCode = $code" in function
+    assert "Output =" in function
+
+
+def test_test_all_validates_the_exit_code_type() -> None:
+    """``test_all.ps1`` refuses to classify a gate from a non-numeric value."""
+    text = (SCRIPTS_DIR / "test_all.ps1").read_text(encoding="utf-8")
+    assert "function Get-ExitCodeValue" in text
+    assert "-is [int]" in text
+    # Every gate must go through the tripwire: Invoke-Gate (7 gates) plus the
+    # three gates that call Invoke-Native directly (alembic, openapi, scan).
+    gate_function = text.split("function Invoke-Gate", 1)[1].split("# --- 1. Ruff", 1)[0]
+    assert "Get-ExitCodeValue -Gate" in gate_function
+    assert text.count("Get-ExitCodeValue -Gate") >= 4
+
+
+def test_executable_powershell_regression_script_covers_the_three_cases() -> None:
+    """The Windows-runnable test covers output, silence, and non-zero failure."""
+    path = SCRIPTS_DIR / "tests" / "invoke_native.tests.ps1"
+    assert path.is_file(), "missing executable regression script for Invoke-Native"
+    text = path.read_text(encoding="utf-8")
+    for case in (
+        "successful command that prints output",
+        "silent successful command",
+        "failing command",
+    ):
+        assert case in text, f"regression script does not cover: {case}"
+
+
+# --- P1-R03: paths containing spaces ------------------------------------------
+
+
+def test_start_quotes_every_start_process_argument() -> None:
+    """``-ArgumentList`` must receive a quoted command-line string (P1-R03)."""
+    text = (SCRIPTS_DIR / "start.ps1").read_text(encoding="utf-8")
+    start_process_calls = text.count("Start-Process -FilePath")
+    assert start_process_calls >= 2
+    # Each Start-Process that launches our own binaries quotes its arguments.
+    for block in text.split("Start-Process -FilePath")[1:]:
+        if "http://" in block.split("-ArgumentList")[0]:
+            continue  # browser launcher, no -ArgumentList
+        assert "-ArgumentList (ConvertTo-CommandLine" in block, block.splitlines()[0]
+
+
+def test_common_exposes_command_line_quoting_helpers() -> None:
+    """A single quoting helper is shared instead of ad-hoc string building."""
+    text = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    assert "function ConvertTo-QuotedArgument" in text
+    assert "function ConvertTo-CommandLine" in text
+    # Arguments without whitespace stay unquoted for readable logs.
+    assert "'[\\s\"]'" in text or "-notmatch '[\\s\"]'" in text
+
+
+# --- P1-R05: frontend identity when the cmd.exe wrapper omits the repo path ---
+
+
+def test_stop_accepts_npm_wrapper_identity_without_repo_path() -> None:
+    """npm.cmd -> cmd.exe may not carry the repository path (P1-R05)."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    function = text.split("function Test-OwnedProcess", 1)[1].split(
+        "function Get-DescendantProcessIds"
+    )[0]
+    # Frontend identity no longer requires the repository path alone.
+    assert "$referencesRepo" in function
+    assert "run\\s+dev" in function
+    assert "strictPort" in function
+    # Backend identity stays strict.
+    assert "$isOwned = $belongsToRepo -and $looksLikeBackend" in function
