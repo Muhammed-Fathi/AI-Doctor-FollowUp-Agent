@@ -4,9 +4,11 @@ Configuration is environment-first with safe local defaults (``AGENTS.md`` §7).
 No secret is ever given a real default and ``.env`` is gitignored; see
 ``.env.example`` for the documented keys.
 
-Phase 1 settings are limited to what the foundation needs: the ASGI bind
-address, the SQLite URL, the environment name and an optional explicit git SHA.
-Ollama/Tesseract/OCR settings are deliberately **not** defined yet (P3/P5).
+Settings cover the P1 foundation (ASGI bind address, SQLite URL, environment
+name, optional explicit git SHA) and the P2 additions the patient domain needs:
+session lifetime, login throttling, demo mode and the local demo seed password.
+Ollama/Tesseract/OCR settings are deliberately **not** defined yet (P3/P5), and
+``.env.example`` is updated in the same change that introduces a key.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.paths import REPO_ROOT, RUNTIME_DIR
@@ -84,6 +86,56 @@ class Settings(BaseSettings):
         if any(ch not in "0123456789abcdef" for ch in candidate):
             raise ValueError("APP_GIT_SHA must be hexadecimal")
         return candidate
+
+    # --- P2 authentication and demo administration --------------------------
+    # Session tokens are opaque and stored hashed. The TTL is a P2 decision
+    # ("Token TTL and refresh are P2 decisions", API_CONTRACT.md §1.2): 60
+    # minutes, configurable, no refresh token in the MVP.
+    session_ttl_minutes: int = Field(
+        default=60,
+        ge=1,
+        le=1440,
+        description="Session lifetime in minutes (1-1440).",
+    )
+    login_rate_limit_attempts: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        description="Failed logins tolerated per username inside the window.",
+    )
+    login_rate_limit_window_seconds: int = Field(
+        default=300,
+        ge=1,
+        le=3600,
+        description="Rolling window for the login failure counter.",
+    )
+    demo_mode: bool = Field(
+        default=False,
+        description=(
+            "Enables POST /api/v1/demo/reset. False by default so the destructive "
+            "demo operation is never reachable by accident (OQ-04)."
+        ),
+    )
+    demo_seed_password: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Local-only demo account password used when seeding synthetic users. "
+            "Supplied through the environment; never committed, never defaulted, "
+            "never returned by an endpoint or written to a log."
+        ),
+    )
+
+    @field_validator("demo_seed_password", mode="before")
+    @classmethod
+    def _empty_password_is_none(cls, value: object) -> object:
+        """Treat an empty environment value as "not configured"."""
+        if value is None:
+            return None
+        if isinstance(value, SecretStr):
+            return value if value.get_secret_value() else None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     # --- derived helpers ---------------------------------------------------
     @property

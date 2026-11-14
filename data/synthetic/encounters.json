@@ -1,0 +1,31 @@
+{
+  "notice": "SYNTHETIC DEMO DATA — NOT A REAL MEDICAL RECORD",
+  "disclaimer": "EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE",
+  "fixture_version": "p2-1.0.0",
+  "encounters": [
+    {
+      "id": "3ad7fd64-3721-516a-a7f9-73bded87b616",
+      "ref": "DEMO-A-ENC-01",
+      "patient_external_ref": "DEMO-A-001",
+      "encounter_date": "2026-10-01",
+      "encounter_type": "routine_follow_up",
+      "note": "Synthetic routine follow-up visit (fictional)."
+    },
+    {
+      "id": "c3ffdd5a-dfbf-5310-9582-306b9272cf0e",
+      "ref": "DEMO-B-ENC-01",
+      "patient_external_ref": "DEMO-B-001",
+      "encounter_date": "2026-10-02",
+      "encounter_type": "routine_follow_up",
+      "note": "Synthetic routine follow-up visit (fictional)."
+    },
+    {
+      "id": "48ad8393-ddd7-51b0-9a7c-e2e45febbd18",
+      "ref": "DEMO-C-ENC-01",
+      "patient_external_ref": "DEMO-C-001",
+      "encounter_date": "2026-11-03",
+      "encounter_type": "routine_follow_up",
+      "note": "Synthetic routine follow-up visit (fictional)."
+    }
+  ]
+}
