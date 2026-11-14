@@ -280,10 +280,38 @@ catch {
     Write-Fail $_.Exception.Message
     Write-Step 'Rolling back started processes'
     Stop-StartedProcesses -List $started
-    Remove-Item -LiteralPath $script:StateFile -Force -ErrorAction SilentlyContinue
-    foreach ($pidFile in @($script:BackendPidFile, $script:FrontendPidFile)) {
-        Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+
+    # Verify the rollback instead of asserting it (P1-R08): a child that survived
+    # rollback must not be reported as "nothing is left running", and the
+    # tracking files must stay so the leftover can be found and stopped.
+    $leftovers = @()
+    foreach ($item in $started) {
+        if (Get-Process -Id $item.pid -ErrorAction SilentlyContinue) {
+            $leftovers += $item
+            continue
+        }
+        $snapshot = Get-ProcessSnapshot
+        foreach ($childId in @(Get-DescendantProcessIds -RootProcessId $item.pid -Snapshot $snapshot)) {
+            if ($snapshot.ContainsKey($childId)) {
+                $leftovers += [pscustomobject]@{ Name = "$($item.Name) child"; pid = $childId }
+            }
+        }
     }
-    Write-Fail 'Start failed; nothing is left running.'
+
+    if ($leftovers.Count -eq 0) {
+        Remove-Item -LiteralPath $script:StateFile -Force -ErrorAction SilentlyContinue
+        foreach ($pidFile in @($script:BackendPidFile, $script:FrontendPidFile)) {
+            Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+        }
+        Write-Fail 'Start failed; nothing is left running.'
+        exit 1
+    }
+
+    # Keep the state so the survivor is traceable, and describe it honestly.
+    Write-Fail "Start failed and rollback was INCOMPLETE - $($leftovers.Count) process(es) survived:"
+    foreach ($item in $leftovers) {
+        Write-Host "      $($item.Name) PID $($item.pid)" -ForegroundColor Red
+    }
+    Write-Host "  Tracking kept in $($script:RuntimeDir); run stop.ps1 to retry the shutdown." -ForegroundColor Yellow
     exit 1
 }

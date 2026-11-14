@@ -24,6 +24,10 @@
       9. the descendant tree walk finds a real child process
      10. identity is rejected for a different image name / creation time
      11. a falsy ConvertFrom-Json property does not hide a state entry
+     12. the shutdown verdict maps to the documented exit codes
+     13. tracking state SURVIVES an incomplete stop (occupied port, no survivor)
+     14. a clean stop does clear tracking
+     15. surviving processes are rewritten into the state file
 
     Exit code: 0 when every check passes, 1 otherwise.
 
@@ -148,6 +152,86 @@ $emulated = '{"processes":[{"name":"frontend","pid":4400,"port":5173,"imageName"
 $entries = @($emulated.processes | Where-Object { $null -ne $_ })
 Assert-True -Condition ($entries.Count -eq 1) -Message 'state entry survives the null-only filter'
 Assert-True -Condition ([int]$entries[0].pid -eq 4400) -Message 'recorded pid is readable'
+
+Write-Host '[12] verdict mapping (P1-R08)' -ForegroundColor White
+$clean = Get-ShutdownVerdict -FailedCount 0 -BlockedCount 0 -BusyPorts @()
+Assert-True -Condition ($clean.ExitCode -eq 0 -and $clean.Clean) -Message 'clean -> exit 0 / Clean'
+Assert-True -Condition ($clean.Status -eq 'PASS') -Message 'clean -> PASS'
+
+$portBusyNoSurvivor = Get-ShutdownVerdict -FailedCount 0 -BlockedCount 0 -BusyPorts @(5173)
+Assert-True -Condition ($portBusyNoSurvivor.ExitCode -eq 2) -Message 'port busy with NO survivor -> exit 2'
+Assert-True -Condition (-not $portBusyNoSurvivor.Clean) -Message 'port busy with NO survivor -> not Clean'
+Assert-True -Condition ($portBusyNoSurvivor.Status -eq 'INCOMPLETE') -Message 'port busy -> INCOMPLETE'
+
+$failedVerdict = Get-ShutdownVerdict -FailedCount 1 -BlockedCount 0 -BusyPorts @()
+Assert-True -Condition ($failedVerdict.ExitCode -eq 1 -and -not $failedVerdict.Clean) -Message 'failed stop -> exit 1'
+
+$blockedVerdict = Get-ShutdownVerdict -FailedCount 0 -BlockedCount 1 -BusyPorts @(8000)
+Assert-True -Condition ($blockedVerdict.ExitCode -eq 1) -Message 'live unverified PID -> exit 1 (not a silent 2)'
+
+Write-Host '[13] tracking state survives an incomplete stop (P1-R08)' -ForegroundColor White
+$scratch = Join-Path ([System.IO.Path]::GetTempPath()) ("stop-state-{0}" -f ([guid]::NewGuid().ToString('N')))
+New-Item -ItemType Directory -Path $scratch -Force | Out-Null
+$statePath = Join-Path $scratch 'run-state.json'
+$backendPidPath = Join-Path $scratch 'backend.pid'
+$frontendPidPath = Join-Path $scratch 'frontend.pid'
+
+$original = [pscustomobject]@{
+    schemaVersion = 2
+    startedAt     = '2026-11-14T10:00:00Z'
+    repoRoot      = $script:RepoRoot
+    venvDir       = 'X:\venv'
+    processes     = @(
+        [pscustomobject]@{ name = 'backend'; pid = 111; port = 8000; imageName = 'python.exe'; startedAt = '20260101000000'; commandLine = 'uvicorn app.main:app' }
+        [pscustomobject]@{ name = 'frontend'; pid = 4400; port = 5173; imageName = 'cmd.exe'; startedAt = '20260101000001'; commandLine = 'npm.cmd run dev --port 5173' }
+    )
+}
+try {
+    $original | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $statePath -Encoding UTF8
+    Set-Content -LiteralPath $backendPidPath -Value 111 -Encoding ASCII
+    Set-Content -LiteralPath $frontendPidPath -Value 4400 -Encoding ASCII
+
+    # THE COUNTEREXAMPLE from the review: no survivor was identified, but the
+    # verdict is not clean because a port is still occupied.
+    $busy = @(5173)
+    $verdict = Get-ShutdownVerdict -FailedCount 0 -BlockedCount 0 -BusyPorts $busy
+    Save-StopState -Remaining @() -Clean $verdict.Clean -Reason 'port-still-occupied' `
+        -StatePath $statePath -BackendPidPath $backendPidPath -FrontendPidPath $frontendPidPath `
+        -RepoRoot $script:RepoRoot -VenvDir 'X:\venv'
+
+    Assert-True -Condition (Test-Path -LiteralPath $statePath) -Message 'run-state.json is KEPT'
+    Assert-True -Condition (Test-Path -LiteralPath $backendPidPath) -Message 'backend.pid is KEPT'
+    Assert-True -Condition (Test-Path -LiteralPath $frontendPidPath) -Message 'frontend.pid is KEPT'
+
+    $kept = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    Assert-True -Condition ([bool]$kept.partial) -Message 'kept state is flagged partial'
+    Assert-True -Condition ([string]$kept.incompleteReason -eq 'port-still-occupied') -Message 'kept state records the reason'
+    Assert-True -Condition (@($kept.processes).Count -eq 2) -Message 'original process provenance is preserved'
+    Assert-True -Condition ([string]$kept.startedAt -eq '2026-11-14T10:00:00Z') -Message 'original startedAt preserved'
+    Assert-True -Condition ([string]$kept.venvDir -eq 'X:\venv') -Message 'original venvDir preserved'
+
+    Write-Host '[14] a clean stop does clear tracking' -ForegroundColor White
+    $cleanVerdict = Get-ShutdownVerdict -FailedCount 0 -BlockedCount 0 -BusyPorts @()
+    Save-StopState -Remaining @() -Clean $cleanVerdict.Clean -Reason 'clean' `
+        -StatePath $statePath -BackendPidPath $backendPidPath -FrontendPidPath $frontendPidPath
+    Assert-True -Condition (-not (Test-Path -LiteralPath $statePath)) -Message 'clean stop removes run-state.json'
+    Assert-True -Condition (-not (Test-Path -LiteralPath $backendPidPath)) -Message 'clean stop removes backend.pid'
+    Assert-True -Condition (-not (Test-Path -LiteralPath $frontendPidPath)) -Message 'clean stop removes frontend.pid'
+
+    Write-Host '[15] surviving processes are rewritten, not lost' -ForegroundColor White
+    $survivor = [pscustomobject]@{ name = 'frontend'; pid = 4400; port = 5173; imageName = 'cmd.exe'; startedAt = '20260101000001'; commandLine = 'npm.cmd run dev --port 5173' }
+    Save-StopState -Remaining @($survivor) -Clean $false -Reason 'process-stop-failed' `
+        -StatePath $statePath -BackendPidPath $backendPidPath -FrontendPidPath $frontendPidPath
+    Assert-True -Condition (Test-Path -LiteralPath $statePath) -Message 'state rewritten for the survivor'
+    $rewritten = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    Assert-True -Condition (@($rewritten.processes).Count -eq 1) -Message 'only the survivor remains'
+    Assert-True -Condition ([int]$rewritten.processes[0].pid -eq 4400) -Message 'survivor PID preserved'
+    Assert-True -Condition (Test-Path -LiteralPath $frontendPidPath) -Message 'frontend.pid still present'
+    Assert-True -Condition (-not (Test-Path -LiteralPath $backendPidPath)) -Message 'backend.pid not recreated'
+}
+finally {
+    Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 # --- summary ------------------------------------------------------------------
 Write-Host ''

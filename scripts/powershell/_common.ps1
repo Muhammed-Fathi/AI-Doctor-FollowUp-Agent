@@ -446,6 +446,158 @@ function Wait-HttpOk {
     return $false
 }
 
+# --- shutdown outcome ---------------------------------------------------------
+# Single place that maps the shutdown result to a status and an exit code, so
+# the decision cannot drift from the state handling (P1-R08).
+#
+#   0 PASS        every recorded process resolved AND both ports free
+#   1 FAILED      a recorded application process could not be stopped
+#   1 BLOCKED     a recorded PID is still alive but could not be verified
+#   2 INCOMPLETE  processes resolved, but a port is still occupied
+#
+# "Resolved" means stopped, already gone, or the PID was provably reused by an
+# unrelated process. A live-but-unverified recorded PID is NOT resolved.
+function Get-ShutdownVerdict {
+    param(
+        [int]$FailedCount = 0,
+        [int]$BlockedCount = 0,
+        [int[]]$BusyPorts = @()
+    )
+
+    if ($FailedCount -gt 0) {
+        return [pscustomobject]@{
+            ExitCode = 1
+            Status   = 'FAILED'
+            Clean    = $false
+            Ports    = $BusyPorts
+        }
+    }
+    if ($BlockedCount -gt 0) {
+        return [pscustomobject]@{
+            ExitCode = 1
+            Status   = 'BLOCKED'
+            Clean    = $false
+            Ports    = $BusyPorts
+        }
+    }
+    if (@($BusyPorts).Count -gt 0) {
+        return [pscustomobject]@{
+            ExitCode = 2
+            Status   = 'INCOMPLETE'
+            Clean    = $false
+            Ports    = $BusyPorts
+        }
+    }
+    return [pscustomobject]@{
+        ExitCode = 0
+        Status   = 'PASS'
+        Clean    = $true
+        Ports    = @()
+    }
+}
+
+# Writes the tracking files according to the verdict.
+#
+#   Clean            -> remove run-state.json and both PID files
+#   Remaining != 0   -> rewrite them with the survivors
+#   Remaining == 0   -> KEEP the original metadata, flagged partial
+#
+# The last case is the P1-R08 defect: an occupied port with no identified
+# survivor used to delete the provenance needed to diagnose or retry. Tracking
+# is now cleared ONLY when the verdict is clean.
+function Save-StopState {
+    param(
+        [object[]]$Remaining = @(),
+        [Parameter(Mandatory = $true)][bool]$Clean,
+        [string]$Reason = 'incomplete',
+        [string]$StatePath = $script:StateFile,
+        [string]$BackendPidPath = $script:BackendPidFile,
+        [string]$FrontendPidPath = $script:FrontendPidFile,
+        [string]$RepoRoot = $script:RepoRoot,
+        [string]$VenvDir = ''
+    )
+
+    $survivors = @($Remaining | Where-Object { $null -ne $_ })
+
+    if ($survivors.Count -eq 0) {
+        if ($Clean) {
+            # The only path that may delete provenance.
+            Remove-Item -LiteralPath $StatePath -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $BackendPidPath -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $FrontendPidPath -Force -ErrorAction SilentlyContinue
+            return
+        }
+
+        # Incomplete, but nothing identifiable survived. Keep whatever the
+        # original state recorded so the failure stays diagnosable/retryable.
+        if (Test-Path -LiteralPath $StatePath) {
+            try {
+                $original = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
+                $originalProcesses = @($original.processes | Where-Object { $null -ne $_ })
+                $keepObject = [pscustomobject]@{
+                    schemaVersion    = 2
+                    startedAt        = [string]$original.startedAt
+                    repoRoot         = if ($RepoRoot) { $RepoRoot } else { [string]$original.repoRoot }
+                    venvDir          = if ($VenvDir) { $VenvDir } else { [string]$original.venvDir }
+                    partial          = $true
+                    incompleteReason = $Reason
+                    processes        = $originalProcesses
+                }
+                $keepObject | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $StatePath -Encoding UTF8
+                Write-Verbose "Kept original tracking metadata ($($originalProcesses.Count) entr(ies)); reason: $Reason"
+            }
+            catch {
+                # Never destroy the file just because it could not be re-read.
+                Write-Warn "Could not annotate $StatePath ($($_.Exception.Message)); it was left unchanged."
+            }
+        }
+        return
+    }
+
+    $kept = @($survivors | ForEach-Object {
+            [pscustomobject]@{
+                name        = [string]$_.name
+                pid         = [int]$_.pid
+                port        = [int]$_.port
+                commandLine = [string]$_.commandLine
+                imageName   = [string]$_.imageName
+                startedAt   = [string]$_.startedAt
+            }
+        })
+
+    $startedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    if (Test-Path -LiteralPath $StatePath) {
+        try {
+            $previous = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
+            if ($previous -and $previous.startedAt) { $startedAt = [string]$previous.startedAt }
+        }
+        catch {
+            Write-Verbose 'Previous state could not be read; using the current time.'
+        }
+    }
+
+    $stateObject = [pscustomobject]@{
+        schemaVersion    = 2
+        startedAt        = $startedAt
+        repoRoot         = if ($RepoRoot) { $RepoRoot } else { $script:RepoRoot }
+        venvDir          = if ($VenvDir) { $VenvDir } else { (Get-VenvDir) }
+        partial          = $true
+        incompleteReason = $Reason
+        processes        = $kept
+    }
+
+    $directory = Split-Path -Parent $StatePath
+    if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+    $stateObject | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $StatePath -Encoding UTF8
+
+    foreach ($entry in $kept) {
+        $file = if ($entry.name -eq 'backend') { $BackendPidPath } else { $FrontendPidPath }
+        Set-Content -LiteralPath $file -Value $entry.pid -Encoding ASCII
+    }
+}
+
 function Ensure-RuntimeDir {
     if (-not (Test-Path -LiteralPath $script:RuntimeDir)) {
         New-Item -ItemType Directory -Path $script:RuntimeDir -Force | Out-Null

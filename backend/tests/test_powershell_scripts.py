@@ -361,14 +361,21 @@ def test_stop_returns_nonzero_when_a_process_survives() -> None:
 
 
 def test_stop_preserves_tracking_state_on_partial_shutdown() -> None:
-    """Requirement 3: identity information survives a failed stop."""
+    """Requirement 3: identity information survives a failed stop.
+
+    ``Save-StopState`` now lives in ``_common.ps1`` (so it is reachable from the
+    executable regression script), and it deletes files only for a CLEAN result.
+    """
+    common = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    assert "function Save-StopState" in common
+    save = common.split("function Save-StopState", 1)[1].split("function Ensure-RuntimeDir", 1)[0]
+    assert "if ($survivors.Count -eq 0)" in save
+    assert "if ($Clean)" in save
+    assert "Remove-Item -LiteralPath $StatePath" in save
+    assert "partial" in save
+    # The caller must pass the verdict through.
     text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
-    assert "function Save-StopState" in text
-    # State is rewritten with the survivors, and only deleted when none remain.
-    save = text.split("function Save-StopState", 1)[1].split("if (-not $state)", 1)[0]
-    assert "if ($Remaining.Count -eq 0)" in save
-    assert "Remove-Item -LiteralPath $script:StateFile" in save
-    assert "partial       = $true" in save
+    assert "-Clean $verdict.Clean" in text
 
 
 def test_stop_guards_against_pid_reuse() -> None:
@@ -414,3 +421,102 @@ def test_executable_stop_identity_script_covers_the_owner_evidence() -> None:
     assert "vite.js" in text
     for case in ("wrapper is recognised", "Vite command line", "rejected", "descendant"):
         assert case in text, f"regression script does not cover: {case}"
+
+
+# --- P1-R08: tracking state must not be deleted before the port check --------
+# The defect: `stop.ps1` deleted run-state.json whenever no process was identified
+# as a survivor, *then* checked the ports and exited 2. An occupied port with no
+# reported survivor therefore destroyed the provenance needed to diagnose it.
+# Executable coverage: cases 12-15 of ``scripts/powershell/tests/stop_identity.tests.ps1``.
+
+
+def test_verdict_is_computed_before_state_is_touched() -> None:
+    """The outcome decision must precede any tracking-file write (P1-R08)."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    verdict_at = text.index("$verdict = Get-ShutdownVerdict")
+    save_at = text.index("Save-StopState -Remaining")
+    ports_at = text.index("$busyPorts = @(")
+    assert ports_at < verdict_at < save_at, "verdict must be derived from the ports, then saved"
+    # Nothing may delete tracking before the verdict exists.
+    for line in text.splitlines():
+        if "Remove-Item" in line and ("StateFile" in line or "PidFile" in line):
+            assert text.index(line) > verdict_at, f"state removed before the verdict: {line}"
+
+
+def test_state_is_only_deleted_by_a_clean_verdict() -> None:
+    """`Save-StopState` clears files exclusively on the clean path."""
+    common = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    save = common.split("function Save-StopState", 1)[1].split("function Ensure-RuntimeDir")[0]
+    # The delete block is nested under `if ($Clean)`.
+    assert "if ($survivors.Count -eq 0)" in save
+    assert "if ($Clean)" in save
+    assert save.index("if ($Clean)") < save.index("Remove-Item -LiteralPath $StatePath")
+    # And it returns immediately afterwards, so no other path can reach it.
+    delete_block = save.split("if ($Clean)", 1)[1].split("return", 1)[0]
+    assert "Remove-Item -LiteralPath $StatePath" in delete_block
+
+
+def test_incomplete_stop_preserves_original_metadata() -> None:
+    """The occupied-port-with-no-survivor case keeps the original reasoning data."""
+    common = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    save = common.split("function Save-StopState", 1)[1].split("function Ensure-RuntimeDir")[0]
+    # The keep-branch re-reads the previous file instead of deleting it.
+    keep = save.split("Incomplete, but nothing identifiable survived", 1)[1].split("return", 1)[0]
+    assert "Get-Content -LiteralPath $StatePath -Raw" in keep
+    assert "partial" in keep
+    assert "incompleteReason" in keep
+    # A parse failure must never destroy the evidence.
+    assert "it was left unchanged" in keep
+
+
+def test_verdict_maps_the_documented_exit_codes() -> None:
+    """0 clean / 1 failed-or-blocked / 2 incomplete, in one testable helper."""
+    common = (SCRIPTS_DIR / "_common.ps1").read_text(encoding="utf-8")
+    verdict = common.split("function Get-ShutdownVerdict", 1)[1].split("function Save-StopState")[0]
+    assert "ExitCode = 0" in verdict
+    assert "ExitCode = 1" in verdict
+    assert "ExitCode = 2" in verdict
+    assert "'PASS'" in verdict and "'FAILED'" in verdict
+    assert "'BLOCKED'" in verdict and "'INCOMPLETE'" in verdict
+
+
+def test_live_unverified_pid_is_not_reported_as_success() -> None:
+    """A recorded PID that is still alive blocks a PASS even with free ports."""
+    text = (SCRIPTS_DIR / "stop.ps1").read_text(encoding="utf-8")
+    assert "Get-ShutdownVerdict -FailedCount $failed.Count -BlockedCount $notOurs.Count" in text
+    assert "'BLOCKED'" in text
+    # Survivors are kept only when the recorded PID is actually still alive.
+    assert "Get-Process -Id $recordedPid -ErrorAction SilentlyContinue" in text
+
+
+def test_executable_script_covers_the_r08_counterexample() -> None:
+    """The Windows-runnable script reproduces the exact review counterexample."""
+    text = (SCRIPTS_DIR / "tests" / "stop_identity.tests.ps1").read_text(encoding="utf-8")
+    assert "THE COUNTEREXAMPLE from the review" in text
+    assert "Get-ShutdownVerdict -FailedCount 0 -BlockedCount 0 -BusyPorts @(5173)" in text
+    assert "run-state.json is KEPT" in text
+    assert "clean stop removes run-state.json" in text
+
+
+def test_start_rollback_verifies_before_claiming_cleanup() -> None:
+    """P1-R08 class of bug in start.ps1: never assert a cleanup that was not verified."""
+    text = (SCRIPTS_DIR / "start.ps1").read_text(encoding="utf-8")
+    handler = text.split("catch {", 1)[1]
+    # Leftovers are detected...
+    assert "$leftovers" in handler
+    # ...the removal is conditional on there being none...
+    assert handler.index("if ($leftovers.Count -eq 0)") < handler.index(
+        "Remove-Item -LiteralPath $script:StateFile"
+    )
+    # ...and the incomplete branch keeps the tracking files and says so.
+    incomplete = handler.split("if ($leftovers.Count -eq 0)", 1)[1]
+    assert "rollback was INCOMPLETE" in incomplete
+    assert "Tracking kept" in incomplete
+    # The incomplete branch must contain no state deletion at all. Everything
+    # before the `exit 1` that closes the clean branch is excluded first.
+    clean_branch, incomplete_branch = incomplete.split("exit 1", 1)
+    # The clean branch is the only one allowed to delete tracking files.
+    assert "Remove-Item -LiteralPath $script:StateFile" in clean_branch
+    body = incomplete_branch.split("Write-Fail", 1)[1]
+    assert "Remove-Item -LiteralPath $script:StateFile" not in body
+    assert "Remove-Item -LiteralPath $pidFile" not in body

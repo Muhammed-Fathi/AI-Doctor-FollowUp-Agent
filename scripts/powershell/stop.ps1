@@ -76,45 +76,6 @@ function Stop-VerifiedProcess {
     }
 }
 
-function Save-StopState {
-    # Rewrites the tracking files with whatever is STILL running, so a retry
-    # keeps full identity information (P1-R07 point 3).
-    param([System.Collections.Generic.List[object]]$Remaining)
-
-    if ($Remaining.Count -eq 0) {
-        Remove-Item -LiteralPath $script:StateFile -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $script:BackendPidFile -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $script:FrontendPidFile -Force -ErrorAction SilentlyContinue
-        return
-    }
-
-    $kept = @($Remaining | ForEach-Object {
-            [pscustomobject]@{
-                name        = $_.name
-                pid         = $_.pid
-                port        = $_.port
-                commandLine = $_.commandLine
-                imageName   = $_.imageName
-                startedAt   = $_.startedAt
-            }
-        })
-
-    $stateObject = [pscustomobject]@{
-        schemaVersion = 2
-        startedAt     = if ($state -and $state.startedAt) { $state.startedAt } else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
-        repoRoot      = $script:RepoRoot
-        venvDir       = (Get-VenvDir)
-        partial       = $true
-        processes     = $kept
-    }
-    Ensure-RuntimeDir | Out-Null
-    $stateObject | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $script:StateFile -Encoding UTF8
-
-    foreach ($entry in $kept) {
-        $file = if ($entry.name -eq 'backend') { $script:BackendPidFile } else { $script:FrontendPidFile }
-        Set-Content -LiteralPath $file -Value $entry.pid -Encoding ASCII
-    }
-}
 
 if (-not $state) {
     Write-Warn "No run-state.json at $($script:StateFile) - nothing was started by start.ps1."
@@ -326,6 +287,8 @@ foreach ($pidFile in @($script:FrontendPidFile, $script:BackendPidFile)) {
 }
 
 # --- outcome ------------------------------------------------------------------
+# The verdict is decided BEFORE any tracking file is touched (P1-R08): an
+# incomplete result must never delete the provenance needed to diagnose it.
 $failed = @($results | Where-Object { $_.outcome -eq 'failed' })
 $notOurs = @($results | Where-Object { $_.outcome -eq 'not-ours' })
 $stopped = @($results | Where-Object { $_.outcome -eq 'stopped' })
@@ -341,26 +304,52 @@ foreach ($port in @($script:BackendPort, $script:FrontendPort)) {
     }
 }
 
-# Keep tracking state unless the shutdown is fully clean.
-$survivors = @($failed) + @($notOurs)
-Save-StopState -Remaining @($survivors | ForEach-Object { $_.record })
+$verdict = Get-ShutdownVerdict -FailedCount $failed.Count -BlockedCount $notOurs.Count -BusyPorts $busyPorts
+
+# Survivors to keep: failed stops, and recorded PIDs that are still alive but
+# could not be verified (a not-ours entry that is already gone needs no retry).
+$survivorRecords = @()
+foreach ($entry in @($failed) + @($notOurs)) {
+    $recordedPid = [int]$entry.record.pid
+    if ($entry.outcome -eq 'failed' -or (Get-Process -Id $recordedPid -ErrorAction SilentlyContinue)) {
+        $survivorRecords += $entry.record
+    }
+}
+
+$incompleteReason = 'clean'
+if ($failed.Count -gt 0) { $incompleteReason = 'process-stop-failed' }
+elseif ($notOurs.Count -gt 0) { $incompleteReason = 'process-unverified' }
+elseif (-not $verdict.Clean) { $incompleteReason = 'port-still-occupied' }
+
+# Tracking is rewritten or kept according to the verdict; only a clean result
+# removes it.
+Save-StopState -Remaining $survivorRecords -Clean $verdict.Clean -Reason $incompleteReason
 
 Write-Host ''
-if ($failed.Count -gt 0) {
-    Write-Host "Stop result: FAILED - $($failed.Count) application process(es) could not be stopped" -ForegroundColor Red
-    Write-Host '  Tracking files were kept so you can retry: .\scripts\powershell\stop.ps1 -Force' -ForegroundColor DarkGray
-    exit 1
-}
-if ($busyPorts.Count -gt 0) {
-    Write-Host "Stop result: INCOMPLETE - port(s) $($busyPorts -join ', ') still in use" -ForegroundColor Yellow
-    if ($notOurs.Count -gt 0) {
-        Write-Host '  At least one port is held by a process this script could not prove it owns.' -ForegroundColor DarkGray
+switch ($verdict.Status) {
+    'FAILED' {
+        Write-Host "Stop result: FAILED - $($failed.Count) application process(es) could not be stopped" -ForegroundColor Red
+        Write-Host '  Tracking files were KEPT so you can retry: .\scripts\powershell\stop.ps1 -Force' -ForegroundColor DarkGray
+        exit 1
+    }
+    'BLOCKED' {
+        Write-Host "Stop result: BLOCKED - $($notOurs.Count) recorded process(es) are still running but could not be verified as ours" -ForegroundColor Red
+        Write-Host '  Nothing was killed. Tracking files were KEPT.' -ForegroundColor DarkGray
+        Write-Host '  Inspect each one, then decide manually:' -ForegroundColor DarkGray
+        Write-Host '    Get-CimInstance Win32_Process -Filter "ProcessId = <pid>" | Select-Object Name, CommandLine' -ForegroundColor DarkGray
+        exit 1
+    }
+    'INCOMPLETE' {
+        Write-Host "Stop result: INCOMPLETE - port(s) $($busyPorts -join ', ') still in use" -ForegroundColor Yellow
+        Write-Host '  Tracking files were KEPT with the original metadata (partial = true).' -ForegroundColor DarkGray
+        Write-Host '  The process holding a port could not be traced to this application.' -ForegroundColor DarkGray
         Write-Host '  Inspect it with: Get-NetTCPConnection -LocalPort 8000,5173 -State Listen | Select-Object OwningProcess' -ForegroundColor DarkGray
         Write-Host '  Then: Get-CimInstance Win32_Process -Filter "ProcessId = <pid>" | Select-Object Name, CommandLine' -ForegroundColor DarkGray
+        exit 2
     }
-    exit 2
+    default {
+        Write-Host "Stop result: PASS - $($stopped.Count) stopped, ports 8000 and 5173 are free" -ForegroundColor Green
+        Write-Host 'Runtime artifacts (logs, database) are kept for inspection; delete data\runtime manually for a clean slate.' -ForegroundColor DarkGray
+        exit 0
+    }
 }
-
-Write-Host "Stop result: PASS - $($stopped.Count) stopped, ports 8000 and 5173 are free" -ForegroundColor Green
-Write-Host 'Runtime artifacts (logs, database) are kept for inspection; delete data\runtime manually for a clean slate.' -ForegroundColor DarkGray
-exit 0
