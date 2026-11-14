@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document ID | `ARCH-001` |
-| Version | `0.3.0-p0` |
+| Version | `0.4.0-p0` |
 | Status | **IN REVIEW — architecture baseline for owner acceptance** |
 | Phase | `P0` (documentation only; no component is implemented) |
 | Revision | 0.3.0: pre/post-verification split, observation trust levels, injected demo clock, deterministic task identity, bounded extraction/drafting decision loops (PR #2 review) |
@@ -21,7 +21,9 @@ This architecture is doctor-centered, local-first, evidence-first and human-cont
 2. **Deterministic where it matters.** Review triggers, permissions, state transitions, and side effects are plain code, never model output.
 3. **The model is a tool, not an actor.** One adapter boundary, schema-constrained, timeout-bounded, replaceable by a labelled fallback.
 4. **Bounded autonomy.** Five agents, each with a fixed tool allowlist and no direct database, shell, network, or approval capability.
-5. **Durable and idempotent.** Every node checkpoints; every finalizing action is guarded by an idempotency key.
+5. **Durable and idempotent.** Every node checkpoints, but the **app DB is the authority** for run status and
+   decisions: the checkpoint file cannot join an app-DB transaction, so a restart reconciles status and finalizes
+   idempotently instead of trusting the checkpoint. Every finalizing action is guarded by a derived key.
 6. **Honest uncertainty.** Ambiguous dates, units, OCR text, or conflicting sources stop the pipeline at a human verification gate.
 7. **Boring infrastructure.** One API, one React app, SQLite, local files. No cloud, no microservices, no vector DB, no paid inference.
 
@@ -138,8 +140,10 @@ All five run as **nodes inside one LangGraph graph** and share one typed state. 
 
 Only `doctor_communication` calls the model. Two **bounded decision mechanisms** provide the agentic depth:
 `extraction_triage` selects a tool path (text layer / OCR / OCR-with-preprocessing / flag-for-human) and retries
-at most twice, and `draft_validation` accepts, repairs once, or falls back. Both record their choice in the run
-trace. Semantics, trade-off and acceptance test `AD-01` are in `ADR-0006` §3–§4.
+at most twice, and `draft_validation` accepts, repairs once, or falls back. Both record their choice as a
+**typed** `detail` payload (enums, IDs, counts, probabilities — never text) in the run trace, and the triage
+router's only input is typed extraction-attempt metadata. Semantics, trade-off and acceptance test `AD-01`
+(mocked extractor) are in `ADR-0006` §3–§4; the measured live-OCR run is `OCR-LIVE-01`.
 
 Shared-state shape, per-node read/write permissions and the `VI-*`/`DR-*` separation are defined in
 `../contracts/STATE_AND_GRAPH_CONTRACT.md` §3–§4.
@@ -203,7 +207,7 @@ Legend: **A** = allowed · **C** = allowed only within own patient scope · **S*
 | Create review item | – (human raises manually only via note) | – | – | A (deterministic rules only) |
 | Read draft summary | S | – | – | C (write own draft) |
 | Approve / edit / reject decision | S | – | – | – |
-| Create follow-up task | – | – | – | D (approved decision only, run `finalizing`, atomic commit) |
+| Create follow-up task | – | – | – | D (approved decision only, run `finalizing`; two-phase commit: decision first, then idempotent finalize) |
 | Complete task | S | – | – | – |
 | Read in-app notifications | S | C (no clinical content) | – | A (own generated) |
 | Read audit trail | S (own patients) | C (own actions only) | A (local DB/CLI only; no API endpoint in MVP) | A (write only) |

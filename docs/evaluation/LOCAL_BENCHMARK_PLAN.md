@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document ID | `EVAL-BENCH-001` |
-| Version | `0.2.0-p0` |
+| Version | `0.3.0-p0` |
 | Status | **IN REVIEW — protocol only. Nothing was measured, downloaded, or installed in Phase 0** |
 | Phase | `P0` (plan). Execution: P5 (first measurement), P7/P8 (final, offline) |
 | Related | `REQ-EVAL-03`, `REQ-LLM-03/04`, `REQ-OPS-04`, `ASM-01`, `ASM-02`, `docs/contracts/LLM_ADAPTER.md` |
@@ -67,7 +67,8 @@ pinned; the laptop's real date is irrelevant and must not be used for rule expec
 | Workflow run to `awaiting_decision` (model off) | end-to-end with fallback |
 | Approval resume | decision → task committed |
 | Restart + resume | kill process, restart, resume, count tasks/audit rows (expect exactly one task; the task ID is derived from the stored decision) |
-| Agentic path (`AD-01`) | trace of a low-confidence scan: two extraction attempts, `path_selected`/`path_reason`, final `proceed` or `flag_for_human` |
+| Agentic path (`AD-01`) | **mocked-extractor contract run** (deterministic, no OCR binary): trace of a low-confidence scan showing two extraction attempts with typed `detail` payloads and the final path |
+| Live OCR measurement (`OCR-LIVE-01`) | the same degraded scans through the installed Tesseract, twice (preprocessing off/on): engine-reported confidence per pass, characters recovered, wall time, `tesseract --version`, OS build. **These are recorded measurements, not pass/fail assertions** — a value that differs from the mocked fixture is data, not a failure |
 
 ### 3.4 Offline check
 

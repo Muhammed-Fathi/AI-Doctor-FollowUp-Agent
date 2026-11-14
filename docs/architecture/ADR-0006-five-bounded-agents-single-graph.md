@@ -3,10 +3,10 @@
 | Field | Value |
 |---|---|
 | Status | **Proposed** (accepted only on owner approval of the P0 PR) |
-| Date | 2026-11-14 (v0.2 addresses PR review point "agentic depth") |
+| Date | 2026-11-14 (v0.3 addresses PR review `5904505998` point `P0-R08`: typed trace payloads and a deterministic harness for `AD-01`) |
 | Phase | P0 (design); implementation P5; demonstration P8 |
 | Related | `REQ-GRAPH-01/05`, `REQ-LLM-01/02`, ADR-0001, ADR-0002 |
-| Review reference | PR #2 review `5904454222`, ADR-0006 agentic-depth recommendation |
+| Review reference | PR #2 reviews `5904454222` (agentic depth) and `5904505998` (`P0-R08`) |
 
 ## Context
 
@@ -50,7 +50,7 @@ OCR confidence, attempt count, page count):
 
 | Condition | Selected path | Recorded trace fields |
 |---|---|---|
-| Text layer present on all required pages | `proceed` (no OCR) | `path_selected=text_layer`, `path_reason=text_sufficient` |
+| Text layer present on all required pages | `proceed` (no OCR) | `path_selected=text_layer`, `path_reason=text_layer_available` |
 | Text insufficient, OCR confidence ≥ `ocr_confidence_floor` | `proceed` | `path_selected=ocr_direct`, `path_reason=confidence_ok` |
 | Text insufficient, OCR confidence < floor, attempts < 2 | `ocr_preprocess_retry` | `path_selected=ocr_preprocess_retry`, `path_reason=low_confidence` |
 | Confidence still < floor, or attempts exhausted | `flag_for_human` | `path_selected=flag_for_human`, `path_reason=retry_exhausted` |
@@ -66,7 +66,25 @@ requests **one** repair with stricter constraints (schema violation, unknown evi
 content), or rejects to the labelled fallback. The chosen outcome and reason are recorded
 (`validation_outcome`), so the retry loop is visible in the run trace.
 
-#### 3.3 What this buys
+#### 3.3 The trace is a typed artifact, not prose
+
+Both decision loops emit a **discriminated, schema-checked** `detail` payload on their `NodeEvent`
+(`STATE_AND_GRAPH_CONTRACT.md` §3, `openapi.phase0.yaml` `TriageEventDetail`/`ValidationEventDetail`,
+`DATA_DICTIONARY.md` §2.18 `node_event`):
+
+| Node | Payload fields | Forbidden content |
+|---|---|---|
+| `extraction_triage` | `path_selected`, `path_reason`, `document_id`, `attempt_index`, `engine_confidence`, `preprocessing_applied` | document text, extracted values, page content |
+| `draft_validation` | `validation_outcome`, `attempt_index`, `violation_codes[]` | model output, draft text |
+| `fact_verify_gate` | `decision`, `blocking_fact_count`, `issue_types[]` | fact values |
+| `finalize_actions` | `approval_decision`, `task_created`, `notification_created` | note text, patient data |
+
+The triage router's entire input is `extraction_attempts[]` — typed records of `path`, `preprocessing`,
+`engine_confidence` (or `null` when the engine reports none), `text_char_count`, `succeeded`, `error_code`. It
+never re-reads a document and never infers a confidence from prose, so "why did the agent choose this path" is
+answerable from the DB alone (`P0-R08`).
+
+#### 3.4 What this buys
 
 - A trace a reviewer can read: which path, why, how many attempts, what was accepted.
 - Failure recovery without human intervention *before* the doctor gate (better demo resilience).
@@ -85,6 +103,12 @@ reports confidence below the floor:
 | Clean-PDF counterpart | `path_selected=text_layer`, zero OCR attempts (no needless work) |
 | Guard integrity | No `DR-*` evaluation and no draft exists while any blocking fact is pending; approval still required after resume |
 | Trace integrity | Both attempts plus the selection appear in `GET /workflows/{run_id}/trace` |
+
+**Determinism boundary (added in v0.3).** `AD-01` runs against a **mocked extractor** that returns scripted
+attempt metadata, so the assertions above are exact and repeatable on any machine with no OCR binary. The real
+Tesseract is exercised separately as `OCR-LIVE-01` on the owner laptop, where confidence and recovered text are
+**measured and recorded** (`LOCAL_BENCHMARK_PLAN.md`) rather than asserted in advance — real engine scores vary
+by build, locale and rasterization, and a contract test must not pretend otherwise.
 
 `AD-01` is a P5 integration test and a P8 demo segment (`DEMO_SCENARIOS.md` step C2a). It is **not executed in
 P0** — no graph exists yet.

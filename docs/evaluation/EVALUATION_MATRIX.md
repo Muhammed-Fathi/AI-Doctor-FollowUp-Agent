@@ -3,11 +3,11 @@
 | Field | Value |
 |---|---|
 | Document ID | `EVAL-001` |
-| Version | `0.2.0-p0` |
+| Version | `0.3.0-p0` |
 | Status | **IN REVIEW — every test below is DESIGNED, none is executed in Phase 0** |
 | Phase | `P0` (definition). Execution: P2–P7; final evidence matrix: P7/P8 |
 | Related | all `REQ-*` in `docs/contracts/MVP_SPEC.md` §7; `docs/evaluation/GOLD_FIXTURES.md`; `docs/evaluation/TRACEABILITY_MATRIX.md` |
-| Revision | 0.2.0: corrected Case B delta, Case C chronology and pre-verification routing, added trust/clock/agentic-depth tests, and the deterministic task-id restart case (PR #2 review) |
+| Revision | 0.3.0: adds `MAP-01` (closed fact → observation mapping), `TRUST-02` (observation admissibility), `RESUME-04/05` (app-DB vs checkpoint reconciliation) and `OCR-LIVE-01` (measured, not asserted, live OCR); sharpens `AD-01` to a mocked-extractor harness. 0.2.0 corrected Case B delta, Case C chronology and pre-verification routing |
 
 > **Honesty rule.** This matrix is a plan. A row is only "PASS" when a real command was run in a real
 > environment and its output is quoted in a phase report/PR. Phase 0 rows are all `NOT RUN`.
@@ -67,10 +67,13 @@
 | `VI-01` | Each `VI-*` fixture | The exact expected issue type is emitted with blocking fact IDs and neutral wording; no `DR-*` item exists at that stage | `REQ-SEC-04`, `REQ-RULE-01` | P3 | NOT RUN |
 | `VI-02` | Pending facts at the gate | Run halts `needs_verification`; `verification_issues[]` populated; `review_items[]` empty; no draft persisted | `REQ-SEC-04` | P3/P5 | NOT RUN |
 | `VI-03` | Wrong-patient document `VI-004` | Cannot be resolved by "verify"; requires explicit re-attribution with an audit record | `REQ-SEC-04` | P3/P4 | NOT RUN |
-| `AD-01` | Low-confidence scan (`GOLD-EX-13`) | `extraction_triage` selects `ocr_preprocess_retry` (`path_reason=low_confidence`), exactly 2 attempts, second pass proceeds; clean-PDF counterpart selects `text_layer` with zero OCR; third failure halts with `VI-005` and no retry; no guard bypassed | `REQ-GRAPH-01`, ADR-0006 §4 | P5 (demo P8) | NOT RUN |
+| `AD-01` | Low-confidence scan (`GOLD-EX-13`) with a **mocked extractor** | Deterministic harness injects scripted attempt metadata (no real OCR in the assertion path). Asserts on `GET /trace`: two `triage` events with `detail.kind=triage`, `path_selected=ocr_preprocess_retry` then `ocr_direct`, `path_reason=low_confidence` then `confidence_ok`, `attempt_index` 1→2, `engine_confidence` 0.55→0.86, `preprocessing_applied` false→true; clean-PDF counterpart yields `path_selected=text_layer`, `path_reason=text_layer_available`, zero OCR attempts; failure variant yields `flag_for_human`, `path_reason=retry_exhausted`, `VI-005`, and **no third attempt**. Also asserts the persisted `node_event` rows match the typed schema and that no detail field contains free text | `REQ-GRAPH-01`, `REQ-AUDIT-01`, ADR-0006 §4 | P5 (demo P8) | NOT RUN |
+| `OCR-LIVE-01` | Same degraded scans through **real** Tesseract on the owner laptop | Results are **measured and recorded** in `LOCAL_BENCHMARK_PLAN.md` (confidence, characters recovered, wall time). No expected value is asserted in advance: real OCR scores vary by build/locale, so a mismatch is data, not a test failure. Kept separate from the mocked contract test so the deterministic assertion is never confused with a measured run | `REQ-ING-02` | P5, owner laptop only | NOT RUN |
 | `VERIFY-01` | Verify/correct/reject each appends an immutable record | History intact, status transitions correct | `REQ-VERIFY-03` | P3 | NOT RUN |
 | `VERIFY-02` | Double decision on the same fact | `409 E_FACT_ALREADY_DECIDED` | `REQ-VERIFY-03` | P3 | NOT RUN |
 | `VERIFY-03` | Provenance completeness metric over all gold fixtures | 100% facts with in-bounds span | `REQ-VERIFY-01` | P7 | NOT RUN |
+
+| `MAP-01` | Closed fact → observation mapping (`map-1.0.0`) | Case A hemoglobin `g/dL` creates **0** observations (document-only, no `DR-*`); Case B `glucose 104 mg/dL` creates exactly 1 at `2026-11-02T00:00:00Z`; Case C creates 0 while halted and 1 (`glucose`, `2026-11-03T00:00:00Z`) after correction; an `HbA1c 5.6 %` fact creates 0; re-verifying the same fact is a no-op (unique `source_fact_id`); `measured_at` never equals the upload time or `as_of_utc` | `REQ-DATA-05` | P3 | NOT RUN |
 
 ## 5. Comparison and rule tests
 
@@ -85,6 +88,7 @@
 | `RULE-07` | Static check: rule engine imports no task/approval/messaging module | Zero such imports | `REQ-RULE-03`, `REQ-SEC-03` | P7 | NOT RUN |
 | `RULE-08` | Evaluate the same fixture with `as_of_utc=2026-11-14T12:00:00Z` and again 400 days later | First run stable across repeats; second correctly reports `DR-003` for the same data; both record the as-of used | `REQ-OPS-04` | P4 | NOT RUN |
 | `TRUST-01` | Self-reported vs doctor-verified observations flowing into a review item and a draft | `trust_basis` correct; `(self-reported)` suffix present; never described as verified | `REQ-DATA-04` | P4/P5 | NOT RUN |
+| `TRUST-02` | Comparator admissibility predicate (`is_admissible_observation`) | `validation=rejected` row skipped with `skip_reason=validation_rejected` and cannot shift a delta; `self_reported_validated` row **accepted** and carried into `trust_basis`; cross-patient input → `E_SCOPE_VIOLATION`; no output ever reports `doctor_verified` for a self-reported input; `E_UNVERIFIED_FACT` never raised for observations | `REQ-DATA-04`, `REQ-MON-01/02` | P4 | NOT RUN |
 | `NEG-19` | Rejected observation used as a baseline | Excluded from `read_observations`; no comparison, no `DR-*` item | `REQ-DATA-04` | P4 | NOT RUN |
 | `MON-01` | Missing baseline | `DR-001` once per type, no delta claimed | `REQ-MON-01/02` | P4 | NOT RUN |
 | `MON-02` | Duplicate / out-of-order entries | `DR-008`, no silent correction | `REQ-MON-03` | P4 | NOT RUN |
@@ -107,6 +111,8 @@
 | `RESUME-01` | Kill the API while paused at the approval interrupt; restart; resume | Run resumes from checkpoint; exactly one task/audit finalization | `REQ-GRAPH-02/03/04` | P7 | NOT RUN |
 | `RESUME-02` | Resume with a stale `workflow_version` | `409 E_WORKFLOW_VERSION_MISMATCH`, no side effects | `REQ-GRAPH-02` | P7 | NOT RUN |
 | `RESUME-03` | Retry a transient model failure then succeed | Bounded retries recorded; no duplicate draft rows | `REQ-GRAPH-04` | P7 | NOT RUN |
+| `RESUME-04` | Kill the process **after** phase A commits (decision + `finalizing`) but **before** the approval checkpoint write; also delete the checkpoint file and restart | Phase-B reconciliation from the app-DB decision (row 4 of the reconciliation table) produces **exactly one** task and one notification; no second approval row; run reaches `completed` | `REQ-GRAPH-02/04`, `REQ-TASK-01` | P7 | NOT RUN |
+| `RESUME-05` | Force a checkpoint that claims `completed` while the app DB has **no** approval decision | Checkpoint is not trusted: run is rewound to `awaiting_decision`, a `workflow.checkpoint.diverged` audit row is written, **zero** tasks and zero notifications are created, and the doctor may decide again | `REQ-GRAPH-04`, `REQ-AUDIT-01` | P7 | NOT RUN |
 
 ## 7. LLM and grounding tests
 
@@ -161,11 +167,11 @@ Protocol: `docs/evaluation/LOCAL_BENCHMARK_PLAN.md`.
 |---|---|
 | P1 exit | Fresh checkout install documented; `/health` returns 200; frontend builds; migrations apply; unit+contract smoke tests pass; repo has no secrets |
 | P2 exit | `NEG-01`, `NEG-02`, `NEG-10`, `NEG-13`, `NEG-16`, `AUD-01` pass; seed/reset reproducible |
-| P3 exit | `NEG-03/04/05/20`, `GOLD-EX-01..12`, `VI-01..03`, `VERIFY-01/02` pass; ambiguity routed as `VI-*` 100% |
-| P4 exit | `RULE-01..06`, `RULE-08`, `MON-01..03`, `TRUST-01`, `NEG-19`, `SAFE-06` pass; zero duplicate items |
-| P5 exit | `SAFE-01..05`, `NEG-06..08`, `LLM-01..06`, `EVAL-04`, `AD-01`, `NEG-21` pass with a real checkpoint and a real resume; benchmark recorded or explicitly marked not measured |
+| P3 exit | `NEG-03/04/05/20`, `GOLD-EX-01..12`, `VI-01..03`, `VERIFY-01/02`, `MAP-01` pass; ambiguity routed as `VI-*` 100%; unmapped document facts never become observations |
+| P4 exit | `RULE-01..06`, `RULE-08`, `MON-01..03`, `TRUST-01`, `TRUST-02`, `NEG-19`, `SAFE-06` pass; zero duplicate items; every excluded observation is reported with a `skip_reason` |
+| P5 exit | `SAFE-01..05`, `NEG-06..08`, `LLM-01..06`, `EVAL-04`, `AD-01` (mocked harness) pass with a real checkpoint and a real resume; `OCR-LIVE-01` measured results recorded or explicitly marked not measured; benchmark recorded or explicitly marked not measured |
 | P6 exit | `E2E-01..04` pass; `NEG-12` passes; no external messaging implementation |
-| P7 exit | `AUD-02`, `NEG-09`, `NEG-11`, `NEG-14`, `NEG-15`, `NEG-21`, `RESUME-01..03`, `EVAL-03`, `SEC-06/07/08`, `BENCH-03` pass |
+| P7 exit | `AUD-02`, `NEG-09`, `NEG-11`, `NEG-14`, `NEG-15`, `NEG-21`, `RESUME-01..05`, `EVAL-03`, `SEC-06/07/08`, `BENCH-03` pass |
 | P8 exit | `DEMO-A/B/C/R` reproducible from a fresh checkout on the owner laptop; timings recorded; owner sign-off |
 
 ## 12. Evidence format required in reports

@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document ID | `DEMO-001` |
-| Version | `0.2.0-p0` |
+| Version | `0.3.0-p0` |
 | Status | **IN REVIEW — script for a feature that does not exist yet** |
 | Phase | `P0` (design). Executable: P8 |
 | Related | `docs/evaluation/GOLD_FIXTURES.md`, `docs/clinical-safety/DEMO_REVIEW_RULES.md`, `REQ-OPS-01`, `REQ-DATA-04`, `REQ-OPS-04` |
@@ -75,7 +75,7 @@ Do **not** say: "the blood pressure is high", "worsening trend", "needs treatmen
 |---|---|---|---|
 | C1 | Patient | Upload `REPORT-C-01.png` (synthetic scanned report: `Value: 1O5`, no unit, date `03/11/2026`) | Status `processing → needs_attention`; patient sees status only |
 | C2 | Doctor | Open extraction view | Value raw `1O5` flagged `low_confidence`; unit missing `ambiguous_unit`; date `ambiguous_date`; all `pending`; **Verification required** panel lists `VI-001`, `VI-002`, `VI-003`, `VI-005` |
-| C3 | Doctor | Attempt to start the workflow | Blocked: `409 E_UNVERIFIED_FACT` or a run halted at `needs_verification` listing the 4 blocking verification issues (single behaviour fixed in P5). No review items exist at this stage; the queue section is empty by design |
+| C3 | Doctor | Attempt to start the workflow | Blocked: a run halted at `needs_verification` listing the 4 blocking verification issues (`VI-001/002/003/005`; `VI-002` interpolates `{count}` = the 3 candidate facts the page actually produced). No review items exist at this stage; the queue section is empty by design. No observation exists for the document until the correction is verified (`REQ-DATA-05`) |
 | C4 | Doctor | Try to preview a draft anyway | No draft is produced from the unverified value; uncertainty is listed, not guessed |
 | C5 | Doctor | Correct value → `105`, unit → `mg/dL`, date → `2026-11-03` (after the 2026-10-10 baseline); verify the other fields | New `doctor_verified` fact with `previous_value=1O5`; document becomes `verified`; audit keeps the correction |
 | C6 | Doctor | Resume the workflow | Run continues; no `DR-005` (96 → 105 = 9 mg/dL ≤ demo parameter 40); draft cites the corrected value with its page/span and marks it doctor-verified |
@@ -89,7 +89,7 @@ Do **not** say: "the AI read the report", "OCR is accurate", "glucose is fine".
 
 | Step | Actor | Action | Expected on screen |
 |---|---|---|---|
-| C2a | Doctor | Open the run trace for the scanned report (`GOLD-EX-13` variant) | The trace shows `path_selected=ocr_preprocess_retry`, `path_reason=low_confidence`, two extraction attempts, then either `proceed` (0.86 confidence) or `flag_for_human`. The narration: "the agent chose a different extraction path because its own first attempt reported low confidence; it stopped at a fixed retry budget" |
+| C2a | Doctor | Open the run trace for the scanned report (`GOLD-EX-13` variant, **mocked extractor** so the demo and `AD-01` are deterministic) | The trace shows two typed `triage` entries: `path_selected=ocr_preprocess_retry, path_reason=low_confidence, attempt_index=1, preprocessing_applied=false`, then `path_selected=ocr_direct, path_reason=confidence_ok, attempt_index=2, preprocessing_applied=true` — or `flag_for_human, path_reason=retry_exhausted` in the failure variant. Narration: "the agent chose a different extraction path because its own first attempt reported low confidence; it stopped at a fixed retry budget" |
 
 This segment is **optional** for the live demo and **required** in the P8 evidence pack (`AD-01`). It is the concrete
 answer to "where is the decision-making?".

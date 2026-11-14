@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document ID | `SAFE-001` |
-| Version | `0.2.0-p0` |
+| Version | `0.3.0-p0` |
 | Status | **IN REVIEW — wording requires owner (and clinician-adjacent reviewer if available) approval** |
 | Phase | `P0`; enforced from P2 onward; tested at P7 |
 | Related | `REQ-SEC-01..06`, `REQ-RULE-01..03`, `REQ-LLM-02`, `REQ-DATA-04`, `REQ-OPS-04`, ADR-0004, ADR-0005 |
@@ -77,6 +77,10 @@ The disclaimer is a typed constant (`Literal[...]`) so it cannot be omitted acci
 |---|---|---|
 | A doctor must verify a blocking extracted value before it is used | `fact_verify_gate` halts the graph with `VI-*` issues; tool layer rejects unverified facts | `NEG-06`, `NEG-20`, `SAFE-02`, `VI-02` |
 | Self-reported data is never presented as doctor-verified | `trust_level` + `verified_by` constraints; message/draft suffix rules | `TRUST-01`, `NEG-21` |
+| A self-reported value may be compared but stays labelled | `is_admissible_observation` admits it; `trust_basis` carries the label; no promotion path exists | `TRUST-02` |
+| Only mapped measurements become observations | Closed `map-1.0.0` table (`g/dL`, `%`, unrecognized names stay document-only) | `MAP-01` |
+| Trace decisions contain no patient content | Typed `detail` payloads: enums, IDs, counts, probabilities only | `AD-01` |
+| A restart can never double a task, even if the checkpoint is stale | App DB is the authority; reconciliation rewinds divergent checkpoints | `RESUME-04`, `RESUME-05` |
 | Time-dependent demo rules are reproducible | Injected `as_of_utc` persisted on the run | `RULE-08` |
 | A doctor must approve a follow-up action before a task exists | Task requires `approval_decision_id`; unique per run | `SAFE-01`, `NEG-08` |
 | Rejection creates nothing | `reject` routes to `completed` with no task | `SAFE-03` |
@@ -91,6 +95,9 @@ The disclaimer is a typed constant (`Literal[...]`) so it cannot be omitted acci
 3. Conflicting sources are both shown with their evidence; the system does not pick a winner.
 4. Out-of-order or duplicate observations become data-quality prompts, not corrections.
 5. Every draft carries `uncertainties` and `not_asserted` lists (possibly empty).
+6. A verified report value that has no comparable measure (e.g. hemoglobin in `g/dL`) is shown as a document
+   fact only — it is never silently mapped onto a measurement type, and its absence from comparisons is not a
+   judgement about it (`REQ-DATA-05`).
 
 ## 8. Privacy and data-handling boundary
 

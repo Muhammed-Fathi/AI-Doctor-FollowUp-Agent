@@ -55,6 +55,18 @@ The only permitted numeric trigger values are the **explicitly labelled, arbitra
   (e.g. the approval decision ID) plus a fixed slot — never from a newly generated row ID.
 - Time-dependent demo behaviour uses the injected `as_of_utc`; do not introduce `now()` in rules, fixtures,
   or tests.
+- **Admissibility is not verification.** `is_admissible_observation` (`TOOL_CONTRACTS.md` §3.4) admits
+  `self_reported_validated`; it excludes `validation='rejected'`, cross-patient rows, unit mismatches and
+  unparseable timestamps. Never re-introduce an "unverified observation" error for observations —
+  `E_UNVERIFIED_FACT` is for extracted facts only.
+- **Mapping is closed.** A verified document fact becomes an observation only via the versioned alias/unit table
+  (`DATA_DICTIONARY.md` §3.3). Unmapped values (`g/dL`, `%`, unknown names) stay document-only; never coerce them
+  onto a nearby measure type.
+- **The app DB is the source of truth for run status.** The LangGraph checkpoint file is replay state and cannot
+  join an app-DB transaction; reconcile on restart (`STATE_AND_GRAPH_CONTRACT.md` §7.3) instead of trusting a
+  checkpoint's status.
+- **Trace decisions are typed.** Graph trace entries carry a discriminated `detail` payload of enums, IDs, counts
+  and probabilities. Never add a free-text field, a document snippet, or a model output to the trace.
 
 ### 3.3 Human-in-the-loop invariants
 - A doctor decision is required before any follow-up task, notification, or final summary is finalized.

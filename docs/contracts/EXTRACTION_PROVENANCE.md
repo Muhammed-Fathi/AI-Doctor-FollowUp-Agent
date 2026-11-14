@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document ID | `CTR-EXTRACT-001` |
-| Version | `0.2.0-p0` |
+| Version | `0.3.0-p0` |
 | Status | **IN REVIEW — design only; no parser exists** |
 | Phase | `P0` (design). Implementation: P3 |
 | Related | `REQ-ING-01..05`, `REQ-VERIFY-01..03`, `REQ-DATA-04`, `REQ-SEC-02/04`, ADR-0003, ADR-0006 |
@@ -128,8 +128,19 @@ Rules:
 
 - Only `role='doctor'` with patient scope may call the endpoint; the acting user ID is stored (`REQ-VERIFY-03`).
 - Verification is **append-only**; a second different decision on the same fact returns `409 E_FACT_ALREADY_DECIDED`.
-- A verified document fact becomes an observation with `trust_level='doctor_verified'`, `source='verified_document'`,
-  `source_fact_id` set, and `verified_by`/`verified_at` copied from the deciding doctor — never `self_reported_validated` (`REQ-DATA-04`).
+- **Only mapped measurement tuples become observations** (`P0-R10`, `REQ-DATA-05`). A verified fact becomes an
+  observation **iff** its normalized `test_name` and unit both appear in the closed table in
+  `DATA_DICTIONARY.md` §3.3 (`map-1.0.0`): `glucose`/`fasting glucose`/… + `mg/dL`, `systolic bp`/… + `mmHg`,
+  `diastolic bp`/… + `mmHg`, `heart rate`/`pulse`/… + `bpm`. The observation is created with
+  `trust_level='doctor_verified'`, `source='verified_document'`, `source_fact_id` set,
+  `measured_at` = the verified report date at `00:00Z` (never the upload time or `as_of_utc`), and
+  `verified_by`/`verified_at` copied from the deciding doctor — never `self_reported_validated` (`REQ-DATA-04`).
+  Insertion is in the same app-DB transaction as the verification row, and `ux_obs_source_fact` makes a replay a
+  no-op.
+- **Every other verified fact stays document-only.** A `hemoglobin 13.4 g/dL` fact (Case A), a `%` unit, or any
+  unrecognized test name remains a `VerifiedFact` that the draft may cite; it produces no `Observation`, no
+  comparison and no `DR-*` item. Unmapped names are counted as `unmapped_test_name` in the extraction summary
+  (informational, non-blocking) and are never coerced onto a nearby measure type.
 - Document status transitions: `pending_extraction → extracted → needs_verification → verified` (or `failed`). `verified` at document level requires **all blocking facts** decided and at least one fact verified.
 - A document with every fact rejected becomes `failed` with a reason; the workflow halts with `needs_verification` if that document was required.
 

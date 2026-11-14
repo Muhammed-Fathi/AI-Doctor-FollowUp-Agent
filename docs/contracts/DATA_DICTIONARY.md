@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document ID | `CTR-DATA-001` |
-| Version | `0.2.0-p0` |
+| Version | `0.3.0-p0` |
 | Status | **IN REVIEW — schema proposal; no tables exist** |
 | Phase | `P0` (design). Implementation: P2 (core), P3 (documents/facts), P4 (reviews), P5 (workflow), P6 (tasks) |
 | Related | `REQ-DATA-01/02/03/04`, `REQ-VERIFY-01/02/03`, `REQ-GRAPH-02`, `REQ-OPS-04`, ADR-0003 |
@@ -45,6 +45,8 @@ erDiagram
     FOLLOW_UP_TASK ||--o{ IN_APP_NOTIFICATION : notifies
     USER ||--o{ WORKFLOW_RUN : starts
     WORKFLOW_RUN ||--o{ AUDIT_EVENT : emits
+    WORKFLOW_RUN ||--o{ NODE_EVENT : traces
+    EXTRACTED_FACT ||--o| OBSERVATION : "maps_to (closed table)"
     PATIENT ||--o{ WORKFLOW_RUN : scoped_to
 ```
 
@@ -119,6 +121,9 @@ Indexes: `ix_document_patient (patient_id)`; `ux_document_sha_patient (patient_i
 | `id` | TEXT(36) | PK | |
 | `document_id` | TEXT(36) | NOT NULL, FK `document.id` | |
 | `path` | TEXT(16) | NOT NULL, CHECK in (`pypdf`,`tesseract`,`manual`) | Provenance of the extraction route (`REQ-ING-02`) |
+| `preprocessing` | TEXT(20) | NOT NULL DEFAULT `'none'`, CHECK in (`none`,`grayscale_upscale`) | Deterministic preprocessing applied before OCR; the triage input (`P0-R08`) |
+| `engine_confidence` | REAL | NULL, CHECK `0 ≤ engine_confidence ≤ 1` | **Engine-reported only.** NULL when the engine reports none — never estimated or back-filled |
+| `text_char_count` | INTEGER | NOT NULL DEFAULT 0, CHECK `≥ 0` | Text-layer coverage signal used by `extraction_triage` |
 | `page_from` / `page_to` | INTEGER | NOT NULL | |
 | `succeeded` | INTEGER | NOT NULL | |
 | `error_code` | TEXT(48) | NULL | |
@@ -126,7 +131,9 @@ Indexes: `ix_document_patient (patient_id)`; `ux_document_sha_patient (patient_i
 | `tool_version` | TEXT(64) | NULL | Runtime-reported version, recorded at execution (not claimed in P0) |
 | `created_at` | TEXT(20) | NOT NULL | |
 
-Index: `ix_attempt_document (document_id, created_at DESC)`.
+Indexes: `ix_attempt_document (document_id, created_at DESC)`; `ix_attempt_doc_conf (document_id, engine_confidence)`.
+`extraction_attempt` rows are the **only** typed source for `TriageDetail`; the triage node never inspects raw
+document text to decide a path (`P0-R08`).
 
 ### 2.6 `extracted_fact` (candidate, unverified by construction)
 
@@ -186,7 +193,9 @@ Index: `ix_factver_fact (fact_id, decided_at DESC)`. No UPDATE/DELETE path — a
 | `created_at` | TEXT(20) | NOT NULL | |
 | `created_by_user_id` | TEXT(36) | NULL | |
 
-Indexes: `ix_obs_patient_type_time (patient_id, measure_type, measured_at DESC)`; `ix_obs_trust (patient_id, trust_level)`.
+Indexes: `ix_obs_patient_type_time (patient_id, measure_type, measured_at DESC)`; `ix_obs_trust (patient_id, trust_level)`;
+`ux_obs_source_fact (source_fact_id)` **UNIQUE** (SQLite treats NULLs as distinct, so check-in rows are unaffected) —
+one observation per verified fact, so replaying a verification cannot duplicate a measurement (`REQ-DATA-05`, `P0-R10`).
 
 CHECK constraints:
 - `source='verified_document'` requires `source_fact_id IS NOT NULL` **and** `trust_level='doctor_verified'`.
@@ -344,8 +353,13 @@ There is no transport column, no provider column, and no "sent" status — by de
 | `halt_reason` | TEXT(32) | NULL | |
 | `idempotency_key` | TEXT(64) | NOT NULL UNIQUE | Repeat start returns this run |
 | `retry_counts` | TEXT(500) | NOT NULL DEFAULT `'{}'` | JSON, capped |
-| `checkpoint_ref` | TEXT(120) | NULL | Last checkpoint id/label |
+| `mapping_version` | TEXT(12) | NOT NULL | Version of the closed fact → observation mapping used by the run (`REQ-DATA-05`) |
+| `checkpoint_ref` | TEXT(120) | NULL | Last checkpoint id/label — **advisory only**, never used to decide status (`P0-R09`) |
 | `started_at` / `updated_at` / `ended_at` | TEXT(20) | NOT NULL / NOT NULL / NULL | |
+
+This table is the **single source of truth** for run status (`P0-R09`). The LangGraph checkpoint DB lives in a
+different SQLite file and cannot join an app-DB transaction; `finalizing`/`completed` transitions are committed
+here, and on restart the service reconciles against these rows (`STATE_AND_GRAPH_CONTRACT.md` §7.3).
 
 ### 2.17 `audit_event` (append-only)
 
@@ -367,6 +381,43 @@ There is no transport column, no provider column, and no "sent" status — by de
 Indexes: `ix_audit_patient_time (patient_id, created_at DESC)`; `ix_audit_run (workflow_run_id, created_at)`.
 No UPDATE/DELETE in the application layer; only the demo reset removes rows (whole DB rebuild).
 
+### 2.18 `node_event` (typed graph trace)
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | TEXT(36) | PK | |
+| `workflow_run_id` | TEXT(36) | NOT NULL, FK `workflow_run.id` | |
+| `sequence` | INTEGER | NOT NULL, CHECK `≥ 0` | Monotonic per run; `UNIQUE (workflow_run_id, sequence)` |
+| `node` | TEXT(48) | NOT NULL | Matches the node table (`STATE_AND_GRAPH_CONTRACT.md` §4.1) |
+| `attempt` | INTEGER | NOT NULL DEFAULT 1, CHECK `1 ≤ attempt ≤ 5` | Retry index of that node |
+| `started_at` / `ended_at` | TEXT(20) | NOT NULL / NULL | |
+| `outcome` | TEXT(12) | NULL, CHECK in (`ok`,`halted`,`interrupted`,`retried`,`failed`) | |
+| `tools_called` | TEXT(300) | NOT NULL DEFAULT `'[]'` | JSON array of tool **names** only, ≤ 6 |
+| `detail_kind` | TEXT(12) | NULL, CHECK in (`triage`,`validation`,`gate`,`finalize`) | NULL iff the node makes no bounded decision |
+| `triage_path` | TEXT(24) | NULL, CHECK in (`text_layer`,`ocr_direct`,`ocr_preprocess_retry`,`flag_for_human`) | `detail_kind='triage'` only |
+| `triage_reason` | TEXT(28) | NULL, CHECK in (`text_layer_available`,`confidence_ok`,`low_confidence`,`ocr_transient_error`,`retry_exhausted`) | |
+| `attempt_index` | INTEGER | NULL, CHECK `1 ≤ attempt_index ≤ 2` | Bounded retry budget |
+| `engine_confidence` | REAL | NULL, CHECK `0 ≤ engine_confidence ≤ 1` | Engine-reported or NULL |
+| `preprocessing_applied` | INTEGER | NULL, CHECK in (0,1) | |
+| `validation_outcome` | TEXT(20) | NULL, CHECK in (`accept`,`repair_requested`,`fallback_selected`) | |
+| `violation_codes` | TEXT(300) | NULL | JSON array of the enum codes only, ≤ 6 |
+| `gate_decision` | TEXT(10) | NULL, CHECK in (`proceed`,`halt`) | |
+| `blocking_fact_count` | INTEGER | NULL, CHECK `0 ≤ blocking_fact_count ≤ 40` | |
+| `finalize_decision` | TEXT(10) | NULL, CHECK in (`approve`,`edit`,`reject`) | |
+| `task_created` / `notification_created` | INTEGER | NULL, CHECK in (0,1) | |
+| `created_at` | TEXT(20) | NOT NULL | |
+
+Indexes: `ix_node_event_run (workflow_run_id, sequence)`.
+
+CHECK constraints:
+- `detail_kind='triage'` ⇒ `triage_path`, `triage_reason`, `attempt_index` NOT NULL and all validation/gate/finalize columns NULL; `detail_kind='validation'`/`'gate'`/`'finalize'` symmetric.
+- `detail_kind IS NULL` ⇒ every detail column NULL (a node that makes no bounded decision cannot smuggle metadata).
+- No column stores document text, raw values, patient names or model output — only enums, IDs, counts and
+  probabilities (`REQ-AUDIT-02`, `P0-R08`). The trace has no free-text column at all.
+
+`GET /api/v1/workflows/{run_id}/trace` reads these rows; the same structs are the `TraceEvent` schema in
+`openapi.phase0.yaml` and `NodeEvent` in `STATE_AND_GRAPH_CONTRACT.md` §3.
+
 ## 3. Units and validation rules
 
 ### 3.1 Observation units (comparable measurements)
@@ -382,8 +433,7 @@ No UPDATE/DELETE in the application layer; only the demo reset removes rows (who
 
 `ExtractedFact.unit` is wider than the observation allowlist because a report may legitimately print other units:
 `mmHg`, `bpm`, `mg/dL`, `g/dL`, `%`. These are **strings in document context**; they never become an
-`Observation` unit unless an explicit mapping exists (`systolic_bp`/`diastolic_bp` → `mmHg`, `heart_rate` →
-`bpm`, `glucose` → `mg/dL`). A hemoglobin value in `g/dL` is therefore a verified fact used in the summary and
+`Observation` unit unless the closed mapping table in §3.3 maps both the test name and the unit. A hemoglobin value in `g/dL` is therefore a verified fact used in the summary and
 **not** a comparable measurement — it produces no `DR-*` item (`P0-R06`).
 
 Rules:
@@ -394,6 +444,56 @@ Rules:
 4. The demo values in `docs/clinical-safety/DEMO_REVIEW_RULES.md` consume these typed values; they do not redefine them.
 5. `validation` (data check) and `trust_level` (provenance class) are independent: a self-reported check-in can be
    `validation='ok'` and `trust_level='self_reported_validated'`, and the UI must say "self-reported" (`REQ-DATA-04`).
+
+### 3.3 Verified fact → observation mapping (`map-1.0.0`, closed)
+
+A verified document fact becomes an **observation only** when its normalized `test_name` **and** its unit both
+appear in this table. This table is a closed constant in code, versioned by `mapping_version`, persisted on the
+run, and asserted by `MAP-01` (`P0-R10`, `REQ-DATA-05`).
+
+| `measure_type` | Accepted normalized `test_name` aliases (case-insensitive, whitespace-collapsed, **exact token match**) | Required verified unit | Observation `unit` |
+|---|---|---|---|
+| `systolic_bp` | `systolic blood pressure`, `systolic bp`, `sbp` | `mmHg` | `mmHg` |
+| `diastolic_bp` | `diastolic blood pressure`, `diastolic bp`, `dbp` | `mmHg` | `mmHg` |
+| `heart_rate` | `heart rate`, `pulse`, `pulse rate`, `hr` | `bpm` | `bpm` |
+| `glucose` | `glucose`, `blood glucose`, `fasting glucose`, `fasting blood sugar`, `fbg` | `mg/dL` | `mg/dL` |
+
+Rules:
+
+1. **Nothing else converts.** A verified fact whose test name is absent from the table (e.g. `hemoglobin`,
+   `HbA1c`, `creatinine`) remains a `VerifiedFact` only: it may be cited in the draft summary, it creates **no**
+   `Observation`, and it therefore produces **no** `DR-*` item (`Case A`, `P0-R06`/`P0-R10`).
+2. **Unit gates separately.** A recognized test name with a non-matching unit (`glucose` in `mmol/L`, `%`, or
+   `null`) creates no observation; the ambiguity is a blocking `VI-001` before verification, so no observation
+   can exist for it.
+3. **Alias matching is literal, not fuzzy.** Lowercase + collapse internal whitespace + strip trailing colon;
+   then compare against the alias set. No substring, prefix, stemming, or "close enough" matching. A new alias
+   is a mapping-version change, not a runtime guess.
+4. **Test name drives the mapping, not the unit.** `Hemoglobin 13.4 mg/dL` (nonsense but well-formed) still
+   creates no observation: the name is unmapped.
+5. **`measured_at` semantics.** `measured_at` is taken from the **verified `report_date`** rendered at
+   `T00:00:00Z` (or the printed time when the report carries one). It is never the upload time, never
+   `checked_at`, never `as_of_utc`, and never `now`. An ambiguous or absent date is a blocking `VI-003`, so no
+   observation is created until the doctor supplies a date.
+6. **Atomic lineage.** The observation row is inserted in the **same app-DB transaction** as the
+   `fact_verification` row that qualifies it, with `source='verified_document'`,
+   `source_fact_id=<fact>`, `trust_level='doctor_verified'`, `verified_by_user_id`/`verified_at` copied from the
+   deciding doctor, `validation` set by the data check, and an `evidence_link` to the fact + document span.
+   A crash cannot leave a verified fact without its observation or vice versa.
+7. **No duplicates on replay.** `ux_obs_source_fact (source_fact_id)` is unique; a repeated verification
+   returns the existing observation with `E_DUPLICATE_OBSERVATION` mapped to a `200` no-op, never a second row.
+8. **Patient scope is inherited** from the document; a wrong-patient document is `VI-004` and never produces an
+   observation (`P0-R03`).
+9. Self-reported check-ins never travel this path: they are created by intake with
+   `source='patient_checkin'`, `trust_level='self_reported_validated'` and no `source_fact_id`.
+
+Per-fixture expectation (`MAP-01`):
+
+| Fixture | Verified document facts | Observations created |
+|---|---|---|
+| Case A `REPORT-A-01` | `hemoglobin 13.4 g/dL`, reference range, report date, test name | **0** (unmapped name/unit — document-only) |
+| Case B `REPORT-B-02` | `glucose 104 mg/dL`, report date, test name | **1** (`glucose`, 2026-11-02T00:00:00Z) |
+| Case C `REPORT-C-01` (after correction) | `glucose 105 mg/dL`, report date `2026-11-03`, test name | **1** (`glucose`, 2026-11-03T00:00:00Z) — and **0** while the run is halted at `needs_verification` |
 
 ## 4. Migration and reset policy
 

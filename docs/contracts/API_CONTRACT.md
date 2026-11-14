@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document ID | `CTR-API-001` |
-| Version | `0.2.0-p0` |
+| Version | `0.3.0-p0` |
 | Status | **IN REVIEW — proposal only; no server exists in P0** |
 | Phase | `P0` (design). Implementation: P2 (auth/data), P3 (documents), P5 (workflows), P6 (UI) |
 | Machine-readable companion | [`openapi.phase0.yaml`](openapi.phase0.yaml) |
@@ -116,17 +116,23 @@ Upload validation order (fixed): declared size → magic bytes → allowed MIME 
 |---|---|---|---|---|---|
 | POST | `/api/v1/workflows/follow-up` | doctor (assigned) | `{patient_id, observation_ids?, document_ids?, client_request_id}` + `Idempotency-Key` | `202 {run_id, status, current_node}` or `200` existing run on repeat | `400`, `403`, `409 E_IDEMPOTENCY_CONFLICT`, `409 E_UNVERIFIED_FACT`, `422 E_RUN_LIMIT_REACHED`, `503 E_MODEL_UNAVAILABLE` (only if fallback also disabled) |
 | GET | `/api/v1/workflows/{run_id}` | doctor (assigned) | – | `200 {run, draft?, verification_issues[], review_items[], blocking_facts[], model_metadata, events[]}` | `403`, `404` |
-| GET | `/api/v1/workflows/{run_id}/trace` | doctor (assigned) | – | `200 {events[]}` incl. `path_selected`/`path_reason` and `validation_outcome` | `403`, `404` |
+| GET | `/api/v1/workflows/{run_id}/trace` | doctor (assigned) | – | `200 {run_id, events[]}` where each event has `node`, `attempt`, `started_at`, `ended_at`, `outcome`, `tools_called` and a **typed** `detail` (`null` for nodes without a bounded decision) | `403`, `404` |
 | POST | `/api/v1/workflows/{run_id}/decisions` | doctor (assigned) | `{decision:"approve"\|"edit"\|"reject", edited_summary?, reason?}` | `200 {run, decision, task?, notification?}` | `400`, `403`, `404`, `409 E_APPROVAL_CONFLICT`, `409 E_RUN_NOT_PAUSED`, `409 E_WORKFLOW_VERSION_MISMATCH` |
 | POST | `/api/v1/workflows/{run_id}/resume` | doctor (assigned) | `{resume_reason:"facts_verified"}` | `202 {run, status}` | `400`, `403`, `404`, `409 E_RUN_NOT_PAUSED`, `409 E_UNVERIFIED_FACT` |
 
 Rules:
 
 1. `POST /decisions` is the **only** path to task creation. `patient_id`, `doctor_id`, and facts are never taken from the request body.
-1a. A decision moves the run `awaiting_decision → finalizing`; task, notification, audit finalization and the
-   `finalizing → completed` transition commit atomically (unique indexes make replay a no-op).
+1a. A decision is applied in **two ordered app-DB transactions**: (A) the decision row + `awaiting_decision →
+   `finalizing`; (B) task + notification + audit finalization + `finalizing → completed`. They are separate
+   because the LangGraph checkpoint file cannot join an app-DB transaction; phase B is idempotent through the
+   derived task key, and a restart reconciles from the app DB (`STATE_AND_GRAPH_CONTRACT.md` §7.2–§7.3).
 1b. `verification_issues[]` (pre-verification, blocking) and `review_items[]` (post-verification, `DR-*`) are
    separate arrays with separate UI sections; a client must not merge or relabel them.
+1c. Trace `detail` payloads are enum/count/ID-only by contract. A client that receives any free text in a detail
+   field should treat the response as malformed; the server never emits document content there (`REQ-AUDIT-02`).
+1d. Observations appear with `trust_level`; a client must render `self_reported_validated` as "self-reported" and
+   must not present it as verified. Comparison responses carry `trust_basis` for the same reason (`P0-R11`).
 2. `approve` and `edit` return the created task + notification; `reject` returns neither (`US-10`). The task ID is
    derived deterministically from the stored decision, so a retried or restarted request cannot create a second task.
 3. A duplicate identical decision returns `200` with the stored result (idempotent); a conflicting decision returns `409 E_APPROVAL_CONFLICT`.
@@ -196,7 +202,7 @@ Full JSON Schemas live in `openapi.phase0.yaml`. Field-level meaning lives in `D
 | `E_DUPLICATE_CHECKIN` | 409 | Same type/value/timestamp for this patient | Treat as success |
 | `E_EXTRACTION_PENDING` | 409 | Extraction not finished | Poll `GET /documents/{id}` |
 | `E_FACT_ALREADY_DECIDED` | 409 | Verification is append-only | Fetch latest state |
-| `E_UNVERIFIED_FACT` | 409 | Blocking fact still pending/rejected | Verify the fact, then resume |
+| `E_UNVERIFIED_FACT` | 409 | Blocking **fact** still pending/rejected (facts only — never raised for an observation) | Verify the fact, then resume |
 | `E_IDEMPOTENCY_CONFLICT` | 409 | Same key, different payload | Generate a new key |
 | `E_APPROVAL_CONFLICT` | 409 | A different decision already exists for the run | Fetch the run |
 | `E_RUN_NOT_PAUSED` | 409 | Resume/decision on a run that is not paused | Fetch status |

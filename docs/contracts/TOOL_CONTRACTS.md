@@ -3,11 +3,11 @@
 | Field | Value |
 |---|---|
 | Document ID | `CTR-TOOL-001` |
-| Version | `0.2.0-p0` |
+| Version | `0.3.0-p0` |
 | Status | **IN REVIEW — allowlist proposal, not implemented** |
 | Phase | `P0` (design). Implementation: P3–P6 |
 | Related | `REQ-GRAPH-05`, `REQ-LLM-02`, `REQ-SEC-02/03/04`, `REQ-DATA-04`, ADR-0006, ADR-0005 |
-| Revision | 0.2.0: trust-aware observation reads, deterministic task identity/atomic commit (`P0-R04`), extraction confidence output for bounded triage, draft-validation note |
+| Revision | 0.3.0: observation **admissibility predicate** replacing the "non-verified observation" error (`P0-R11`), two-phase finalize + app-DB authority (`P0-R09`), typed extraction-attempt output for triage (`P0-R08`). 0.2.0 added trust-aware observation reads, deterministic task identity (`P0-R04`) and the draft-validation note |
 
 ---
 
@@ -33,7 +33,7 @@ T = TypeVar("T")
 
 class ToolError(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    code: str            # E_TOOL_NOT_ALLOWED | E_NOT_FOUND | E_SCOPE_VIOLATION | E_UNVERIFIED_FACT
+    code: str            # E_TOOL_NOT_ALLOWED | E_NOT_FOUND | E_SCOPE_VIOLATION | E_UNVERIFIED_FACT (facts only)
                          # | E_UNSUPPORTED_MEDIA | E_PARSE_FAILED | E_TIMEOUT | E_DEPENDENCY_MISSING
                          # | E_RULE_POLICY_INVALID | E_MODEL_UNAVAILABLE | E_DUPLICATE_IGNORED
     message: str         # <=300 chars, no document body, no secrets
@@ -70,7 +70,7 @@ Invariants: `ok=True ⇒ error is None` and `ok=False ⇒ data is None`; every c
 | Owner node | `medical_document` |
 | Input | `document_id: Uuid`, `fields: list[Literal["report_date","test_name","value","unit","reference_text"]]` |
 | Output | `list[ExtractedFact]` with `verification_status="pending"` always, plus `page_index`, `char_start/end`, `raw_text`, `quality_flags`, `confidence`, and the extraction `path` (`pypdf`/`tesseract`) used for each page |
-| Side effects | persists extraction attempts + facts (candidate, unverified) |
+| Side effects | persists `extraction_attempt` rows (typed: `path`, `preprocessing`, `engine_confidence`, `text_char_count`) + facts (candidate, unverified) |
 | Timeout / cap | 20 s per document; ≤ 5 pages OCR; ≤ 40 facts |
 | Errors | `E_UNSUPPORTED_MEDIA`, `E_PARSE_FAILED`, `E_TIMEOUT`, `E_DEPENDENCY_MISSING` (Tesseract missing) |
 | Notes | Text-first (`pypdf`); OCR fallback only when the page text layer is insufficient. Returns the confidence and path that `extraction_triage` uses for bounded retry (`ADR-0006` §3.1). The returned facts are **never** verified. |
@@ -92,11 +92,26 @@ Invariants: `ok=True ⇒ error is None` and `ok=False ⇒ data is None`; every c
 |---|---|
 | Owner node | `patient_monitoring`, `intake_validate` |
 | Input | `measure_types: list[str] ≤ 4`, `from_iso: Iso`, `to_iso: Iso`, `only_admissible: bool = True` (excludes `validation='rejected'`), `trust_levels: list[Literal["self_reported_validated","doctor_verified"]] = both` |
-| Output | `list[ObservationView]` scoped to the run's patient, each with `trust_level` and `verified_by` (null for self-reported) |
+| Output | `{observations: list[ObservationView], excluded: list[{observation_id, skip_reason}]}` — scoped to the run's patient, each observation with `trust_level` and `verified_by` (null for self-reported); `skip_reason ∈ {validation_rejected, unit_mismatch, missing_timestamp, future_timestamp}` |
 | Side effects | none |
 | Timeout / cap | 2 s; ≤ 100 rows (most recent first) |
-| Errors | `E_SCOPE_VIOLATION`, `E_VALIDATION` |
-| Notes | Cannot be called with another patient's ID: there is no such parameter. `only_admissible` never returns rejected rows (`REQ-DATA-04`; `NEG-19`). |
+| Errors | `E_SCOPE_VIOLATION`, `E_VALIDATION` — **never** `E_UNVERIFIED_FACT` (observations are not facts) |
+| Notes | Cannot be called with another patient's ID: there is no such parameter. `only_admissible` never returns rejected rows (`REQ-DATA-04`; `NEG-19`). `trust_levels` defaults to **both**: a validated self-reported check-in is admissible and stays labelled. |
+
+**Admissibility predicate (`is_admissible_observation`, shared verbatim by `read_observations`,
+`compare_observations`, `evaluate_demo_review_rules` and the UI; resolves `P0-R11`).** An observation is
+admissible iff **all** of:
+
+1. `validation != "rejected"` (a data check failed);
+2. `patient_id` equals the run's patient (a mismatch is `E_SCOPE_VIOLATION`, not a skip);
+3. `unit` equals the unit fixed for its `measure_type` (`DATA_DICTIONARY.md` §3.1);
+4. `measured_at` is a parseable ISO-8601 UTC instant, and is `≤ as_of_utc + 5 min`;
+5. `trust_level ∈ {self_reported_validated, doctor_verified}`.
+
+Admissibility is **not** a doctor-verification requirement: a `self_reported_validated` observation passes and
+must carry its label downstream. Inadmissible rows are excluded and reported with a
+`skip_reason ∈ {validation_rejected, unit_mismatch, missing_timestamp, future_timestamp}` — never silently
+dropped and never relabelled.
 
 ### 3.5 `compare_observations` — pure
 
@@ -106,8 +121,8 @@ Invariants: `ok=True ⇒ error is None` and `ok=False ⇒ data is None`; every c
 | Input | `current: list[ObservationView]` (≤ 6), `baseline_lookback_days: int ≤ 365` |
 | Output | `list[ComparisonResult]` including `comparable`, `delta`, and `incomparable_reason` |
 | Side effects | none |
-| Errors | `E_VALIDATION`, `E_UNVERIFIED_FACT` if a non-verified observation is passed |
-| Notes | No unit conversion and no imputation (`REQ-MON-02`). A unit mismatch is reported, not reconciled. |
+| Errors | `E_VALIDATION`, `E_SCOPE_VIOLATION` (cross-patient input). **`E_UNVERIFIED_FACT` is retired for this tool** (`P0-R11`) |
+| Notes | Input must already satisfy `is_admissible_observation` (§3.4). Inadmissible input is **not** an error: the tool returns `comparable=false` with `incomparable_reason="not_admissible"` plus the `skip_reason`, so a rejected row can never shift a delta. `trust_basis` is derived from the two input labels: both `doctor_verified` → `doctor_verified`; both `self_reported_validated` → `self_reported`; mixed → `mixed`. The tool may never emit or imply `doctor_verified` for an input that was self-reported, may not convert units, and may not impute a baseline (`REQ-MON-02`, `REQ-DATA-04`). |
 
 ### 3.6 `read_verified_facts` — read-only
 
@@ -129,7 +144,7 @@ Invariants: `ok=True ⇒ error is None` and `ok=False ⇒ data is None`; every c
 | Output | `list[ReviewFlag]` with `rule_id`, `reason_code`, `workflow_hint`, neutral `message`, `evidence`, `dedupe_key`, `demo_only=True` |
 | Side effects | none in the engine; the node persists flags via the service layer |
 | Errors | `E_RULE_POLICY_INVALID`, `E_UNVERIFIED_FACT`, `E_VALIDATION` |
-| Notes | Deterministic and side-effect free: the same input and `policy_version` always produce the same ordered output. No LLM involvement (`REQ-RULE-01`). |
+| Notes | Deterministic and side-effect free: the same input and `policy_version` always produce the same ordered output. No LLM involvement (`REQ-RULE-01`). `E_UNVERIFIED_FACT` applies **only** to an `ExtractedFact`/pending fact in the input, never to an observation: observations are filtered by `is_admissible_observation` (§3.4) and `self_reported_validated` values are consumed **as labelled** (`trust_basis`), never promoted (`P0-R11`). |
 
 ### 3.8 `draft_grounded_summary` — model-backed, bounded
 
@@ -153,7 +168,7 @@ Invariants: `ok=True ⇒ error is None` and `ok=False ⇒ data is None`; every c
 | Output | `{task_id, notification_id, created: bool, duplicate_ignored: bool}` |
 | Side effects | inserts one `follow_up_task` + one `in_app_notification` + audit events |
 | Idempotency | `action_key = sha256(workflow_version | patient_id | approval_decision_id | "followup_task" | "slot:1")`; `task_id = uuid5(TASK_NAMESPACE, action_key)` is derived, never regenerated; duplicate → `created=false, duplicate_ignored=true`, existing row returned, no new row (`P0-R04`) |
-| Atomicity | decision row, task, notification, audit finalization and the `finalizing → completed` transition commit in one transaction; unique indexes make replay a no-op (`STATE_AND_GRAPH_CONTRACT.md` §7.2) |
+| Atomicity | Task + notification + audit finalization + the `finalizing → completed` transition commit in **one app-DB transaction** (phase B). The approval decision and the entry into `finalizing` committed earlier, in their own transaction (phase A), because the LangGraph checkpoint file cannot join it. Replay of phase B is a no-op via the derived keys (`STATE_AND_GRAPH_CONTRACT.md` §7.2–§7.3, `P0-R09`). |
 | Errors | `E_APPROVAL_REQUIRED` (wrong state or missing decision), `E_RUN_NOT_PAUSED`, `E_SCOPE_VIOLATION`, `E_VALIDATION`, `E_DUPLICATE_IGNORED` |
 | Notes | There is no delivery channel: the "notification" is a row. Nothing leaves the machine (`ADR-0005`). |
 

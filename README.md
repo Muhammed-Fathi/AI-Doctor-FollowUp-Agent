@@ -13,7 +13,7 @@ Doctor-centered educational demonstration. The application will take **synthetic
 
 | Phase | Status | Notes |
 |---|---|---|
-| **P0 — Governance and specification baseline** | **IN_REVIEW** | Documentation-only PR submitted; review round 1 findings (P0-R01…R07 + ADR-0006 depth) addressed in a follow-up commit; owner re-review pending. Not accepted, not merged. |
+| **P0 — Governance and specification baseline** | **IN_REVIEW** | Documentation-only PR submitted; review rounds 1–2 addressed in follow-up commits (R01–R07 + ADR-0006 depth, then R08–R11 contract reconciliations and test-realism fixes). Owner re-review pending. Not accepted, not merged. |
 | P1–P8 | TODO | Must not start before P0 is approved |
 
 No application code exists yet, and no test, benchmark, or demo has been executed. What exists is a
@@ -27,7 +27,7 @@ See [Phase 0 report](docs/phase-reports/PHASE_0_REPORT.md) for exactly what was 
 2. [MVP specification](docs/contracts/MVP_SPEC.md) — actors, user stories, requirements, non-goals.
 3. [Architecture baseline](docs/architecture/ARCHITECTURE.md) — diagram, layers, role/permission matrix.
 4. [Decision records](docs/architecture/ARCHITECTURE.md#10-architecture-decisions) — six ADRs.
-5. [Shared state + graph contract](docs/contracts/STATE_AND_GRAPH_CONTRACT.md) — agents, transitions, checkpoint, interrupt/resume, idempotency; `VI-*` (pre-verification) vs `DR-*` (post-verification) outputs.
+5. [Shared state + graph contract](docs/contracts/STATE_AND_GRAPH_CONTRACT.md) — agents, transitions, typed trace decisions, checkpoint vs app-DB reconciliation, interrupt/resume, idempotency; `VI-*` (pre-verification) vs `DR-*` (post-verification) outputs.
 6. [Tool contracts](docs/contracts/TOOL_CONTRACTS.md) and [API contract](docs/contracts/API_CONTRACT.md) + [OpenAPI proposal](docs/contracts/openapi.phase0.yaml).
 7. [Data dictionary](docs/contracts/DATA_DICTIONARY.md) and [extraction/provenance contract](docs/contracts/EXTRACTION_PROVENANCE.md).
 8. [Clinical safety](docs/clinical-safety/CLINICAL_SAFETY.md), [demo review rules](docs/clinical-safety/DEMO_REVIEW_RULES.md), [threat model](docs/clinical-safety/THREAT_MODEL.md).

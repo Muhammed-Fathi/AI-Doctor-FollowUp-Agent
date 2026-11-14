@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document ID | `SAFE-RULES-001` |
-| Version | `0.2.0-p0` (policy id `demo-policy-1.1.0`) |
+| Version | `0.3.0-p0` (policy id `demo-policy-1.1.0`) |
 | Status | **IN REVIEW — parameters are arbitrary demo values and require owner sign-off** |
 | Phase | `P0` (design). Implementation P3 (issues) / P4 (rules); fixture replay P4/P7 |
 | Related | `REQ-RULE-01/02/03`, `REQ-SEC-04`, `REQ-DATA-04`, `REQ-OPS-04`, ADR-0004 |
@@ -85,7 +85,10 @@ test asserts their absence outside this mapping table).
 
 ## 5. Post-verification review rule catalogue (`DR-*`)
 
-Inputs are only `VerifiedFact`, admissible `ObservationView`, and `ComparisonResult`.
+Inputs are only `VerifiedFact`, admissible `ObservationView`, and `ComparisonResult`. Admissible means
+`is_admissible_observation` (`TOOL_CONTRACTS.md` §3.4): `validation != rejected`, patient-scoped, unit matches
+the measure, parseable `measured_at`. **`self_reported_validated` is admissible and stays labelled** — it is
+carried into `trust_basis` and never promoted to `doctor_verified` (`P0-R11`).
 
 | ID | Name | Deterministic trigger | Reason code | Hint | Blocking |
 |---|---|---|---|---|---|
@@ -115,7 +118,7 @@ whether the underlying values were self-reported by the patient or doctor-verifi
 | ID | Message (exact template) |
 |---|---|
 | `VI-001` | `A recorded value has no usable unit. Please confirm the unit.` |
-| `VI-002` | `{count} extracted value(s) are not yet verified.` |
+| `VI-002` | `{count} extracted value(s) are not yet verified.` — `{count}` is the number of candidate fact rows with `verification_status != verified` for the run's documents, computed at render time (never hard-coded; `GOLD-FIXTURES` Case C declares exactly 3) |
 | `VI-003` | `A date could not be read unambiguously.` |
 | `VI-004` | `A document may not belong to this patient; please confirm.` |
 | `VI-005` | `A value could not be read reliably and needs correction.` |
@@ -246,7 +249,7 @@ rules  : verified_facts[], admissible observations, comparisons[], as_of_utc, po
 
 | Stage | Expectation |
 |---|---|
-| Before correction | `VI-001` (unit), `VI-002` (3 pending facts), `VI-003` (date `03/11/2026`), `VI-005` (`1O5` unreadable) — all blocking; run halts `needs_verification`; **no** `DR-*` items exist yet |
+| Before correction | `VI-001` (unit), `VI-002` (`{count}` = 3 candidate facts, §4.2a of `GOLD_FIXTURES.md`), `VI-003` (date `03/11/2026`), `VI-005` (`1O5` unreadable) — all blocking; run halts `needs_verification`; **no** `DR-*` items exist yet |
 | Correction | value `105`, unit `mg/dL`, date `2026-11-03` (after the 2026-10-10 baseline) |
 | After resume | Baseline 96 mg/dL (2026-10-10) → 105 mg/dL (2026-11-03): delta 9 ≤ 40 → no `DR-005`; baseline exists → no `DR-001`; 11 days old → no `DR-003`; **zero** `DR-*` items |
 

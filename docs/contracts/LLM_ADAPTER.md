@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document ID | `CTR-LLM-001` |
-| Version | `0.2.0-p0` |
+| Version | `0.3.0-p0` |
 | Status | **IN REVIEW — design only; no model call has been made from this repository** |
 | Phase | `P0` (design). Implementation and measurement: P5; hardening: P7 |
 | Related | `REQ-LLM-01..04`, `REQ-DATA-04`, ADR-0002, ADR-0006, `docs/evaluation/LOCAL_BENCHMARK_PLAN.md` |
@@ -85,7 +85,7 @@ The fallback is a **feature**, not a failure: it guarantees the demo can run off
    `(self-reported)`; a validator drops or repairs a claim that presents such a value as doctor-verified
    (`REQ-DATA-04`, `TRUST-01`).
 5. **No advice, no diagnosis, no thresholds.** The prompt forbids recommendations, risk statements, and patient-directed language; a content filter rejects drafts containing prohibited patterns (e.g. "you should", "take", "diagnosis", "urgent", "dose").
-6. **Uncertainty is explicit.** Missing baselines, pending facts, and incomparable units must appear in `uncertainties`/`not_asserted`, never be smoothed over.
+6. **Uncertainty is explicit.** Missing baselines, pending facts, and incomparable units must appear in `uncertainties`/`not_asserted`, never be smoothed over. A verified document fact outside the mapping table (`DATA_DICTIONARY.md` §3.3) may be cited as a document value; the model may not imply it was compared, trended, or turned into an observation.
 7. **Untrusted data.** Document-derived strings are delimited and labelled as data. A detected instruction-like string is preserved verbatim in evidence but never executed (`REQ-SEC-02`).
 8. **Deterministic validation before display.** A draft passes a validator (schema, citations, prohibited content, length) or it is replaced by the fallback.
 

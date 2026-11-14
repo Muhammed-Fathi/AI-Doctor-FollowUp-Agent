@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document ID | `SPEC-MVP-001` |
-| Version | `0.2.0-p0` |
+| Version | `0.3.0-p0` |
 | Status | **IN REVIEW — not signed off** |
 | Phase | `P0` (documentation and governance only) |
 | Prepared by | Arena agent (Arena session branch `arena/ee7d211b-ai-doctor-followup-agent`) |
@@ -11,9 +11,11 @@
 | Requires owner signature | **Yes** — see [§12 Sign-off](#12-sign-off-block) |
 | Supersedes | Draft statements in `docs/roadmap/MASTER_PLAN.md` v0.1 where they conflict |
 
-> **Revision 0.2.0** reflects PR #2 review: observation trust levels, an injected demo clock, a
-> pre-verification/post-verification output split, and deterministic task identity. Requirement IDs are stable;
-> `REQ-DATA-04` and `REQ-OPS-04` are new, giving 49 requirements.
+> **Revision 0.3.0** reflects PR #2 rounds 1–2: observation trust levels, an injected demo clock, a
+> pre-verification/post-verification output split, deterministic task identity, typed graph-trace decisions, the
+> app-DB source-of-truth rule, the closed verified-fact → observation mapping and the observation admissibility
+> predicate. Requirement IDs are stable; `REQ-DATA-04`, `REQ-DATA-05` and `REQ-OPS-04` are new, giving
+> **50 requirements**.
 
 > **SCOPE NOTICE — EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE.**
 > This specification describes an academic graduation-project prototype. It is not a medical device, not diagnostic or treatment software, and must never be used with real patient data. Every clinical action in the described workflow is performed or approved by a human doctor.
@@ -136,6 +138,7 @@ IDs are stable; each must be traceable to a component, a test, and a phase.
 | `REQ-DATA-02` | Unit allowlist per observation type; unknown/absent units are rejected for check-ins and flagged for documents. | P2 |
 | `REQ-DATA-03` | All identifiers are stable UUIDs; all timestamps stored UTC ISO-8601; display time zone is explicit. | P2 |
 | `REQ-DATA-04` | Every observation carries `trust_level ∈ {self_reported_validated, doctor_verified}`; self-reported values are labelled as such everywhere and are never described as doctor-verified. Rejected observations are excluded from comparisons and rules. | P2 |
+| `REQ-DATA-05` | A verified document fact becomes an observation **only** when its normalized test name and unit both match the closed, versioned mapping table (`map-1.0.0`); every other verified fact stays document-only. `measured_at` derives from the verified report date, derivation is atomic with the verification and idempotent per fact. | P3 |
 
 ### 7.3 Document ingestion and OCR
 | ID | Requirement | Phase |

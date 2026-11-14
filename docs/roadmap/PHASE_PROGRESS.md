@@ -1,8 +1,11 @@
 # Phase Progress Tracker
 
-> Current status: **P0 IN_REVIEW** — review round 1 (PR #2 review `5904454222`) returned CHANGES REQUIRED;
-> findings P0-R01…P0-R07 and the ADR-0006 agentic-depth recommendation are addressed in a follow-up commit on
-> the same PR. Owner re-review pending. Updated: 2026-11-14.
+> Current status: **P0 IN_REVIEW** — review `5904454222` (round 1) returned CHANGES REQUIRED for findings
+> P0-R01…P0-R07 plus the ADR-0006 agentic-depth concern; those were resolved in documentation. Review
+> `5904505998` (round 2) then raised `P0-R08…P0-R11` and three test-realism points (typed trace, app-DB vs
+> checkpoint recovery, verified-fact → observation mapping, self-reported admissibility, mocked-vs-live OCR,
+> invented `VI-002` count, PR description). All are addressed in a further documentation-only commit on the
+> same PR. Owner re-review pending. Updated: 2026-11-14.
 >
 > A phase becomes `PASS` only after PR review, evidence verification, the local PowerShell gate (when
 > applicable), explicit owner approval, and merge. The implementing agent never sets `PASS` and never merges
@@ -10,7 +13,7 @@
 
 | Phase | Topic | Status | PR | Merge SHA | Test Evidence | Owner Approval |
 |---|---|---|---|---|---|---|
-| P0 | Governance / specifications | **IN_REVIEW** | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) | — | Documentation + OpenAPI checks only (round 2, see `docs/phase-reports/PHASE_0_REPORT.md` §10–§11); no application tests exist | Pending — round 1 changes requested, round 2 submitted |
+| P0 | Governance / specifications | **IN_REVIEW** | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) | — | Documentation + OpenAPI checks only (rounds 2–3, see `docs/phase-reports/PHASE_0_REPORT.md` §10–§11); no application tests exist | Pending — rounds 1 and 2 changes requested; round 3 submitted |
 | P1 | Foundation / reproducible startup | TODO | — | — | Not run | Pending |
 | P2 | Patient data + role-based API | TODO | — | — | Not run | Pending |
 | P3 | Document ingestion + OCR verification | TODO | — | — | Not run | Pending |
@@ -30,7 +33,8 @@
 | Not executed | Any backend/frontend test, OCR, model call, benchmark, browser E2E, Windows PowerShell gate, migration |
 | Owner-laptop required | Windows PowerShell scripts, Tesseract/Poppler install, Ollama model benchmark, offline demo |
 | PR | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) — opened 2026-11-14, base `main` @ `7d2ef73`, not merged |
-| Review round 1 | 7 findings + 1 ADR concern, all resolved in documentation (resolution matrix in the phase report §10); round 2 content commit `81df966b2fe80ab842f3405b32cfabc2f1b3a5e7` |
+| Review round 1 (`5904454222`) | 7 findings + 1 ADR concern, all resolved in documentation; content commit `81df966b2fe80ab842f3405b32cfabc2f1b3a5e7` |
+| Review round 2 (`5904505998`) | `P0-R08` typed trace payloads + typed extraction attempts (51 new OpenAPI properties), `P0-R09` app-DB source-of-truth and restart reconciliation (`RESUME-04/05`), `P0-R10` closed fact → observation mapping (`REQ-DATA-05`, `MAP-01`), `P0-R11` observation admissibility predicate (`TRUST-02`); test realism: mocked `AD-01` vs measured `OCR-LIVE-01`, `VI-002` `{count}` declared from 3 candidate facts, PR description rewritten |
 | Blocks P1 until | Owner re-reviews the resolutions, confirms the six ADRs (incl. amended ADR-0006), approves the demo rule parameters, and merges the PR |
 
 Do not prefill future pass results, test counts, or metrics. When a phase completes, record the PR URL,

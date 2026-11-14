@@ -3,11 +3,11 @@
 | Field | Value |
 |---|---|
 | Document ID | `EVAL-GOLD-001` |
-| Version | `0.2.0-p0` |
+| Version | `0.3.0-p0` |
 | Status | **IN REVIEW — fixture specification; files are created in P3/P4, none exist in P0** |
 | Phase | `P0` (spec). Authoring: P3 (documents) / P4 (rule cases) / P8 (demo seeding) |
-| Related | `REQ-EVAL-01/02`, `REQ-OPS-01`, `REQ-DATA-04`, `REQ-OPS-04`, `DEMO_REVIEW_RULES.md`, `DEMO_SCENARIOS.md` |
-| Revision | 0.2.0 corrects Case B baseline arithmetic (`P0-R01`), Case C chronology (`P0-R02`), pre-verification expectations (`P0-R03`), trust labels (`P0-R05`), unit/field completeness and seed-vs-live split (`P0-R06`), and pins the demo clock (`P0-R07`) |
+| Related | `REQ-EVAL-01/02`, `REQ-OPS-01`, `REQ-DATA-04`, `REQ-DATA-05`, `REQ-OPS-04`, `DEMO_REVIEW_RULES.md`, `DEMO_SCENARIOS.md` |
+| Revision | 0.3.0 declares the exact candidate-fact set for Case C, splits the agentic fixture into a **mocked** contract test and a **measured** live-OCR run, and states the fact → observation mapping expectation per case (`P0-R08`, `P0-R10`, test realism). 0.2.0 corrected Case B arithmetic, Case C chronology, pre-verification expectations, trust labels, units and the demo clock |
 
 > **Every persona, value, date, and document below is invented for this project.** No real patient data,
 > real report, hospital template, or scraped medical document is used. Fixtures carry the metadata
@@ -27,6 +27,7 @@
 | **Observation units** (comparable measurements) | Only `mmHg`, `bpm`, `mg/dL` — the `Observation` allowlist (`REQ-DATA-02`) |
 | **Document units** (extracted report text) | A separate, wider list for `ExtractedFact.unit`: `mmHg`, `bpm`, `mg/dL`, `g/dL`, `%`. Documents are **not** converted into observations except where an explicit mapping exists (BP, heart rate, glucose) |
 | Trust | Seeded check-ins are `self_reported_validated`; document values become `doctor_verified` only after a doctor verifies them (`REQ-DATA-04`) |
+| Fact → observation | Only mapped tuples create observations (`map-1.0.0`, `DATA_DICTIONARY.md` §3.3). Each case below states its expected count, asserted by `MAP-01` (`REQ-DATA-05`) |
 | Documents | Authored at P3 by a deterministic local generator from declared text; scans produced by rasterizing that same text with deliberate synthetic degradation (no real scans) |
 | Golden JSON | One expected-output file per case (`*.expected.json`) reviewed like code |
 | Storage | `data/synthetic/{patients,observations,reports,golden_cases}/`; runtime copies are gitignored |
@@ -79,7 +80,7 @@ Reference range: 12.0 - 15.5 g/dL
 |---|---|
 | Verification issues after verification | **None** |
 | Review items | **None** — systolic delta \|121−120\| = 1 ≤ 10; diastolic \|78−79\| = 1 ≤ 8; HR \|71−74\| = 3 ≤ 15; baselines exist; newest value is 13 days old at `as_of_utc` (< 30) |
-| Document → observations | Hemoglobin has no `Observation` mapping, so it creates **no** comparison and **no** `DR-*` item; it exists only as a doctor-verified fact in the summary |
+| Document → observations | `Hemoglobin` + `g/dL` is outside the closed mapping table (`map-1.0.0`) → **0 observations**, therefore no comparison and no `DR-*` item. The verified fact exists for the draft only; the extraction summary counts it as `unmapped_test_name` (informational). Asserted by `MAP-01` |
 | Draft | 1 draft; every claim cited; provider honestly reported |
 | Decision | Doctor approves → exactly 1 task, 1 notification |
 | Test IDs | `DEMO-A`, `RULE-01`, `GOLD-EX-01` |
@@ -116,6 +117,9 @@ Test: Fasting glucose     Value: 104 mg/dL
 Reference range: 70 - 99 mg/dL
 ```
 
+`Fasting glucose` is an explicit alias of `glucose` in the mapping table (`map-1.0.0`), and `mg/dL` is its only
+accepted unit — so this is the one Case-B fact that produces an observation.
+
 ### 3.3 Expected after verification + workflow
 
 | Expectation | Value |
@@ -125,6 +129,7 @@ Reference range: 70 - 99 mg/dL
 | Review items | **Exactly one**: `DR-005` for `systolic_bp`, `trust_basis=self_reported`, evidence = the 2026-10-20 and 2026-11-03 systolic observations |
 | Not expected | `DR-005` for diastolic (\|96−92\| = 4 ≤ 8), heart rate (\|84−80\| = 4 ≤ 15), or glucose (\|104−98\| = 6 ≤ 40); no `DR-001` (all four types have baselines); no `DR-003` (newest values 11–13 days old); no `DR-006/008/009` |
 | Verbatim message | `Systolic BP differs from the previous recorded value by 12 mmHg (self-reported).` |
+| Document → observations | Exactly **1**: `glucose 104 mg/dL`, `measured_at=2026-11-02T00:00:00Z` (verified report date at 00:00Z, not the upload time), `trust_level=doctor_verified`, `source_fact_id` set (`MAP-01`) |
 | Draft | Neutral prose citing both systolic observations; the self-reported basis is stated |
 | Decision | Doctor edits the draft → `decision=edit`; task created |
 | Test IDs | `DEMO-B`, `RULE-01`, `GOLD-EX-02` |
@@ -181,6 +186,24 @@ Demo Patient C     Ref: DEMO-C-001     Report date: 03/11/2026
 Test: Glucose      Value: 1O5         Unit: (not printed)
 ```
 
+### 4.2a Declared candidate facts (exactly three — no invented fields)
+
+The extractor emits a candidate fact only for a field whose text is actually present on the page. Absent
+fields are **not** invented, so this document yields three candidates, plus a `unit=null` carried on the `value`
+fact (which is what `VI-001` reads):
+
+| # | `field_name` | `raw_text` | `normalized_value` | `unit` | `quality_flags` |
+|---|---|---|---|---|---|
+| 1 | `report_date` | `03/11/2026` | `null` (ambiguous) | — | `ambiguous_date` |
+| 2 | `test_name` | `Glucose` | `Glucose` | — | — |
+| 3 | `value` | `1O5` | `null` (letter `O`) | `null` | `low_confidence`, `ambiguous_unit` |
+
+No `reference_text` candidate: the page prints no reference range. Total candidates = **3**, which is the
+number the `VI-002` template interpolates (`{count}`), so the message is derived from the fact rows rather
+than hard-coded:
+
+`3 extracted value(s) are not yet verified.`
+
 ### 4.3 Expected pre-verification state (resolves `P0-R02`, `P0-R03`)
 
 | Field | Expected |
@@ -195,7 +218,7 @@ Blocking **verification issues** (not review rules):
 | Issue | Trigger | Message |
 |---|---|---|
 | `VI-001` | unit not printed | `A recorded value has no usable unit. Please confirm the unit.` |
-| `VI-002` | 3 pending facts | `3 extracted value(s) are not yet verified.` |
+| `VI-002` | `{count}` = 3 pending candidate facts (§4.2a) | `3 extracted value(s) are not yet verified.` — the number is computed from the fact rows, never hard-coded |
 | `VI-003` | `03/11/2026` | `A date could not be read unambiguously.` |
 | `VI-005` | `1O5` below confidence floor | `A value could not be read reliably and needs correction.` |
 
@@ -211,6 +234,7 @@ Blocking **verification issues** (not review rules):
 | Comparison | Baseline 96 mg/dL (2026-10-10, self-reported) → 105 mg/dL (2026-11-03, doctor-verified) = **9 mg/dL** ≤ `demo_delta_glucose_mgdl` (40), `comparable=true`, `trust_basis=mixed` |
 | Review items | **None** — no `DR-005` (9 ≤ 40), no `DR-001` (baseline exists), no `DR-003` (11 days old), no `DR-006` (single verified source), no `DR-008` |
 | Draft | Cites the corrected value with document/page/span evidence and marks the basis as doctor-verified; no unverified value appears anywhere |
+| Document → observations | **0 while halted** (the gate blocks before mapping); after the correction, exactly **1**: `glucose 105 mg/dL`, `measured_at=2026-11-03T00:00:00Z`, `source=verified_document`, `trust_level=doctor_verified` (`MAP-01`) |
 | Test IDs | `DEMO-C`, `GOLD-EX-09/10/11`, `VI-01/02`, `SAFE-02`, `NEG-06` |
 
 ## 5. Case D — internal rule-coverage fixture (`GOLD-D`, not a demo story)
@@ -234,13 +258,42 @@ Expected `DR-*` set: `DR-001` (heart rate), `DR-003` (heart rate), `DR-005` (dia
 
 ## 6. Agentic-path fixture (`GOLD-EX-13`)
 
-Supports the ADR-0006 acceptance test `AD-01`: same synthetic content as `REPORT-C-01`, but presented twice.
+Supports the ADR-0006 acceptance test `AD-01`: the same synthetic content as `REPORT-C-01`, presented in three
+scripted passes. Because real Tesseract confidence varies by build, locale, page rasterization and CPU, the
+**contract test never calls Tesseract**. It uses a mocked extractor that returns the attempt metadata below, so
+the assertions are deterministic. A separate live run measures real behaviour and records it without asserting
+it in advance.
 
-| Pass | Input | Engine-reported confidence | Expected graph decision |
+### 6.1 Contract test — `AD-01` with a mocked extractor (deterministic, any machine, offline)
+
+`FakeExtractor` is a test double implementing the `extract_document` interface. It returns canned
+`ExtractionAttempt` rows and canned candidate facts; no PDF is rendered, no OCR binary is invoked, and no model
+is downloaded. The graph, the triage router and the trace are the real ones under test.
+
+| Pass | Scripted input to the harness | Scripted `engine_confidence` / `text_char_count` | Expected graph decision (asserted exactly) |
 |---|---|---|---|
-| 1 | Original degraded scan | 0.55 (< `ocr_confidence_floor` 0.70) | `extraction_triage` selects `ocr_preprocess_retry` and records `path_selected`, `path_reason=low_confidence` |
-| 2 | Same scan after deterministic preprocessing (grayscale + 2× upscale) | 0.86 (≥ floor) | Triage selects `proceed`; trace records both attempts; extraction continues |
-| 3 (failure variant) | Same scan with preprocessing disabled | 0.55 again | Triage selects `flag_for_human`; run halts with `VI-005`; **retry budget is 2, never unbounded** |
+| 1 | Degraded scan, preprocessing disabled | `0.55` / `18` | `extraction_triage` → `TriageDetail{path_selected: ocr_preprocess_retry, path_reason: low_confidence, attempt_index: 1, preprocessing_applied: false, engine_confidence: 0.55}` |
+| 2 | Same page after deterministic preprocessing (grayscale + 2× upscale) | `0.86` / `41` | Second triage invocation: `TriageDetail{path_selected: ocr_direct, path_reason: confidence_ok, attempt_index: 2, preprocessing_applied: true, engine_confidence: 0.86}` → extraction continues to the verify gate (`ocr_direct` = OCR used and its confidence is at or above the floor; the retry was already consumed in pass 1) |
+| 3 (failure variant) | Same page, preprocessing disabled again | `0.55` / `18` | `TriageDetail{path_selected: flag_for_human, path_reason: retry_exhausted, attempt_index: 2}` → run halts `needs_verification` with `VI-005`; **no third attempt** |
+
+Additional `AD-01` assertions:
+
+1. A clean text-layer PDF (no OCR) yields `path_selected: text_layer`, `path_reason: text_layer_available`, and
+   zero `tesseract` attempts in `extraction_attempts`.
+2. `GET /api/v1/workflows/{run_id}/trace` returns exactly two `triage` events for the retry case, each with a
+   typed `detail`; the persisted `node_event` rows match (`detail_kind`, `triage_path`, `triage_reason`,
+   `attempt_index`, `engine_confidence`, `preprocessing_applied`).
+3. No detail field contains free text: the whole payload is enums, IDs, booleans, counts and a probability
+   (`REQ-AUDIT-02`).
+4. `attempt_index` never exceeds 2 and `retry_counts["extraction_triage"]` never exceeds the budget.
+5. A harness that reports `engine_confidence: null` (engine silent) still routes deterministically via
+   `text_char_count` and records `ocr_transient_error`, never an invented number.
+
+### 6.2 Live measurement — `OCR-LIVE-01` (owner laptop, results recorded, not asserted)
+
+| What is run | What is recorded | How it is judged |
+|---|---|---|
+| The same degraded scans through the installed Tesseract, twice (preprocessing off/on) | Engine-reported confidence per pass, characters recovered, wall time, Tesseract version, OS build | Written into `docs/evaluation/LOCAL_BENCHMARK_PLAN.md` as **measured observations**. No pass/fail threshold is claimed in advance; if the installed engine behaves differently from the mock (e.g. 0.72 instead of 0.55), that is captured as data and `AD-01` still passes on the mocked contract |
 
 ## 7. Negative fixtures
 

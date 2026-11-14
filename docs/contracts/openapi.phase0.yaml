@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: AI Doctor Follow-Up — Phase 0 API Proposal
-  version: 0.2.0-p0
+  version: 0.3.0-p0
   summary: Local, synthetic-data, doctor-in-the-loop follow-up workflow (proposal only; not implemented)
   description: |
     **EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE.**
@@ -18,7 +18,10 @@ info:
     * Every workflow response exposes the run trace, the injected `as_of_utc`, and the model/provider provenance.
     * Verification issues (`VI-*`, pre-verification) and review items (`DR-*`, post-verification) are separate
       arrays and must not be merged by clients.
-    * Observations expose a `trust_level`; self-reported values are never labelled doctor-verified.
+    * Observations expose a `trust_level`; self-reported values are never labelled doctor-verified. Both
+      trust levels are admissible inputs to comparison when `validation != rejected` (labelled, never promoted).
+    * Trace events carry typed decision metadata (`detail`), never free-form document text.
+    * The app DB, not the LangGraph checkpoint file, is the authority for run status.
   contact:
     name: Project owner (review pending)
     url: https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent
@@ -1619,10 +1622,19 @@ components:
     TraceEvent:
       type: object
       additionalProperties: false
-      required: [node, started_at]
+      required: [node, attempt, started_at, detail]
+      description: |
+        One graph-node execution. `detail` is a typed, bounded decision payload and is `null` for nodes that
+        make no bounded decision. Raw document text, patient names and model output are prohibited.
       properties:
         node:
           type: string
+          maxLength: 48
+        attempt:
+          type: integer
+          minimum: 1
+          maximum: 5
+          default: 1
         started_at:
           type: string
           format: date-time
@@ -1637,6 +1649,99 @@ components:
           maxItems: 6
           items:
             type: string
+            maxLength: 48
+        detail:
+          description: Typed decision metadata; null for nodes without a bounded decision.
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/TriageEventDetail'
+            - $ref: '#/components/schemas/ValidationEventDetail'
+            - $ref: '#/components/schemas/GateEventDetail'
+            - $ref: '#/components/schemas/FinalizeEventDetail'
+    TriageEventDetail:
+      type: object
+      additionalProperties: false
+      required: [kind, path_selected, path_reason, document_id, attempt_index, preprocessing_applied]
+      properties:
+        kind:
+          type: string
+          const: triage
+        path_selected:
+          type: string
+          enum: [text_layer, ocr_direct, ocr_preprocess_retry, flag_for_human]
+        path_reason:
+          type: string
+          enum: [text_layer_available, confidence_ok, low_confidence, ocr_transient_error, retry_exhausted]
+        document_id:
+          type: string
+          format: uuid
+        attempt_index:
+          type: integer
+          minimum: 1
+          maximum: 2
+        engine_confidence:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 1
+        preprocessing_applied:
+          type: boolean
+    ValidationEventDetail:
+      type: object
+      additionalProperties: false
+      required: [kind, validation_outcome, attempt_index]
+      properties:
+        kind:
+          type: string
+          const: validation
+        validation_outcome:
+          type: string
+          enum: [accept, repair_requested, fallback_selected]
+        attempt_index:
+          type: integer
+          minimum: 1
+          maximum: 2
+        violation_codes:
+          type: array
+          maxItems: 6
+          items:
+            type: string
+            enum: [schema_invalid, unsupported_evidence, prohibited_content, missing_disclaimer, ungrounded_number, patient_addressing]
+    GateEventDetail:
+      type: object
+      additionalProperties: false
+      required: [kind, decision, blocking_fact_count]
+      properties:
+        kind:
+          type: string
+          const: gate
+        decision:
+          type: string
+          enum: [proceed, halt]
+        blocking_fact_count:
+          type: integer
+          minimum: 0
+          maximum: 40
+        issue_types:
+          type: array
+          maxItems: 6
+          items:
+            type: string
+            enum: [VI-001, VI-002, VI-003, VI-004, VI-005, VI-006]
+    FinalizeEventDetail:
+      type: object
+      additionalProperties: false
+      required: [kind, approval_decision, task_created, notification_created]
+      properties:
+        kind:
+          type: string
+          const: finalize
+        approval_decision:
+          type: string
+          enum: [approve, edit, reject]
+        task_created:
+          type: boolean
+        notification_created:
+          type: boolean
     TraceResponse:
       type: object
       additionalProperties: false
