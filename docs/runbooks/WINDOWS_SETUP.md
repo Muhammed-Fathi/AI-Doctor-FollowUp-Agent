@@ -176,15 +176,29 @@ port.
 
 ### Exit codes
 
-| Code | Meaning |
-|---|---|
-| `0` | Every recorded process is gone **and** ports 8000/5173 are free |
-| `1` | A recorded application process could not be stopped |
-| `2` | Processes were stopped, but a port is still occupied |
+| Code | Status | Meaning |
+|---|---|---|
+| `0` | `PASS` | Every recorded process is gone **and** ports 8000/5173 are free |
+| `1` | `FAILED` | A recorded application process could not be stopped |
+| `1` | `BLOCKED` | A recorded PID is still alive but could not be verified as ours |
+| `2` | `INCOMPLETE` | Processes were resolved, but a port is still occupied |
 
-On a non-zero code the tracking files are **kept** (with whatever is still
-running) so a retry has the same identity information; they are removed only
-after a fully clean stop. Always confirm both ports are free:
+The verdict is computed **before** any tracking file is touched, and the
+delete-only-if-clean rule is deliberate:
+
+| Outcome | `run-state.json` / PID files |
+|---|---|
+| `PASS` | removed |
+| survivors identified | rewritten to contain only the survivors |
+| `INCOMPLETE` with **no** identified survivor | **original metadata kept**, annotated `partial: true` and `incompleteReason` |
+
+The third row matters: a process can hold port 5173 without being traceable to
+this application. Previously that deleted the provenance needed to diagnose it.
+`start.ps1` applies the same rule to a failed start — if rollback leaves a
+process behind it says so, keeps the tracking files, and exits `1` instead of
+claiming "nothing is left running".
+
+Always confirm both ports are free:
 
 ```powershell
 Get-NetTCPConnection -LocalPort 8000,5173 -State Listen -ErrorAction SilentlyContinue
@@ -307,7 +321,22 @@ $LASTEXITCODE                                                    # stop.ps1 stat
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\stop.ps1
 "stop.ps1 exit code: $LASTEXITCODE"                               # expect 0
 Get-NetTCPConnection -LocalPort 8000,5173 -State Listen -ErrorAction SilentlyContinue
-# expect no output at all
+# expect no output at all, and data\runtime\run-state.json to be gone
+
+Test-Path .\data\runtime\run-state.json                          # expect False after a clean stop
+```
+
+To see the incomplete path deliberately (do this only with nothing important
+running): occupy 5173 with an unrelated listener, run `stop.ps1`, and confirm it
+exits `2`, prints `INCOMPLETE`, and **leaves `run-state.json` in place** with
+`partial: true`:
+
+```powershell
+$squatter = Start-Process -FilePath 'python' -ArgumentList '-m','http.server','5173','--bind','127.0.0.1' -PassThru
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\powershell\stop.ps1
+"stop.ps1 exit code: $LASTEXITCODE"                               # expect 2
+Test-Path .\data\runtime\run-state.json                          # expect True
+Stop-Process -Id $squatter.Id -Force
 ```
 
 Also record, before stopping, the process tree so the wrapper/child relationship
