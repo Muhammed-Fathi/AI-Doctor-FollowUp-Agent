@@ -1,6 +1,6 @@
 # Phase Progress Tracker
 
-> **Current status: P0 PASS; P1 PASS (owner-approved and merged 2026-11-14). P2 IN REVIEW — implemented, scope-authorized, owner Windows verification PASS at `9fddb51`; awaiting final owner sign-off and merge.**
+> **Current status: P0 PASS; P1 PASS (owner-approved and merged 2026-11-14). P2 IN REVIEW (official `PASS` marking and `Owner Approval` ledger fields reserved for owner finalization per `AGENTS.md` §2) — PR [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) merged into `main` at `777f6618c62560be41cce394218c87b0c683981f` from final head `b2bb1594fd89b26fed1ea5201302d6aac4c04698` following [owner comment 6883198256](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883198256).**
 >
 > Phase 0 (Governance and Specifications) completed its documentation review process and was merged into `main` through [PR #2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2).
 >
@@ -16,7 +16,7 @@
 >
 > **Last accepted phase:** P1 — Foundation and Reproducible Startup, PR [#4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4), status `PASS`. Windows verification at `eec6642`, final docs-only PR head `58a0652`; merge commit `2c85db4d9fe9f17080146d12adfbd030a05cc75d`. Owner approved on 2026-11-14.
 >
-> **Current phase:** P2 — Patient data and role-based API, PR [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) (draft), status **IN REVIEW**. File-scope authorization recorded verbatim below. Owner Windows verification is **PASS** (2026-11-14, §P2 owner-verification addendum) and CI is **SUCCESS**; P2 is still **not** PASS and **not** merged, and no approval or merge SHA exists.
+> **Current phase:** P2 — Patient data and role-based API, PR [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) (**merged** into `main` on 2026-11-14 at `777f6618c62560be41cce394218c87b0c683981f` from final PR head `b2bb1594fd89b26fed1ea5201302d6aac4c04698`), official ledger status **IN REVIEW** (reserved for owner finalization per `AGENTS.md` §2). File-scope authorization (`6881832444`), live owner Windows verification at `9fddb51` (`6882774686`), final owner Windows regression at `b2bb159` (**12 PASS / 0 FAIL / 1 optional SKIP**), final CI run [`43632732091`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43632732091) (**SUCCESS**), owner acceptance and merge authorization record ([comment `6883198256`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883198256)), post-merge verification ([comment `6883243529`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883243529)), and local `main` fast-forward + byte-identical SQLite database integrity are recorded below; P3 remains **TODO** (not started, not authorized here).
 >
 > **Important:** P0 approval applies to the architecture, requirements, contracts, documentation and synthetic-demo scope. It does not represent completed application implementation, clinical validation or successful runtime testing.
 
@@ -32,7 +32,7 @@ The implementing agent never self-approves, marks phases `PASS` or merges pull r
 |---|---|---|---|---|---|---|
 | P0 | Governance / specifications | **PASS** | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) | `442256606fd2465439409cc9b4d42f1bec09a723` | Documentation consistency, traceability, OpenAPI validation and targeted contract checks completed. No runtime implementation tests applicable to P0. | **Approved — 2026-11-14** |
 | P1 | Foundation / reproducible startup | **PASS** | [#4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4) | `2c85db4d9fe9f17080146d12adfbd030a05cc75d` | **Owner Windows gate PASSED at `eec6642`:** `test_all.ps1` 12 PASS / 0 FAIL / 1 optional SKIP; `invoke_native.tests.ps1` 14 checks; `stop_identity.tests.ps1` 38 checks; live setup/start/stop PASS on both the normal path and the space-containing path (`E:\DEPI\AI Doctor FollowUp Agent Space Test`); ports 8000/5173 free and all three tracking files removed. GitHub Actions run [`43615782079`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43615782079) SUCCESS. Backend 121 tests, frontend 13, Ruff, Alembic, OpenAPI, scan, Vite build also pass locally. Optional Playwright smoke NOT EXECUTED. | **Approved — 2026-11-14; license and DEPENDENCIES sync deferred; Playwright SKIP acknowledged** |
-| P2 | Patient data + role-based API | **IN REVIEW** | [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) (draft) | — | Sandbox Python 3.11: `356 passed` (125 P1 + 231 P2), `ruff check`/`format` clean, OpenAPI gate `PASS (11 paths / 12 operations, 22 schemas)`, `check_alembic_smoke` PASS in states `head`/`p1`/`base`, secret scan PASS. **CI independently verified by the reviewer on two heads:** run [`43625331149`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625331149) at `dbaf938` and run [`43625989736`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625989736) at docs-only head `6d54ede` — Backend Python 3.12 SUCCESS and Frontend Node 22 SUCCESS in both (the implementer's own Actions/Checks read returned 403 *Resource not accessible by integration*, retained as an observer limitation, **not** a CI failure). **Owner Windows verification: PASS (2026-11-14)** at the verified code snapshot `9fddb51ba7672efd992c47325ab4883734da3c9a` — isolated worktree, PowerShell 5.1, Python 3.12.9: `test_all.ps1` 12 PASS / 0 FAIL / 1 optional SKIP (exit 0), Alembic P2→P1→P2, 11 paths / 12 operations / 22 schemas, synthetic bootstrap 6 users / 3 patients / 3 encounters / 17 observations, 9 RBAC checks, 8 idempotency checks, 7 demo-reset checks, identity-safe shutdown, `main` HEAD unchanged and DB SHA-256 byte-identical; PBKDF2 600 000 iterations measured hash 550.49 ms / verify 537.67 ms. Evidence: [owner comment 6882774686](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6882774686). Optional Playwright: **SKIPPED, not passed**. | Pending |
+| P2 | Patient data + role-based API | **IN REVIEW** | [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) | `777f6618c62560be41cce394218c87b0c683981f` | Sandbox Python 3.11: `356 passed` (125 P1 + 231 P2), `ruff check`/`format` clean, OpenAPI gate `PASS (11 paths / 12 operations, 22 schemas)`, `check_alembic_smoke` PASS in states `head`/`p1`/`base`, secret scan PASS. **CI independently verified across PR heads:** runs [`43625331149`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625331149) (`dbaf938`), [`43625989736`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625989736) (`6d54ede`), [`43626628577`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43626628577) (`9fddb51`), [`43631967775`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43631967775) (`7a5a047`), and **final merged head run [`43632732091`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43632732091) (`b2bb1594fd89b26fed1ea5201302d6aac4c04698`)** — Backend Python 3.12 SUCCESS and Frontend Node 22 SUCCESS in all five (the Arena agent's own Actions/Checks read returned 403 *Resource not accessible by integration*, retained as an observer limitation, **not** a CI failure). **Owner live Windows verification: PASS (2026-11-14)** at unchanged implementation snapshot `9fddb51ba7672efd992c47325ab4883734da3c9a` — isolated worktree, PowerShell 5.1, Python 3.12.9: `test_all.ps1` 12 PASS / 0 FAIL / 1 optional SKIP (exit 0), Alembic P2→P1→P2, 11 paths / 12 operations / 22 schemas, synthetic bootstrap 6 users / 3 patients / 3 encounters / 17 observations, 9 RBAC checks, 8 idempotency checks, 7 demo-reset checks, identity-safe shutdown, `main` HEAD unchanged and DB SHA-256 byte-identical; PBKDF2 600 000 iterations measured hash 550.49 ms / verify 537.67 ms ([owner comment 6882774686](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6882774686)). **Owner final Windows regression at final head `b2bb1594fd89b26fed1ea5201302d6aac4c04698`: PASS** — `test_all.ps1` 12 PASS / 0 FAIL / 1 optional SKIP, 14 command-wrapper checks PASS, 38 stop-identity checks PASS, `P2 FINAL WINDOWS REGRESSION: PASS`, `MAIN ISOLATION: PASS`; post-merge owner local `main` fast-forwarded to `777f6618c62560be41cce394218c87b0c683981f` and original `main` SQLite database remains byte-identical ([comment 6883198256](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883198256), [comment 6883243529](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883243529)). Optional Playwright: **SKIPPED, not passed**. | Pending |
 | P3 | Document ingestion + OCR verification | TODO | — | — | Not run | Pending |
 | P4 | Monitoring + demo review rules | TODO | — | — | Not run | Pending |
 | P5 | LangGraph agents + Ollama + approval | TODO | — | — | Not run | Pending |
@@ -498,30 +498,65 @@ lifecycle does not need repeating (the owner may re-run `test_all.ps1` on the ne
 checkout).
 
 This PASS does **not** change the phase state: **P2 remains `IN_REVIEW`**, the
-Owner Approval column stays **Pending**, no merge SHA exists and P3 is not started.
-Known limitations are unchanged by a passing gate (see `PHASE_2_REPORT.md` §11).
+Owner Approval column stays **Pending**, no merge SHA exists and P3 is not started
+*(historical pre-merge state at `9fddb51` / `b2bb159`; superseded post-merge by the
+factual closure record below)*. Known limitations are unchanged by a passing gate
+(see `PHASE_2_REPORT.md` §11).
 
 ### P2 status
 
-**IN REVIEW — not PASS, not merged, not approved.** Acceptance requires
-independent technical review, the owner's Windows gate and a separate owner
-decision after the PR is ready.
+**PR [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) MERGED into `main` at `777f6618c62560be41cce394218c87b0c683981f` — official ledger `Status` (`IN REVIEW`) and `Owner Approval` (`Pending`) fields reserved for owner-applied finalization per `AGENTS.md` §2.**
 
-See `docs/phase-reports/PHASE_2_REPORT.md` for evidence, limitations and rollback.
+See `docs/phase-reports/PHASE_2_REPORT.md` (§10.11, §10.12, §15) for full evidence, limitations and rollback.
+
+---
+
+## P2 Post-Merge Factual Closure Record — PR #7 (Merged 2026-11-14)
+
+Recorded after GitHub merged PR [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) into `main` following independent technical review and the owner's posted acceptance and merge authorization comment. Under `AGENTS.md` §2, this agent-prepared documentation commit records **verified post-merge facts** while leaving the official `PASS` marking and `Owner Approval` verdict fields for the project owner to finalize.
+
+| Item | Verified Record |
+|---|---|
+| Scope | Patient data domain (`user`, `patient`, `encounter`, `observation`, `session`, `checkin_idempotency`, `audit_event`), reversible Alembic migration `0002_p2_patient_domain`, opaque bearer sessions, PBKDF2-HMAC-SHA256 (600,000 iterations, unique salts, `needs_rehash`), server-side RBAC, idempotent self-reported check-ins, deterministic synthetic bootstrap/reset, strict 11-path / 12-operation / 22-schema OpenAPI allowlist |
+| Pull request | [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) (`arena/a8844cc2-ai-doctor-followup-agent` → `main`) — **MERGED** on 2026-11-14 |
+| Accepted prior `main` base | `d1ec0b9b481dca313c8ea2f21f97872582fc5a86` |
+| Owner live-Windows-tested implementation snapshot | `9fddb51ba7672efd992c47325ab4883734da3c9a` ([comment `6882774686`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6882774686)); subsequent commits on PR #7 modified only tests and Markdown documentation |
+| Final merged PR head | `b2bb1594fd89b26fed1ea5201302d6aac4c04698` |
+| Verified GitHub merge SHA | `777f6618c62560be41cce394218c87b0c683981f` ([post-merge comment `6883243529`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883243529)) |
+| Changed files in PR #7 | 61 files total: 42 within the `AGENTS.md` §5 P2 default allowlist plus the exact 19 owner-authorized paths (`6881832444`) |
+| Independent final technical review | [`5906757356`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#pullrequestreview-5906757356) (2026-11-14) — readiness recommendation at exact head `b2bb1594fd89b26fed1ea5201302d6aac4c04698`; zero unresolved review threads |
+| Final-head GitHub Actions CI | Run [`43632732091`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43632732091) on `b2bb1594fd89b26fed1ea5201302d6aac4c04698` — **COMPLETED / SUCCESS** (Backend Python 3.12 **SUCCESS**, Frontend Node 22 **SUCCESS**, verified in review `5906757356` and comments `6883198256` / `6883243529`; direct Actions API reads from the Arena session return HTTP 403 *Resource not accessible by integration*, an observer credential limitation) |
+| Owner final Windows regression (`b2bb159`) | Executed on Windows PowerShell 5.1 / Python 3.12.9 in an isolated worktree: `scripts/powershell/test_all.ps1` **12 PASS / 0 FAIL / 1 optional SKIP** (`test_all result: PASS`, `P2 FINAL WINDOWS REGRESSION: PASS`, `MAIN ISOLATION: PASS`; Backend pytest PASS [exact Windows test count not printed in console summary], Ruff lint/format PASS, Alembic upgrade/downgrade/upgrade PASS, OpenAPI `11 paths / 12 operations / 22 schemas` PASS, frontend typecheck/lint/build PASS, 13 frontend tests PASS, tracked secret scan PASS on 143 files, 14 command-wrapper checks PASS, 38 stop-identity checks PASS) |
+| Optional Playwright browser smoke | **SKIPPED — not executed, not passed** (acknowledged optional skip in both `9fddb51` and `b2bb159` runs) |
+| Post-merge local Git & SQLite verification | Owner local `main` (`E:\DEPI\AI-Doctor-FollowUp-Agent`) fast-forwarded cleanly to exact merge SHA `777f6618c62560be41cce394218c87b0c683981f`; original `main` SQLite database remains byte-identical |
+| Posted owner decision record on GitHub | [Owner comment `6883198256`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883198256) (2026-11-14) recorded explicit owner P2 acceptance and merge authorization for exact PR #7 head `b2bb1594fd89b26fed1ea5201302d6aac4c04698` against `main` baseline `d1ec0b9b481dca313c8ea2f21f97872582fc5a86`, with bounded MVP limitations accepted |
+| Official ledger Phase Status (`AGENTS.md` §2) | **IN REVIEW** *(reserved for owner-applied finalization; not changed independently by the agent)* |
+| Official ledger Owner Approval (`AGENTS.md` §2) | **Pending** *(reserved for owner-applied finalization; see [comment `6883198256`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883198256))* |
+| P3 status | **TODO — not started, not authorized by this closure** |
+
+### Accepted P2 Bounded Limitations (recorded in owner comment `6883198256`)
+
+- **Optional Playwright smoke:** **SKIPPED (not passed)** — browser binaries were not installed; never counted as an executed pass.
+- **In-process login rate limiting:** `LoginRateLimiter` is per-process memory (`ASM-06`), appropriate only for the single-worker local demo.
+- **SQLite single-machine concurrency bounds:** Two-writer `IntegrityError` replay/`409` recovery and partial unique index `uq_observation_checkin_identity` are verified for SQLite serialized connections, without claiming multi-process worker safety or automatic conversion of sustained `OperationalError: database is locked` contention.
+- **Demo reset operator secret and session invalidation:** `POST /api/v1/demo/reset` requires `DEMO_SEED_PASSWORD` in the running backend process environment at launch (`500 E_INTERNAL` if unset) and deletes all `session` rows, revoking active bearer tokens.
+- **Bounded schema and hashing choices:** Internal tables `session` and `checkin_idempotency` (owner-accepted additions to the P0 data dictionary) and stdlib PBKDF2-HMAC-SHA256 at 600,000 iterations (`needs_rehash` wired; Argon2id deferred to avoid out-of-scope dependency changes).
+- **Deferred and excluded surfaces:** `GET /api/v1/demo/status` (`OQ-P2-01`) deferred to P5; `NEG-01` document extraction not applicable until P3; `POST /api/v1/demo/seed` excluded by contract; private-repo license selection (`P1-OPEN-01/08`) and historical `DEPENDENCIES.md` sync (`P1-OPEN-03`) remain deferred as previously recorded.
+- **Safety boundary:** Synthetic-data, local-first educational MVP stage only — **NOT FOR CLINICAL USE**; no clinical deployment, diagnosis, prescribing, external patient messaging, or clinical validation is claimed.
 
 ---
 
 ## Next Authorized Workflow
 
-1. P0 and P1 accepted; preserve the verified merge SHAs and owner decision records.
-2. Synchronize the owner's local `main` from `origin/main` after checking for uncommitted changes.
-3. Begin P2 planning against the merged foundation in a new scoped branch/PR; follow P0 governance and synthetic-data constraints.
-4. Carry forward the deferred license/public-distribution decision, `DEPENDENCIES.md` sync, and optional Playwright smoke without claiming they passed.
-5. Do not mark P2 `PASS` without its own evidence, owner approval, and merge.
+1. Preserve the verified merge SHAs and decision records for P0 (`442256606fd2465439409cc9b4d42f1bec09a723`), P1 (`2c85db4d9fe9f17080146d12adfbd030a05cc75d`), and merged PR #7 (`777f6618c62560be41cce394218c87b0c683981f`).
+2. Confirm owner local `main` remains synchronized at `777f6618c62560be41cce394218c87b0c683981f` with the original `main` SQLite database byte-identical.
+3. Owner review and finalization of this post-merge documentation closure PR, including owner-applied updates to the reserved P2 `PASS` and `Owner Approval` ledger fields (`AGENTS.md` §2).
+4. Carry forward the documented bounded limitations: private-repo license/public-distribution decision, historical `DEPENDENCIES.md` sync, P2 single-process/SQLite/reset-secret bounds, `OQ-P2-01` (`GET /api/v1/demo/status` in P5), and optional Playwright smoke (`SKIP`, never claimed as passed).
+5. **Do not start or claim authorization for P3** until the P2 administrative ledger closure is finalized and the owner separately initiates P3 in its own scoped branch and PR.
 
-**Current accepted baseline:** P0 governance plus **P1 foundation (PASS)**.
+**Current accepted baseline:** P0 governance (`PASS`) plus **P1 foundation (`PASS`)**; PR [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) (P2) merged into `main` at `777f6618c62560be41cce394218c87b0c683981f` (official P2 `PASS` and `Owner Approval` ledger fields awaiting owner-applied finalization per `AGENTS.md` §2).
 
-**Current implementation milestone (IN REVIEW):** P2 — Patient data domain and role-scoped API, PR [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7).
+**Current milestone ledger state:** P2 — Patient data domain and role-scoped API, PR [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) (**MERGED** at `777f6618c62560be41cce394218c87b0c683981f`; ledger status **IN REVIEW** pending owner finalization). Next roadmap phase P3 — Document ingestion and OCR verification (**TODO — not started, not authorized**).
 
 **Project classification:** Educational, synthetic-data, local-first multi-agent workflow assistant.
 
