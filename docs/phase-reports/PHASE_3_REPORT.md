@@ -1,3 +1,12 @@
+> **REVISION 3 — IMPLEMENTATION RECORD ADDED. P3 status: `IN_REVIEW`.**
+>
+> Revision 2 was the pre-implementation audit. **Revision 3 appends the implementation record (§I–§P) at head
+> `ce96d73`** and leaves the audit intact below as provenance. The audit's forward-looking sections ("implementation
+> has not started") describe Revision 2's state, not the current tree; read §I onward for what actually exists.
+>
+> **Nothing in this document is a PASS claim, merge authorization, or self-approval.** P3 stays `IN_REVIEW` until
+> independent review and owner Windows verification (``AGENTS.md`` §2, §4).
+
 > **REVISION 2 — pre-implementation audit consolidated here per owner instruction.**
 >
 > Audit provenance: this document began as `docs/phase-reports/PHASE_3_AUDIT.md` at baseline
@@ -643,3 +652,249 @@ Phase status: P3 = TODO / not started      Next action: owner rules on OQ-P3-01.
 
 **I am stopped here and awaiting your explicit file-scope authorization. I will not create, modify or delete any of the
 paths above until you grant it.**
+
+---
+---
+
+# Part II — Implementation Record (Revision 3)
+
+**EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE**
+
+| Field | Value |
+|---|---|
+| Phase | `P3` — Synthetic Document Ingestion, Extraction, Provenance and Doctor Verification |
+| Status | **`IN_REVIEW`** — not PASS, not merged, not self-approved |
+| Implementation head | `ce96d73c6622a6e354ae61a199426b6ff2458949` |
+| Baseline | `867ab122394ffcc14df099bc2c7a11bce3143d8f` |
+| Branch | `arena/ce85d4e6-ai-doctor-followup-agent` |
+| Test result | **467 passed, 0 failed, 0 skipped** (84 of them P3) |
+| Lint | `ruff check .` and `ruff format --check .` clean (94 files) |
+| Alembic | 5/5 states PASS: `head`, `p3`, `p2`, `p1`, `base` |
+| OpenAPI gate | PASS — 16 paths / 17 operations / 41 schemas |
+
+## I. What was built
+
+### I.1 Migration `0003_p3_documents`
+
+| Object | Kind | Notes |
+|---|---|---|
+| `document` | table | `ux_document_sha_patient (patient_id, sha256)` enforces per-patient dedup |
+| `extraction_attempt` | table | typed path/preprocessing/confidence/duration per attempt |
+| `extracted_fact` | table | candidate fact + span (`page_index`, `char_start`, `char_end`) |
+| `fact_verification` | table | append-only doctor decision |
+| `verification_issue` | table | `VI-*` blockers; **no `rule_id` column** |
+| `observation.source_fact_id` | additive column | NULL for check-in rows (SQLite treats NULLs as distinct) |
+| `ux_obs_source_fact` | unique index | one observation per verified fact |
+| `trg_fact_verification_doctor_only` | `BEFORE INSERT` trigger | refuses any verifier whose role is not `doctor` |
+
+The trigger body, verbatim from the migration:
+
+```sql
+CREATE TRIGGER trg_fact_verification_doctor_only
+BEFORE INSERT ON fact_verification
+FOR EACH ROW
+WHEN (SELECT role FROM user WHERE id = NEW.verified_by_user_id) IS NOT 'doctor'
+BEGIN
+    SELECT RAISE(ABORT, 'fact_verification.verified_by_user_id must reference a doctor');
+END;
+```
+
+`IS NOT` rather than `<>` is deliberate: a missing user row yields `NULL`, and
+`NULL <> 'doctor'` evaluates to `NULL` (not true), which would silently **admit** the
+row. `IS NOT` traps it. This is asserted by
+`test_trigger_rejects_an_unknown_verifier`.
+
+**Downgrade** drops the five tables, the column and the index. It is verified to
+preserve every P2 row (`test_0003_downgrade_preserves_p2_rows`) and to leave
+`PRAGMA foreign_key_check` empty.
+
+### I.2 Services — `backend/app/services/documents/`
+
+| Module | Responsibility |
+|---|---|
+| `storage` | filename sanitisation, generated stored names, escape-proof write/read |
+| `media` | magic-byte MIME validation, size/page/pixel caps |
+| `text_extraction` | pypdf text layer, per-page char counts, OCR candidacy |
+| `rasterize` | pypdfium2 page rendering with a pixel cap |
+| `ocr` | the Tesseract boundary and its honest absence |
+| `field_parser` | deterministic candidates with exact character spans |
+| `mapping` | the closed `map-1.0.0` promotion table and the one-tuple rule |
+| `issues` | `VI-001..VI-006` messages and reason codes |
+| `quality` | assembles a document's blocking issues |
+| `verification` | append-only decisions and the atomic mapping transaction |
+| `intake` | upload acceptance and the bounded extraction pipeline |
+| `access` | authorization composed from the existing P2 primitives |
+
+### I.3 Routes
+
+| Method | Path | Auth | Success |
+|---|---|---|---|
+| POST | `/api/v1/documents/upload` | patient (self) | `202` |
+| GET | `/api/v1/documents/{document_id}` | patient-self / doctor-assigned | `200` |
+| GET | `/api/v1/documents/{document_id}/extraction` | doctor-assigned | `200` / `409` pending |
+| POST | `/api/v1/documents/{document_id}/verify` | doctor-assigned | `200` |
+| GET | `/api/v1/documents/{document_id}/file` | patient-self / doctor-assigned | `200` |
+
+`GET /health` now reports the **real** Tesseract state: `ok` only when an engine
+was located *and* reported a version, `not_configured` when no path is configured,
+`unavailable` when a configured path cannot run. The `Health` schema is unchanged
+(D-03).
+
+## J. Owner decisions as implemented
+
+| ID | Decision | Where it lives | Proof |
+|---|---|---|---|
+| D-01 | `pypdfium2` for rasterization | `rasterize.py`; `pyproject.toml` | `test_safety_guards` pins; **Windows run still required** |
+| D-02 | lockfiles regenerated, no fabricated hashes | `requirements/*.lock` | regenerated with `uv 0.13.8`; base reproduction verified byte-identical |
+| D-03 | `/health` schema preserved, truthful states | `api/system.py` | `test_health_schema_matches_p0_contract` |
+| D-04 | no committed binaries | `data/synthetic/documents/sources/*.txt` | `test_manifest_declares_no_binary_artifacts` |
+| D-05 | exact P2 assertions kept at `0002` | `tests/p2/test_p2_migration.py` | `test_0002_creates_exactly_the_p2_allowlist` |
+| D-07 | doctor-only in service **and** trigger | `verification.py` + migration | trigger tests bypass the service entirely |
+| D-08 | `conflict_tolerance=0`, `ocr_confidence_floor=0.70` | `core/config.py` | defaults asserted in the config tests |
+| D-10 | no row on rejected upload; `failed` is a `200` | `intake.py`, `read.py` | `test_upload_rejects_*`, `test_failed_scan_is_reported_as_200_with_failed_status` |
+| D-11 | any second decision is `409`, even identical | `verification.py` | `test_identical_repeat_decision_is_refused_with_409` |
+| D-12 | same-day `VI-006` as deterministic `DEMO_ONLY` | issue vocabulary | message templates carry no clinical claim |
+| D-13 | `/verify` idempotency deviation documented | this section, §L | — |
+| D-14 | `E_DEPENDENCY_MISSING` gap retracted | audit OQ-P3-10 row | confirmed present in §4 at 503 |
+| D-15 | evidence consolidated here | this document | — |
+
+## K. Verification evidence
+
+### K.1 Test suite
+
+```
+$ python -m pytest backend/tests
+467 passed in 54.07s
+```
+
+| Package | Tests | Scope |
+|---|---|---|
+| `backend/tests/p3/test_p3_upload.py` | 12 | validation, caps, dedup, no-row-on-rejection |
+| `backend/tests/p3/test_p3_authorization.py` | 11 | scope matrix, role denials, non-disclosure |
+| `backend/tests/p3/test_p3_verification.py` | 30 | append-only, mapping, trigger, promotion |
+| `backend/tests/p3/test_p3_extraction.py` | 24 | facts, spans, `VI-*`, injection, D-10 |
+| `backend/tests/p3/test_p3_fixtures.py` | 7 | manifest integrity, determinism |
+
+### K.2 Defects found and fixed during this phase
+
+These are recorded because they were found by the tests, not by inspection, and
+each one would have been a silent correctness failure:
+
+1. **Duplicate observations per document.** The first implementation created one
+   `observation` per *verified fact* — a glucose report produced two rows. The
+   contract (`DATA_DICTIONARY.md` §3.3 rule 10) requires **at most one** per
+   document. Fixed by anchoring promotion to the single `value` fact.
+2. **Promotion depended on decision order.** Promotion was evaluated at the moment
+   the `value` fact was decided, so deciding `value` before `test_name`/`unit`
+   never promoted. Fixed by promoting **after** the document status is
+   recomputed, driven by "fully decided" rather than "which field was last".
+3. **Non-deterministic fact ordering.** Facts were ordered by `created_at`, which
+   is identical for every row in one transaction, so order fell back to an
+   arbitrary tiebreak and the field list came back shuffled. Fixed by ordering on
+   `(page_index, char_start, id)`.
+4. **The multi-measurement blocker was suppressed while facts were pending.** The
+   association block was computed from *verified* facts only, so at intake — when
+   everything is pending — the doctor was told nothing about the reason the
+   document could never be mapped. Fixed by counting structurally.
+5. **`UNTRUSTED_CONTENT` is not a quality flag.** Injection detection was
+   initially written as a seventh `QualityFlag`. The contract records it as an
+   **audit** event (§7.4); `QualityFlag` is a closed enum of *data* problems.
+6. **P3 code tripped the P1 clinical-vocabulary guard.** Docstrings used a
+   forbidden term. The guard was **not** weakened; the wording was changed instead.
+
+### K.3 Gate results
+
+```
+$ python scripts/python/check_openapi.py
+OpenAPI contract check: PASS (16 paths / 17 operations, 41 schemas)
+
+$ python scripts/python/scan_repository.py
+Secret/artefact scan: PASS (179 tracked files; 7 secret patterns, 4 claim patterns)
+
+$ python -m ruff check .            → All checks passed!
+$ python -m ruff format --check .   → 94 files already formatted
+```
+
+Alembic, all five states (`check_alembic_smoke.py <db> --state <state>`):
+
+| State | Result |
+|---|---|
+| `head` (= `0003_p3_documents`) | PASS |
+| `p3` | PASS |
+| `p2` | PASS — no P3 table, no `source_fact_id`, no trigger |
+| `p1` | PASS |
+| `base` | PASS |
+
+The gate was also **proven non-vacuous** by tampering with a scratch database:
+dropping the trigger → exit 1; dropping `ux_obs_source_fact` → exit 1; injecting a
+P4 table → exit 1. The OpenAPI gate was tamper-tested the same way (removed P3
+path, removed schema, injected P4 route, swapped verb → each reported).
+
+## L. Deliberate deviations, stated plainly
+
+1. **`POST /verify` is not `Idempotency-Key`-idempotent** (D-11/D-13). A repeat —
+   including an identical one — returns `409 E_FACT_ALREADY_DECIDED` instead of
+   `200`. `API_CONTRACT.md` §1 says a client may replay a mutation with the same
+   key and receive the original result. Rationale: a doctor's decision is a
+   clinical record, and a silent `200` would leave the client unable to tell
+   whether its first submission landed. The **internal** mapping remains
+   transactionally idempotent (`ux_obs_source_fact`), so no duplicate measurement
+   can be created either way.
+2. **`POST /upload` answers `409` to a duplicate rather than reusing silently.**
+   The contract row for `NEG-18` requires `409 E_DUPLICATE_DOCUMENT`, so that is
+   what a client sees; `DocumentUploadResponse.duplicate_ignored` exists in the
+   schema but is not reachable on this path.
+3. **`ExtractionResponse` is served for a terminally failed document** (D-10).
+   `409 E_EXTRACTION_PENDING` is emitted **only** in the `pending_extraction`
+   state. No undocumented `503` was introduced.
+
+## M. Honest limitations
+
+- **No real OCR was executed here.** The sandbox has no Tesseract, so every OCR
+  path in this report is either a mocked/unit test or an assertion that the
+  absence degrades correctly to `E_DEPENDENCY_MISSING`. `OCR-LIVE-01` and
+  `GOLD-EX-05..08/11` remain **Windows-only, not executed**.
+- **Sandbox Python is 3.11.2; the project requires 3.12.** All results above come
+  from a manually pinned venv, not from the hash-locked 3.12 environment CI uses.
+- **No Windows verification has been performed for this phase.** In particular the
+  `pypdfium2` wheel (D-01) is unproven on the target OS.
+- One report layout family, `eng` only; no handwriting, merged cells or
+  multi-column guarantees. No unit conversion. Extraction accuracy targets in
+  `MASTER_PLAN.md` §6.2 remain **targets, not results**.
+
+## N. Requirement → test map (P3)
+
+| Requirement | Tests |
+|---|---|
+| `REQ-ING-01` size/media caps | `test_upload_rejects_oversize_payload`, `..._rejects_non_pdf_magic_bytes` |
+| `REQ-ING-02` bounded extraction | `test_extraction_records_one_attempt_for_a_text_layer` |
+| `REQ-ING-03` declared fields only | `test_clean_report_yields_the_five_declared_fields` |
+| `REQ-ING-04` dedup | `test_duplicate_bytes_for_same_patient_conflict` |
+| `REQ-ING-05` page cap | `test_upload_rejects_too_many_pages` |
+| `REQ-DATA-05` mapping | Case A/B tests, `test_verified_glucose_produces_one_observation_with_report_date` |
+| `REQ-VERIFY-01` provenance | `test_every_fact_span_resolves_against_its_page`, `test_parser_keeps_spans_exact_for_every_candidate` |
+| `REQ-VERIFY-02` append-only | `test_identical_repeat_decision_is_refused_with_409` |
+| `REQ-VERIFY-03` correction | `test_correction_supersedes_the_original_fact` |
+| `REQ-SEC-01` scope | `test_p3_authorization.py` (11 tests) |
+| `REQ-SEC-02` injection | `test_injection_text_is_recorded_and_ignored` |
+| `REQ-SEC-04` blocking | `test_missing_unit_raises_vi_001`, `test_multi_measurement_document_is_blocked_not_mapped` |
+| `REQ-SEC-05` notice | `test_extraction_response_carries_the_educational_disclaimer` |
+
+## O. What the owner must verify on Windows
+
+These cannot be produced in this environment and are **not claimed**:
+
+1. `pip install --require-hashes` from the regenerated 3.12 lockfiles.
+2. `python scripts/python/generate_p3_fixtures.py` → determinism, on Windows.
+3. **Real Tesseract**: install it, set `TESSERACT_CMD`, upload a scanned image,
+   and confirm `GET /health` reports `tesseract: ok` and OCR produces facts
+   (`OCR-LIVE-01`, `GOLD-EX-05..08/11`).
+4. `pypdfium2` rasterization on Windows (D-01).
+5. Alembic `head → base → head` against a Windows-path SQLite file.
+6. `test_all.ps1` for the full local gate.
+
+## P. Status
+
+**P3 is `IN_REVIEW`.** No PASS claim, no self-approval, no merge, and no P4 work
+has begun. The implementing agent stops here for independent review and owner
+Windows verification.

@@ -1,0 +1,115 @@
+{
+  "notice": "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD",
+  "disclaimer": "EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE",
+  "fixture_version": "p3-1.0.0",
+  "mapping_version": "map-1.0.0",
+  "policy_version": "p0",
+  "generation": {
+    "why_text_sources": "Owner decision D-04: no binary artifact is committed. PDF and image bytes are generated deterministically from these text sources at test time.",
+    "deterministic": true,
+    "verify_command": "python scripts/python/generate_p3_fixtures.py",
+    "asserts": "Repeated generation must produce byte-identical output; the script exits non-zero otherwise.",
+    "no_real_data": "Every value is invented for the demo. No real patient, report or measurement appears."
+  },
+  "documents": [
+    {
+      "source": "data/synthetic/documents/sources/report_a_clean.txt",
+      "case": "A",
+      "contract_case": "GOLD-EX-01",
+      "purpose": "Clean hemoglobin report in g/dL. Verified but never mapped: hemoglobin is outside map-1.0.0, so it produces no observation and no comparison.",
+      "sha256": "c510153fc3dcd8593d49a229fb9fd655c59e688df00056c8eb62e20665290d92",
+      "size_bytes": 202,
+      "encoding": "utf-8",
+      "generator": "scripts/python/generate_p3_fixtures.py::build_report_pdf",
+      "produces_binary": false
+    },
+    {
+      "source": "data/synthetic/documents/sources/report_b_glucose.txt",
+      "case": "B",
+      "contract_case": "GOLD-EX-02",
+      "purpose": "Clean fasting-glucose report in mg/dL with a reference range. Maps to glucose via map-1.0.0 and produces exactly one observation dated from the report date.",
+      "sha256": "b158ea69e612f328a737ed6122539f3d84b1d59f61da2190dad3ec09fab83243",
+      "size_bytes": 199,
+      "encoding": "utf-8",
+      "generator": "scripts/python/generate_p3_fixtures.py::build_report_pdf",
+      "produces_binary": false
+    },
+    {
+      "source": "data/synthetic/documents/sources/report_c_ambiguous.txt",
+      "case": "C",
+      "contract_case": "GOLD-EX-09/10",
+      "purpose": "Slash date 03/11/2026 (VI-003) plus a substituted-character value 1O5 (VI-005). Neither is guessed; both block.",
+      "sha256": "e8fa31b2dbe65c228ba0c7ba251a6eb5aa44821de4e0cf2497803f8299438e67",
+      "size_bytes": 193,
+      "encoding": "utf-8",
+      "generator": "scripts/python/generate_p3_fixtures.py::build_report_pdf",
+      "produces_binary": false
+    },
+    {
+      "source": "data/synthetic/documents/sources/report_multi_test.txt",
+      "case": "-",
+      "contract_case": "GOLD-NEG-10",
+      "purpose": "Two measurements in one document. Refused by the P0-R14 association rule: no observation is created.",
+      "sha256": "f1e14a24752bc5de1d365e2d9db9f667afc9f16e7100e5eb746b8ca225eae610",
+      "size_bytes": 276,
+      "encoding": "utf-8",
+      "generator": "scripts/python/generate_p3_fixtures.py::build_report_pdf",
+      "produces_binary": false
+    },
+    {
+      "source": "data/synthetic/documents/sources/report_wrong_patient.txt",
+      "case": "-",
+      "contract_case": "VI-04",
+      "purpose": "Carries a different patient reference. Raises VI-004; never produces an observation.",
+      "sha256": "b158ea69e612f328a737ed6122539f3d84b1d59f61da2190dad3ec09fab83243",
+      "size_bytes": 199,
+      "encoding": "utf-8",
+      "generator": "scripts/python/generate_p3_fixtures.py::build_report_pdf",
+      "produces_binary": false
+    },
+    {
+      "source": "data/synthetic/documents/sources/report_missing_unit.txt",
+      "case": "-",
+      "contract_case": "GOLD-EX-12",
+      "purpose": "Value with no unit. Raises VI-001.",
+      "sha256": "db47fd901f36710c13ccaad3926b895cd5797d617d18d2d60aedef7f39239b08",
+      "size_bytes": 161,
+      "encoding": "utf-8",
+      "generator": "scripts/python/generate_p3_fixtures.py::build_report_pdf",
+      "produces_binary": false
+    },
+    {
+      "source": "data/synthetic/documents/sources/report_unsupported_unit.txt",
+      "case": "-",
+      "contract_case": "GOLD-NEG-08",
+      "purpose": "Value in an unsupported unit. Raises VI-001; no unit conversion exists in the MVP.",
+      "sha256": "bc046da5c31eca4cfad92e19f11c19b7ecd64b3bb614787832b833d34dc17eec",
+      "size_bytes": 169,
+      "encoding": "utf-8",
+      "generator": "scripts/python/generate_p3_fixtures.py::build_report_pdf",
+      "produces_binary": false
+    },
+    {
+      "source": "data/synthetic/documents/sources/report_no_reference.txt",
+      "case": "-",
+      "contract_case": "GOLD-EX-03",
+      "purpose": "Heart-rate report with no reference range. A missing range is not an error.",
+      "sha256": "5f9e708e0435e401fbeb39645e971b0375334d125feae36cc4f40d5b68857571",
+      "size_bytes": 165,
+      "encoding": "utf-8",
+      "generator": "scripts/python/generate_p3_fixtures.py::build_report_pdf",
+      "produces_binary": false
+    },
+    {
+      "source": "data/synthetic/documents/sources/report_injection.txt",
+      "case": "-",
+      "contract_case": "NEG-11",
+      "purpose": "Contains instruction-like text. Detected and recorded in the audit; changes no state.",
+      "sha256": "a58ff7bf9ad78388ae02c33306565cf16fd73e45c13f64232af197705adcb687",
+      "size_bytes": 257,
+      "encoding": "utf-8",
+      "generator": "scripts/python/generate_p3_fixtures.py::build_report_pdf",
+      "produces_binary": false
+    }
+  ]
+}
