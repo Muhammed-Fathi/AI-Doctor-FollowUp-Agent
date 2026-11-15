@@ -226,14 +226,14 @@ Record the per-gate summary block **and** the exit code. `SKIPPED` is never a pa
 note which gate skipped and why (the Playwright smoke legitimately skips unless
 `-IncludeE2E` is given and browser binaries are installed).
 
-Expected backend figure at this commit: **529 passed**, of which **146** are the P3
+Expected backend figure at this commit: **534 passed**, of which **151** are the P3
 suite (`backend/tests/p3`). Verified by collection on the reviewed commit, not
 estimated:
 
 | Suite | Tests |
 |---|---|
-| `backend/tests` (whole backend) | 529 passed |
-| `backend/tests/p3` (P3 suite) | 146 |
+| `backend/tests` (whole backend) | **534 passed** |
+| `backend/tests/p3` (P3 suite) | **151** |
 | ├ `test_p3_verification.py` | 29 |
 | ├ `test_p3_extraction.py` | 26 |
 | ├ `test_p3_edge_cases.py` (R06–R09) | 24 |
@@ -241,7 +241,15 @@ estimated:
 | ├ `test_windows_ocr_acceptance.py` (probe + handoff) | 17 |
 | ├ `test_p3_upload.py` | 12 |
 | ├ `test_p3_authorization.py` | 10 |
-| └ `test_p3_fixtures.py` | 7 |
+| └ `test_p3_fixtures.py` (incl. CRLF portability) | 12 |
+
+
+> **Windows CRLF note (P3-R10).** `git` may check these `.txt` fixtures out with CRLF,
+> which changes their byte length and SHA-256. That is expected: the integrity test
+> canonicalizes CRLF to LF before hashing and compares against the committed
+> `manifest.json` values, so a CRLF checkout is not a failure. If you *do* see a hash
+> mismatch, it is a real content difference — report the file and both digests rather
+> than re-cloning. Set nothing; do not add `core.autocrlf=false` to work around it.
 
 Those figures come from a **Linux sandbox on Python 3.11**, so treat them as the
 expected *count*, not as Windows evidence. A different count on your machine is a

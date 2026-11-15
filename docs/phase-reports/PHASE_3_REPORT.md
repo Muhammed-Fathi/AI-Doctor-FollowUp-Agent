@@ -1539,10 +1539,41 @@ byte-identical.
    affects the exit code, and with no engine it is reported `NOT RUN` like the rest.
 
 `backend/tests/p3/test_windows_ocr_acceptance.py` grew from 7 to 15 tests
-(P3 directory: 146 collected tests; full suite 529 passed), covering
+(P3 directory: 151 collected tests; full suite 534 passed), covering
 the missing-wheel path, the `_guarded` conversion, the 07/08 accounting, the owner's
 real `E:\DEPI` paths, the detached-worktree/SHA guard, the "do not skip the
 frontend" rule and the `app.db` read-only guarantee.
+
+## V.9 R10 — Windows CRLF fixture integrity
+
+Review [`5913143695`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#pullrequestreview-5913143695); owner evidence: `test_all.ps1` at `37ff7ea` returned
+**exit 1**, 11 PASS / 1 FAIL / 1 SKIP, failing only
+`test_every_recorded_hash_matches_the_committed_source`.
+
+| Fact | Value |
+|---|---|
+| Committed canonical LF | 202 bytes, `c510153fc3dcd8593d49a229fb9fd655c59e688df00056c8eb62e20665290d92` |
+| Windows CRLF checkout | 206 bytes, `bfaf9bbbb360e3bb9513dbce86464f0b0c5ba683dfda14f6d216c73598bebf38` |
+| Recorded in `manifest.json` | the LF pair — unchanged |
+
+The failure was in the check, not the fixture: it hashed the checkout verbatim, so
+deterministic Windows newline conversion looked like content drift. The test now
+canonicalizes CRLF → LF before hashing, leaving `manifest.json` authoritative and
+uncorrupted. Only `\r\n` is folded; lone `\r`, NUL bytes, appended bytes and any
+value edit still fail.
+
+Verified on this machine by simulating a real CRLF checkout: 12/12 fixture tests pass
+with the file at 206 bytes / `bfaf9bbb…`, and an edit of `13.4` → `13.9` inside that
+same checkout still fails the integrity assertion. Five regression tests were added
+(LF, CRLF, the pinned digest pair, and two corruption controls); the P3 suite is now
+151 tests and the backend total 534.
+
+**Deliberately unchanged:** fixture text, manifest digests/sizes, production code,
+contracts. No `.gitattributes` was added — that would rewrite every Windows working
+tree and requires its own path-specific authorization.
+
+Windows acceptance must be **repeated on the corrected SHA**; this document records a
+correction, not an acceptance.
 
 ## V.7 Status
 

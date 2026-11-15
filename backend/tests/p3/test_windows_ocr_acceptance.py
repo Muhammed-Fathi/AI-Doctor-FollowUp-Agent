@@ -342,18 +342,57 @@ def test_the_owner_comment_is_the_cited_authorization_source():
                 ), f"{relative}: review must not be presented as approval: {line!r}"
 
 
-def test_handoff_test_count_matches_the_suite_it_describes():
-    """The quoted figures must match what pytest actually collects.
+def _collected_counts() -> dict[str, int]:
+    """Return real pytest collection counts, keyed by test file name.
 
-    An earlier revision said ``522 passed (P3: 139)``; the suite collects 144 P3
-    tests. A handoff that tells the owner to expect the wrong number invites a false
-    FAIL, so the number is checked against collection rather than trusted.
+    Shelling out to pytest is slower than counting ``def test_`` lines, but it is the
+    only way to stay correct as parametrization changes. A hard-coded count rots the
+    moment someone adds a test — which is exactly how the handoff drifted to
+    ``522 (P3: 139)`` in the first place.
+    """
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "backend/tests/p3",
+            "--collect-only",
+            "-q",
+            "--no-header",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    counts: dict[str, int] = {}
+    for line in completed.stdout.splitlines():
+        # Format: "backend/tests/p3/test_x.py: 12"
+        name, _, count = line.partition(": ")
+        if "backend/tests/p3/test_" in name and count.strip().isdigit():
+            counts[name.rsplit("/", 1)[-1]] = int(count)
+    assert counts, f"could not parse collection output:\n{completed.stdout[-2000:]}"
+    return counts
+
+
+def test_handoff_test_count_matches_the_suite_it_describes():
+    """The counts quoted in the handoff must match real pytest collection.
+
+    A handoff that tells the owner to expect the wrong number invites a false FAIL.
+    An earlier revision said ``522 passed (P3: 139)`` when the truth was 529/146, so
+    the figures are now derived from collection rather than trusted.
     """
     text = HANDOFF.read_text(encoding="utf-8")
+    counts = _collected_counts()
+    p3_total = sum(counts.values())
 
-    p3_files = sorted((REPO_ROOT / "backend" / "tests" / "p3").glob("test_*.py"))
-    assert p3_files, "the P3 suite must exist for this check to mean anything"
+    assert f"**{p3_total}**" in text, f"handoff should quote the P3 total {p3_total}"
+    for name, count in counts.items():
+        row = next((line for line in text.splitlines() if name in line), None)
+        assert row is not None, f"handoff table is missing a row for {name}"
+        assert f"| {count} |" in row, f"{name}: expected {count} in {row!r}"
 
-    # Each per-file count quoted in the table must be a real, plausible count.
-    assert "146" in text and "529 passed" in text
-    assert "522 passed" not in text and "P3: 139" not in text and "144" not in text
+    # And the stale pair must never come back.
+    assert "522 passed" not in text and "P3: 139" not in text
