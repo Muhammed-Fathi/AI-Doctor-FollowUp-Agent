@@ -37,11 +37,13 @@ import io
 import json
 import os
 import platform
+import subprocess
 import sys
 import tempfile
 import time
 import traceback
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -50,6 +52,9 @@ SOURCES = REPO_ROOT / "data" / "synthetic" / "documents" / "sources"
 PASS = "PASS"
 FAIL = "FAIL"
 NOT_RUN = "NOT RUN"
+#: A row that documents which other gates prove a contract case. It is neither a
+#: pass nor a failure and never affects the exit code on its own.
+DERIVED = "DERIVED"
 
 
 @dataclass
@@ -69,32 +74,96 @@ def _record(results: list[Result], result: Result) -> Result:
     return result
 
 
+def _git_head() -> str | None:
+    """Return the worktree's HEAD SHA, so evidence is bound to one commit.
+
+    Best-effort only: a missing ``git`` or a non-repository checkout must not stop
+    the probe. The field is ``None`` in that case rather than a guess.
+    """
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return completed.stdout.strip() or None
+
+
+def _guarded(results: list[Result], gate: str, probe) -> object:
+    """Run ``probe`` and convert any escape into a truthful ``FAIL`` result.
+
+    A missing wheel, an unreadable fixture or an unexpected engine error must not
+    abort the run with a traceback: the JSON evidence file is the artifact the
+    owner hands back, so it has to be written even when a gate blows up. The
+    traceback is included — an error is reported, never hidden.
+    """
+    try:
+        return probe()
+    except Exception as error:
+        _record(
+            results,
+            Result(
+                gate,
+                FAIL,
+                f"unexpected {type(error).__name__}: {error}\n{traceback.format_exc(limit=3)}",
+            ),
+        )
+        return None
+
+
 # --- environment -------------------------------------------------------------
 
 
 def gate_environment(results: list[Result]) -> None:
     """Record the environment every other measurement depends on."""
-    import PIL
-    import pypdfium2
-    import pytesseract
-
-    detail = (
-        f"{platform.system()} {platform.release()} build {platform.version()}; "
-        f"Python {platform.python_version()}; "
-        f"pytesseract {getattr(pytesseract, '__version__', 'unknown')}; "
-        f"pillow {PIL.__version__}; "
-        f"pypdfium2 {pypdfium2.version.PYPDFIUM_INFO}"
-    )
     expected = "3.12."
-    status = PASS if platform.python_version().startswith(expected) else FAIL
-    reason = "" if status == PASS else f" project requires Python {expected}x"
+    python_ok = platform.python_version().startswith(expected)
+
+    # Record the interpreter first, then the libraries. A missing wheel is a
+    # finding about the environment, not a crash of the probe: the owner needs a
+    # JSON file with `pillow: NOT RUN` far more than a traceback.
     _record(
         results,
         Result(
-            "ENV-01 runtime",
-            status,
-            detail + reason,
+            "ENV-01 python",
+            PASS if python_ok else FAIL,
+            (
+                f"{platform.system()} {platform.release()} build {platform.version()}; "
+                f"Python {platform.python_version()}"
+                + ("" if python_ok else f" (project requires {expected}x)")
+            ),
             {"python": platform.python_version(), "os": platform.platform()},
+        ),
+    )
+
+    versions: dict[str, str] = {}
+    missing: list[str] = []
+    for module_name, getter in (
+        ("PIL", lambda m: getattr(m, "__version__", "unknown")),
+        ("pytesseract", lambda m: getattr(m, "__version__", "unknown")),
+        ("pypdfium2", lambda m: str(m.version.PYPDFIUM_INFO)),
+    ):
+        try:
+            module = __import__(module_name)
+            versions[module_name] = getter(module)
+        except Exception as error:
+            missing.append(f"{module_name} ({type(error).__name__}: {error})")
+
+    _record(
+        results,
+        Result(
+            "ENV-02 libraries",
+            FAIL if missing else PASS,
+            (
+                f"installed: {versions}"
+                if not missing
+                else f"not importable: {missing} — rerun the hash-locked install"
+            ),
+            {"versions": versions, "missing": missing},
         ),
     )
 
@@ -220,12 +289,40 @@ def gate_ocr_live(results: list[Result], *, engine_present: bool) -> None:
     is treated as pass/fail, because that is the thing the product depends on.
     """
     if not engine_present:
-        for gate in ("GOLD-EX-05 PNG", "GOLD-EX-06 JPEG", "OCR-LIVE-01"):
+        # Every case still appears in the evidence, so a reader can see exactly
+        # what did not run instead of inferring it from a gap.
+        for gate in (
+            "GOLD-EX-05 PNG",
+            "GOLD-EX-06 JPEG",
+            "GOLD-EX-07/08 coverage",
+            "OCR-LIVE-01",
+        ):
             _record(results, Result(gate, NOT_RUN, "no Tesseract engine available"))
         return
 
     _engine_scan(results, source="report_a_clean.txt", fmt="PNG", gate="GOLD-EX-05 PNG")
     _engine_scan(results, source="report_a_clean.txt", fmt="JPEG", gate="GOLD-EX-06 JPEG")
+
+    # GOLD-EX-07/08 are the "same fields via the OCR path" pair, i.e. the *field
+    # extraction* half rather than the bare read. They are covered end-to-end by
+    # `ING-02 OCR upload end-to-end` below (PNG) — which asserts the fields, the
+    # `tesseract` extractor and the stored provenance — and by the JPEG read
+    # above. They are recorded here as an explicit mapping so no case is claimed
+    # twice or silently dropped.
+    _record(
+        results,
+        Result(
+            "GOLD-EX-07/08 coverage",
+            "DERIVED",
+            (
+                "GOLD-EX-07 (fields via the OCR path) is asserted by "
+                "'ING-02 OCR upload end-to-end'; GOLD-EX-08 (JPEG readability) by "
+                "'GOLD-EX-06 JPEG'. This row states the mapping only — it is not an "
+                "independent pass and is never counted as one."
+            ),
+            {"derived_from": ["GOLD-EX-05 PNG", "GOLD-EX-06 JPEG", "ING-02 OCR upload end-to-end"]},
+        ),
+    )
 
     # Preprocessing off/on, twice, on a deliberately hostile source: small text.
     from PIL import Image
@@ -527,20 +624,32 @@ def main(argv: list[str]) -> int:
         sys.path.insert(0, system_path)
 
     results: list[Result] = []
-    gate_environment(results)
-    executable = gate_engine(results)
+    _guarded(results, "ENV-01/02 environment", lambda: gate_environment(results))
+    executable = _guarded(results, "OCR-ENGINE", lambda: gate_engine(results))
     engine_present = executable is not None
 
-    gate_ocr_live(results, engine_present=engine_present)
-    gate_ocr_corruption(results, engine_present=engine_present)
-    gate_rasterizer(results)
-    gate_api_ocr_upload(results, engine_present=engine_present)
+    _guarded(
+        results,
+        "GOLD-EX-05/06/OCR-LIVE-01",
+        lambda: gate_ocr_live(results, engine_present=engine_present),
+    )
+    _guarded(
+        results,
+        "GOLD-EX-11 OCR-produced 1O5",
+        lambda: gate_ocr_corruption(results, engine_present=engine_present),
+    )
+    _guarded(results, "PDFIUM-01 rasterize", lambda: gate_rasterizer(results))
+    _guarded(
+        results,
+        "ING-02 OCR upload end-to-end",
+        lambda: gate_api_ocr_upload(results, engine_present=engine_present),
+    )
 
     print()
     print("=" * 78)
     for result in results:
         print(f"{result.status:>7}  {result.gate}")
-    failures = [result for result in results if result.status != PASS]
+    failures = [result for result in results if result.status not in {PASS, DERIVED}]
     print("=" * 78)
     if failures:
         print(f"{len(failures)} gate(s) not passed. This is reported, not hidden.")
@@ -548,17 +657,34 @@ def main(argv: list[str]) -> int:
         print("All Windows-only gates passed.")
 
     if args.json is not None:
-        args.json.write_text(
-            json.dumps(
-                [
-                    {"gate": r.gate, "status": r.status, "detail": r.detail, "data": r.data}
-                    for r in results
-                ],
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        print(f"Wrote {args.json}")
+        payload = {
+            "generated_at_utc": datetime.now(UTC)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "platform": platform.platform(),
+            "python": platform.python_version(),
+            "repository_head": _git_head(),
+            "gates": [
+                {"gate": r.gate, "status": r.status, "detail": r.detail, "data": r.data}
+                for r in results
+            ],
+            "summary": {
+                PASS: sum(1 for r in results if r.status == PASS),
+                FAIL: sum(1 for r in results if r.status == FAIL),
+                NOT_RUN: sum(1 for r in results if r.status == NOT_RUN),
+                DERIVED: sum(1 for r in results if r.status == DERIVED),
+            },
+            "notice": "EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE",
+        }
+        try:
+            args.json.parent.mkdir(parents=True, exist_ok=True)
+            args.json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            print(f"Wrote {args.json}")
+        except OSError as error:
+            # Losing the evidence file is itself a failure to report, not a crash.
+            print(f"[   FAIL] EVIDENCE: could not write {args.json}: {error}")
+            return 2
 
     return 0 if not failures else 2
 

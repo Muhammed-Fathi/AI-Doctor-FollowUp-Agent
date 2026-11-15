@@ -583,7 +583,7 @@ resolve unilaterally (`AGENTS.md` §9).
 | **OQ-P3-07** | DB **trigger** for `fact_verification.verified_by_user_id → role='doctor'`, or service-only? | `DATA_DICTIONARY.md` §2.7 says "service + CHECK trigger"; triggers are outside SQLAlchemy's model vocabulary | Service enforcement + test asserting no other write path; defer the trigger with a documented note |
 | **OQ-P3-08** | ~~What value for `conflict_tolerance` (`VI-006`)?~~ **RESOLVED — was my error, not an open question.** The value already exists in the accepted policy | `DEMO_REVIEW_RULES.md` §8 `parameters:` block and §9 parameter table both fix `conflict_tolerance: 0` and `ocr_confidence_floor: 0.70`, labelled `DEMO_ONLY` | Adopt **`conflict_tolerance = 0`** and **`ocr_confidence_floor = 0.70`** exactly as accepted. **No owner number needed, no new parameter introduced** |
 | **OQ-P3-09** | Confirm P3 ships **route selection as a service value**, with **no** `extraction_triage` graph node | `AD-01` is a P5 test; a node here would be future-phase code (`AGENTS.md` §1) | Service-level route selection + `extraction_attempt` rows only |
-| **OQ-P3-10** / **D-14** | `E_PARSE_FAILED` and `E_TIMEOUT` are required by `EXTRACTION_PROVENANCE.md` §2 but are absent from `API_CONTRACT.md` §4 | **`E_DEPENDENCY_MISSING` RETRACTED — my error.** Owner correction accepted: `E_DEPENDENCY_MISSING` **is** in §4 with HTTP **503**. I had over-reported the gap by conflating it with the genuinely absent pair. **Residual, verified gap: `E_PARSE_FAILED` and `E_TIMEOUT` only** | `E_PARSE_FAILED` → **422** (rejected upload, no document row); `E_TIMEOUT` → **not client-visible**; persists as `failure_code` and is exposed through `200 ExtractionResponse` with `document_status="failed"` + redacted attempt error code (D-10). **No `503` introduced.** Recorded for a later P0 doc-sync; **no contract edit in P3** |
+| **OQ-P3-10** / **D-16** | `E_PARSE_FAILED` and `E_TIMEOUT` are required by `EXTRACTION_PROVENANCE.md` §2 but are absent from `API_CONTRACT.md` §4 | **`E_DEPENDENCY_MISSING` RETRACTED — my error.** Owner correction accepted: `E_DEPENDENCY_MISSING` **is** in §4 with HTTP **503**. I had over-reported the gap by conflating it with the genuinely absent pair. **Residual, verified gap: `E_PARSE_FAILED` and `E_TIMEOUT` only** | `E_PARSE_FAILED` → **422** (rejected upload, no document row); `E_TIMEOUT` → **not client-visible**; persists as `failure_code` and is exposed through `200 ExtractionResponse` with `document_status="failed"` + redacted attempt error code (D-10). **No `503` introduced.** Recorded for a later P0 doc-sync; **no contract edit in P3** |
 | **OQ-P3-11** | `DATA_DICTIONARY.md` §3.3 rule 7 says a repeated verification returns the existing observation with `E_DUPLICATE_OBSERVATION` **mapped to a `200` no-op** — but that code is in **no** catalogue (§4 omits it) and is never returned to a client (the observation is only read internally, since P3 exposes no observation-creation route) | This is a **literal spec conflict**: "E_DUPLICATE_OBSERVATION" and "200 no-op" cannot both be client-visible. The column/value does not exist as a client contract either way | Treat it as an **internal** idempotency signal, never an HTTP code: the service returns the existing observation and an audit note; no new `ErrorCode`, no contract edit. Requires your acknowledgement |
 
 
@@ -755,7 +755,12 @@ was located *and* reported a version, `not_configured` when no path is configure
 | D-11 | any second decision is `409`, even identical | `verification.py` | `test_identical_repeat_decision_is_refused_with_409` |
 | D-12 | same-day `VI-006` as deterministic `DEMO_ONLY` | issue vocabulary | message templates carry no clinical claim |
 | D-13 | `/verify` idempotency deviation documented | this section, §L | — |
-| D-14 | `E_DEPENDENCY_MISSING` gap retracted | audit OQ-P3-10 row | confirmed present in §4 at 503 |
+| **D-14** | **`VI-002` counts active candidates only** — a superseded original with valid `corrected_from_fact_id` lineage is excluded (owner decision 2026-11-15) | `DEMO_REVIEW_RULES.md` §4/§6.1; `quality.superseded_fact_ids` | `test_p3_r09_*` (6 tests); verbatim record in `PHASE_PROGRESS.md` |
+| D-16 | `E_DEPENDENCY_MISSING` gap retracted | audit OQ-P3-10 row | confirmed present in §4 at 503 |
+
+> **Renumbering note:** this row was originally labelled `D-14`. On 2026-11-15 the owner assigned
+> `D-14` to the `VI-002` active-candidate decision, so the audit row was renumbered to `D-16` to keep
+> the owner's label authoritative. No decision content changed.
 | D-15 | evidence consolidated here | this document | — |
 
 ## K. Verification evidence
@@ -1415,14 +1420,13 @@ protection; it is a rule that reports something false.
 narrowing applies to exactly one category: a row that a correction replaced, which
 is by construction never a live candidate.
 
-**Owner decision requested (one, small, not a blocker for this push):** §4/§6.1
-should state that the `VI-002` trigger and count range over facts that are not
-`verified` **and not superseded by a correction** — i.e. over the *active*
-candidate set. Until that sentence exists in `docs/clinical-safety/*`, the shipped
-behaviour is the interpretation above, and Part V records it as an interpretation
-rather than as a contract I silently edited. `DEMO_REVIEW_RULES.md` is on the
-do-not-modify list, so I have not touched it; say the word and I will propose the
-exact two-line amendment as a separate, reviewable change.
+**Resolved — owner decision D-14 (2026-11-15).** The interpretation above was
+approved in writing and the scoped edit was explicitly authorized for
+`docs/clinical-safety/DEMO_REVIEW_RULES.md` (§4 trigger, §6.1 count, plus a short
+scope note). The decision and its verbatim text are recorded in
+`docs/roadmap/PHASE_PROGRESS.md`; only the `VI-002` trigger/count wording changed,
+and every threshold, policy and clinical-safety boundary in that document is
+untouched. See §V.8 for the applied diff summary.
 
 **Under P0-R14 nothing moves:** `multi_measurement_document` still means "this
 document describes more than one measurement", and a genuine two-test document
@@ -1495,6 +1499,42 @@ D-01 is about the Windows wheel, which remains NOT RUN.
 contract: a missing engine must report `NOT RUN`, never `PASS`; the script must exit
 non-zero in that case; and its executable lines must not reference
 `data/runtime`.
+
+## V.8 Owner decision D-14 and handoff corrections
+
+Applied under explicit owner authorization (review `5912501268`):
+
+| Change | Scope |
+|---|---|
+| `docs/clinical-safety/DEMO_REVIEW_RULES.md` §4 `VI-002` trigger | "Any **active** candidate fact …"; a superseded original is excluded and explained inline |
+| Same document §6.1 message count | "the number of **active** candidate fact rows"; superseded originals excluded from the count only |
+| Same document, catalogue scope note | Four bullets pinning exactly what is excluded and what is still counted, and what D-14 does **not** authorize |
+| `docs/roadmap/PHASE_PROGRESS.md` | D-14 recorded verbatim, plus the two authorized P3 handoff paths and the owner's `E:\DEPI` layout |
+| `PHASE_3_REPORT.md` §J | `D-14` added as the authoritative row; the unrelated audit row previously numbered `D-14` renumbered to `D-16` (owner numbering wins) |
+
+Nothing else in the protected document moved: thresholds, `VI-001`/`VI-003`/
+`VI-004`/`VI-005`/`VI-006`, `DR-*` policies and the clinical-safety boundaries are
+byte-identical.
+
+**Probe corrections** (review items 6 and 7):
+
+1. `gate_environment` no longer imports dependencies before recording: `ENV-01
+   python` and `ENV-02 libraries` are separate rows, so a missing wheel is a
+   structured `FAIL` with the missing module named — not a traceback that loses the
+   whole evidence file.
+2. Every gate in `main` runs through `_guarded`, which converts an escape into a
+   `FAIL` row carrying the traceback. The JSON is therefore always written, now
+   with `generated_at_utc`, `repository_head`, a status summary and the synthetic
+   notice; a failed write is itself reported as a `FAIL` with exit `2`.
+3. `GOLD-EX-07/08` are no longer implied. They have an explicit row whose status is
+   `DERIVED`: 07 (fields via the OCR path) is asserted by `ING-02`, 08 (JPEG
+   readability) by `GOLD-EX-06`. A `DERIVED` row never counts as a pass and never
+   affects the exit code, and with no engine it is reported `NOT RUN` like the rest.
+
+`backend/tests/p3/test_windows_ocr_acceptance.py` grew from 7 to 15 tests, covering
+the missing-wheel path, the `_guarded` conversion, the 07/08 accounting, the owner's
+real `E:\DEPI` paths, the detached-worktree/SHA guard, the "do not skip the
+frontend" rule and the `app.db` read-only guarantee.
 
 ## V.7 Status
 

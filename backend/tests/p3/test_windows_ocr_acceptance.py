@@ -60,6 +60,81 @@ def test_the_probe_exists_and_is_importable():
     ):
         assert hasattr(module, gate), gate
 
+    # The guard and the evidence writer are what make a failed dependency
+    # survivable: without them an ImportError would abort before the JSON exists.
+    assert hasattr(module, "_guarded")
+    assert hasattr(module, "_git_head")
+
+
+def test_environment_gate_survives_a_missing_wheel(monkeypatch, capsys):
+    """A missing dependency is a structured FAIL, not a traceback.
+
+    The reviewer's point: ``gate_environment`` used to import PIL/pytesseract/
+    pypdfium2 *before* recording anything, so an import error aborted the probe and
+    no evidence was produced. The evidence file is the artifact the owner hands
+    back, so it must always exist.
+    """
+    module = _module()
+    real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __import__
+
+    def _blocked(name, *args, **kwargs):
+        if name in {"pytesseract", "pypdfium2"}:
+            raise ImportError(f"simulated missing wheel: {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", _blocked)
+
+    results: list = []
+    module.gate_environment(results)
+    capsys.readouterr()
+
+    statuses = {result.gate: result.status for result in results}
+    assert statuses["ENV-01 python"] in {module.PASS, module.FAIL}
+    assert statuses["ENV-02 libraries"] == module.FAIL, "a missing wheel must be a FAIL"
+    missing = next(
+        result.data["missing"] for result in results if result.gate == "ENV-02 libraries"
+    )
+    assert any("pytesseract" in entry for entry in missing)
+
+
+def test_a_raising_gate_becomes_a_recorded_fail(capsys):
+    """``_guarded`` converts an escape into a FAIL row and keeps going."""
+    module = _module()
+    results: list = []
+
+    def _explode():
+        raise RuntimeError("simulated engine crash")
+
+    module._guarded(results, "SIMULATED", _explode)
+    capsys.readouterr()
+
+    assert len(results) == 1
+    assert results[0].status == module.FAIL
+    assert "simulated engine crash" in results[0].detail
+
+
+def test_gold_ex_07_and_08_are_never_silently_dropped(capsys):
+    """Every contract case appears in the evidence, including without an engine.
+
+    The reviewer noted the probe claimed ``GOLD-EX-05..08`` but only enumerated
+    05/06. Now 07/08 has its own row, marked ``DERIVED`` (it depends on the OCR
+    gates and ING-02), and with no engine it is explicitly ``NOT RUN`` rather than
+    absent.
+    """
+    module = _module()
+
+    without_engine: list = []
+    module.gate_ocr_live(without_engine, engine_present=False)
+    capsys.readouterr()
+
+    gates = {result.gate: result.status for result in without_engine}
+    assert gates["GOLD-EX-07/08 coverage"] == module.NOT_RUN
+    for gate in ("GOLD-EX-05 PNG", "GOLD-EX-06 JPEG", "OCR-LIVE-01"):
+        assert gates[gate] == module.NOT_RUN
+
+    # A DERIVED row documents the mapping and must not be counted as a failure.
+    assert module.DERIVED not in {module.PASS, module.FAIL, module.NOT_RUN}
+
 
 def test_a_missing_engine_is_reported_not_run_never_pass(monkeypatch, capsys):
     """No engine ⇒ ``NOT RUN``, and the process exits non-zero."""
@@ -162,3 +237,72 @@ def test_status_vocabulary_is_exactly_three_words(status):
     module = _module()
     assert {module.PASS, module.FAIL, module.NOT_RUN} == {"PASS", "FAIL", "NOT RUN"}
     assert status in {module.PASS, module.FAIL, module.NOT_RUN}
+
+
+# --- the handoff document must stay executable and path-correct ---------------
+
+HANDOFF = REPO_ROOT / "docs" / "phase-reports" / "PHASE_3_WINDOWS_ACCEPTANCE.md"
+
+
+def test_handoff_uses_the_owners_real_paths():
+    """The procedure must target ``E:\\DEPI``, not the author's placeholder.
+
+    An earlier revision hard-coded ``C:\\src\\…`` paths that do not exist on the
+    owner's machine; a procedure that fails on step 1 is not a handoff.
+    """
+    text = HANDOFF.read_text(encoding="utf-8")
+
+    assert r"E:\DEPI\AI-Doctor-FollowUp-Agent" in text
+    assert r"E:\DEPI\P3-Acceptance" in text
+    assert "C:\\src" not in text and "C:/src" not in text
+
+
+def test_handoff_never_touches_the_main_runtime_database():
+    """It must name the main database only to assert it stays unchanged."""
+    text = HANDOFF.read_text(encoding="utf-8")
+
+    assert "data\\runtime\\app.db" in text
+    # The only CommandLine mentions are read-only assertions (Get-Item / compare).
+    for line in text.splitlines():
+        if "app.db" in line and line.strip().startswith("&"):
+            raise AssertionError(f"no executable command may consume app.db: {line!r}")
+    assert "TemporaryDirectory" in text or r"P3-Acceptance\artifacts" in text
+
+
+def test_handoff_pins_the_sha_and_refuses_a_stale_fetch():
+    """A detached worktree at the reviewed SHA, with an explicit mismatch guard."""
+    text = HANDOFF.read_text(encoding="utf-8")
+
+    assert "worktree add --detach" in text
+    assert "FETCH_HEAD" in text
+    assert "Refusing to proceed" in text
+    assert "git -C $Main worktree add" in text
+
+
+def test_handoff_uses_repo_native_setup_with_frontend():
+    """``setup.ps1 -SkipDatabase`` must not also skip the frontend.
+
+    Skipping it would leave ``node_modules`` absent, and the full ``test_all.ps1``
+    gate would then correctly FAIL the frontend checks — a false negative caused by
+    the procedure, not by the code.
+    """
+    text = HANDOFF.read_text(encoding="utf-8")
+
+    assert "-SkipDatabase" in text
+    setup_call = [
+        line for line in text.splitlines() if "setup.ps1" in line and "-SkipDatabase" in line
+    ]
+    assert setup_call, "the handoff must invoke setup.ps1"
+    for line in text.splitlines():
+        if "setup.ps1" in line and "-SkipFrontend" in line and "-SkipDatabase" in line:
+            raise AssertionError(f"setup.ps1 must not skip the frontend: {line!r}")
+    assert "test_all.ps1" in text
+
+
+def test_handoff_distinguishes_derived_from_executed_cases():
+    """GOLD-EX-07/08 must be documented, not claimed as independently executed."""
+    text = HANDOFF.read_text(encoding="utf-8")
+
+    assert "GOLD-EX-07/08 coverage" in text
+    assert "DERIVED" in text
+    assert "never claimed as an independent pass" in text

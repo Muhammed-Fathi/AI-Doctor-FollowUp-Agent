@@ -74,7 +74,7 @@ test asserts their absence outside this mapping table).
 | ID | Name | Deterministic trigger | Reason code | Blocking |
 |---|---|---|---|---|
 | `VI-001` | Missing or unsupported unit | A candidate fact whose field is a measurement value has `unit = null`, or a unit outside the per-field document unit list (`EXTRACTION_PROVENANCE.md` §3) | `unit_missing_or_unsupported` | Yes |
-| `VI-002` | Unverified fact present | Any fact for the run's documents has `verification_status != verified` | `fact_unverified` | Yes |
+| `VI-002` | Unverified fact present | Any **active** candidate fact for the run's documents has `verification_status != verified`. *Active* excludes only an original fact that was rejected because a successfully recorded doctor correction superseded it with valid `corrected_from_fact_id` lineage — it is retained for immutable provenance but is not an active candidate (owner decision D-14) | `fact_unverified` | Yes |
 | `VI-003` | Ambiguous date | `report_date` has more than one plausible interpretation, or is absent | `date_ambiguous` | Yes |
 | `VI-004` | Wrong-patient document | The document's patient reference does not match the run's patient scope | `wrong_patient_document` | Yes |
 | `VI-005` | Unreadable value | Value token is unparseable/OCR-corrupted, or OCR confidence `< ocr_confidence_floor` | `value_unreadable` | Yes |
@@ -82,6 +82,21 @@ test asserts their absence outside this mapping table).
 
 `VerificationIssue` fields: `issue_id`, `issue_type`, `reason_code`, `blocking=true`, `message` (neutral,
 ≤240 chars), `document_id`, `fact_ids`, `evidence[]`, `created_at`. No `rule_id`, no severity, no advice.
+
+**`VI-002` counting scope (owner decision D-14, P3).** `EXTRACTION_PROVENANCE.md` §6 requires a
+corrected original to remain `rejected`, while this catalogue triggers `VI-002` on any fact that is
+not `verified`. Read literally together those two rules make every corrected document carry a
+permanent blocker that no doctor action can clear, so the trigger and the count range over the
+**active** candidate set:
+
+- **excluded** — an original fact rejected *specifically because* a recorded doctor correction
+  superseded it, i.e. another fact of the same document carries `corrected_from_fact_id` pointing at
+  it. Such a row is immutable provenance, not a candidate.
+- **still counted** — plain rejected facts, pending facts, and every fact of a genuine
+  multi-measurement document.
+
+The decision authorizes nothing else: no automatic verification, no removal of historical facts, no
+weakening of source evidence, no change to the closed mapping (see `PHASE_3_REPORT.md` §V.3).
 
 ## 5. Post-verification review rule catalogue (`DR-*`)
 
@@ -118,7 +133,7 @@ whether the underlying values were self-reported by the patient or doctor-verifi
 | ID | Message (exact template) |
 |---|---|
 | `VI-001` | `A recorded value has no usable unit. Please confirm the unit.` |
-| `VI-002` | `{count} extracted value(s) are not yet verified.` — `{count}` is the number of candidate fact rows with `verification_status != verified` for the run's documents, computed at render time (never hard-coded; `GOLD-FIXTURES` Case C declares exactly 3) |
+| `VI-002` | `{count} extracted value(s) are not yet verified.` — `{count}` is the number of **active** candidate fact rows with `verification_status != verified` for the run's documents, computed at render time (never hard-coded; `GOLD-FIXTURES` Case C declares exactly 3). Superseded originals are excluded from the count only (owner decision D-14); plain rejected and pending facts are still counted |
 | `VI-003` | `A date could not be read unambiguously.` |
 | `VI-004` | `A document may not belong to this patient; please confirm.` |
 | `VI-005` | `A value could not be read reliably and needs correction.` |
