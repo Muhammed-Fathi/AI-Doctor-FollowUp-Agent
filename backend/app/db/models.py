@@ -480,6 +480,15 @@ class Document(Base):
     #: document row only knows who uploaded it, never who the paper claims to be
     #: about. Bounded to the contract's synthetic-reference width.
     document_patient_ref: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    #: **R07:** every *distinct* patient reference printed anywhere in the
+    #: document, as a compact JSON array (``["DEMO-A-001","DEMO-B-001"]``).
+    #:
+    #: ``document_patient_ref`` alone cannot express "the document named two
+    #: different patients": that column is ``None`` both for "made no claim" and
+    #: for "made a contradictory claim", and the two need different verdicts. This
+    #: keeps the distinction so an ``A then B`` document fails closed with
+    #: ``VI-004`` instead of being silently reduced to its first reference.
+    document_patient_refs: Mapped[str | None] = mapped_column(String(240), nullable=True)
     uploaded_at: Mapped[str] = mapped_column(String(20), nullable=False)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
@@ -664,6 +673,12 @@ class VerificationIssue(Base):
         CheckConstraint("length(message) <= 240", name="message_bounded"),
         Index("ix_vi_document_state", "document_id", "state"),
         Index("ix_vi_run", "workflow_run_id"),
+        # The lifecycle's identity key (``sync_issues`` upserts on this pair). A
+        # UNIQUE index makes a concurrent double-insert fail loudly instead of
+        # producing two blockers for the same document. ``document_id`` is
+        # nullable for the future workflow-run flavour of an issue, and SQLite
+        # treats NULLs as distinct, so those rows stay unconstrained.
+        Index("ux_vi_document_type", "document_id", "issue_type", unique=True),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)

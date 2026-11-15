@@ -43,6 +43,7 @@ from app.services.documents.issues import (
     collect_source_conflict_issue,
     collect_unverified_issue,
     collect_wrong_patient_issue,
+    render_message,
 )
 from app.services.documents.mapping import decide_mapping
 
@@ -114,6 +115,11 @@ def decode_fact_ids(raw: str | None) -> tuple[str, ...]:
     return decode_flags(raw)
 
 
+def decode_text_list(raw: str | None) -> tuple[str, ...]:
+    """Return a stored compact JSON string array as a tuple (R07)."""
+    return decode_flags(raw)
+
+
 def _facts(db: Session, document_id: str) -> list[ExtractedFact]:
     """Return the document's facts in a stable order.
 
@@ -168,10 +174,26 @@ def evaluate_identity(db: Session, *, document: Document) -> IssueDraft | None:
     * ``document.document_patient_ref`` — what the *paper* says (parsed at intake);
     * the uploading patient's ``external_ref`` — what the *record* says.
 
-    A document that printed no reference cannot contradict anything, so it is not
-    flagged on absence alone. A document that printed a reference which does not
-    match the filing is the exact wrong-patient case ``VI-004`` describes.
+    A document that printed no reference at all cannot contradict anything, so it
+    is not flagged on absence alone. A document that printed a reference which
+    does not match the filing is the exact wrong-patient case ``VI-004`` describes.
+
+    **R07:** a document that printed *several distinct* references is treated as a
+    contradiction in its own right. It cannot be attributed to anybody, so it must
+    fail closed rather than be reduced to whichever reference the parser happened
+    to see first. ``document_patient_refs`` records that set; ``document_patient_ref``
+    is then ``None``, which is why the check happens here and not on the pointer.
     """
+    if decode_text_list(document.document_patient_refs):
+        # More than one distinct reference (a single one is also stored in the
+        # list, so re-check the count before declaring a conflict).
+        refs = decode_text_list(document.document_patient_refs)
+        if len(set(refs)) > 1:
+            return IssueDraft(
+                issue_type=IDENTITY_ISSUE_TYPE,
+                message=render_message(IDENTITY_ISSUE_TYPE),
+            )
+
     printed = document.document_patient_ref
     if printed is None:
         return None
@@ -235,18 +257,26 @@ def evaluate_conflicts(
     """
     from app.services.documents.mapping import VerifiedFactView
 
+    # **R06:** a superseded original is excluded *before* the status is forced,
+    # because it is not one of the document's measurement tuples any more. Forcing
+    # every row — including the rejected one a correction left behind — to look
+    # verified made a corrected parseable document look like a two-value document,
+    # so ``decide_mapping`` reported ambiguity and ``VI-006`` was silently dropped.
+    active = [
+        fact for fact in facts if fact.verification_status != FactVerificationStatus.REJECTED.value
+    ]
     views = [
         VerifiedFactView(
             field_name=fact.field_name,
             normalized_value=fact.normalized_value,
             unit=fact.unit,
-            # Conflicts are evaluated on the *candidate*, so pending facts must
-            # participate. Passing the real status would hide every conflict until
-            # a doctor had already decided the facts the conflict is meant to warn
+            # Conflicts are evaluated on the *candidate*, so **pending** facts must
+            # participate. Passing the real status would hide every conflict until a
+            # doctor had already decided the facts the conflict is meant to warn
             # them about.
             verification_status=FactVerificationStatus.VERIFIED.value,
         )
-        for fact in facts
+        for fact in active
     ]
     decision = decide_mapping(views)
     if not decision.is_mapped or decision.mapped is None:
@@ -257,7 +287,9 @@ def evaluate_conflicts(
         (
             index
             for index, fact in enumerate(facts)
-            if fact.field_name == FactField.VALUE.value and fact.normalized_value is not None
+            if fact.field_name == FactField.VALUE.value
+            and fact.normalized_value is not None
+            and fact.verification_status != FactVerificationStatus.REJECTED.value
         ),
         None,
     )

@@ -1115,3 +1115,211 @@ mocked engine. The provenance *storage* is exercised, the *engine* is not.
 **P3 remains `IN_REVIEW`.** Five findings addressed with tests that failed first;
 no PASS, no self-approval, no merge. Awaiting renewed independent review and owner
 Windows verification.
+
+---
+
+# Part IV — Final edge-case corrections (P3-R06..P3-R08 + issue-uniqueness)
+
+Follow-up review `5912248326` (`COMMENTED`, not APPROVE) on head
+`b4f761f170a199e9bee784332b612d5fabdb4b86` raised three blocking findings and one
+secondary point. Same method as Part III: the tests were written and executed
+**before** the fixes, against that exact head.
+
+**Test-first proof.** `backend/tests/p3/test_p3_edge_cases.py` was run at
+`b4f761f` before any production edit: **8 failed / 13 passed of 21**
+(the module now has 18 tests; three R08 assertions were added while tightening
+that fix). All three blocking findings reproduced.
+
+| Finding | Failing tests at `b4f761f` |
+|---|---|
+| R06 | `test_p3_r06_correcting_a_parseable_value_still_maps_one_observation`, `..._superseded_original_is_not_the_anchor`, `..._corrected_parseable_value_still_conflicts_with_existing_record`, `..._corrected_match_is_not_a_conflict` |
+| R07 | `test_p3_r07_two_distinct_references_raise_vi_004[A-then-B]`, `...[B-then-A]`, `..._references_on_separate_pages_fail_closed` |
+| R08 | `test_p3_r08_bounded_read_never_requests_the_whole_stream` |
+| uniqueness | passed **vacuously** — the original test hit a foreign-key violation, not the unique index, which is why it proved nothing until rewritten |
+
+## IV.1 P3-R06 — correcting a *parseable* value broke the measurement anchor
+
+**Root cause.** Two queries treated a superseded fact as a current one.
+
+1. `_document_measurement_anchor` selected every `value` fact with a non-null
+   `normalized_value` **regardless of status**, then required the list to have
+   length 1. A correction keeps the original (now `rejected`, but still
+   `normalized_value='104'`) and adds the corrected row (`'105'`). Two rows ⇒
+   `None` ⇒ promotion skipped, so a fully verified, perfectly mappable document
+   silently produced **no** observation.
+2. `evaluate_conflicts` forced **every** fact — including the rejected original —
+   to look `verified` before calling `decide_mapping`. After a correction that made
+   the document look like a two-value document, `decide_mapping` returned
+   `multi_measurement_document`, and the whole conflict evaluation returned `[]`.
+   The result was the worst combination: no `VI-006` warning *and* no promotion,
+   for a reason that had nothing to do with the data.
+
+The R05 tests could not see either defect: they correct `1O5`, whose
+`normalized_value` is `NULL`, so the rejected original never became a second
+candidate. A parseable source is what exposes it.
+
+**Fix.** "Active" now means *not superseded*:
+
+| Location | Change |
+|---|---|
+| `verification.py` | `_active_value_candidates` — value facts with a value **and** `verification_status != rejected`; the anchor is its single element |
+| `verification.py` | `_document_fact_views` excludes rejected rows, so mapping never sees a replaced reading |
+| `quality.py` | `evaluate_conflicts` filters rejected rows out **before** forcing the candidate status, and the conflict's `fact_index` addresses the same active row |
+
+Superseded facts are still **retained** (`raw_text`, span, extractor,
+`corrected_from_fact_id`) — this changes which rows are *counted as current*, not
+what is stored. `MAP-01` (one measurement tuple per document) and the exact
+decision history are preserved.
+
+**Tests.** `test_p3_r06_correcting_a_parseable_value_still_maps_one_observation`
+(104→105 yields exactly one observation of 105),
+`..._superseded_original_is_not_the_anchor` (the observation hangs off the verified
+row and the lineage link is intact),
+`..._corrected_parseable_value_still_conflicts_with_existing_record` (98 on the
+same day ⇒ `VI-006` still raised, still no observation),
+`..._corrected_match_is_not_a_conflict` (control: correcting to the stored value
+promotes normally).
+
+## IV.2 P3-R07 — conflicting printed references were silently reduced to the first
+
+**Root cause.** `field_parser.parse_pages` set `document_patient_ref` only when it
+was still `None`, using a single `search`. A document printing `Ref: DEMO-A-001`
+followed by `Ref: DEMO-B-001` therefore looked like a clean patient-A document and
+`VI-004` never fired. The inline comment claimed the mismatch "surfaces", which was
+true only for the `B-then-A` order — the wrong thing to rely on.
+
+A second, subtler problem: the single column cannot express the difference between
+*"the document named nobody"* (not a contradiction, so `VI-004` must not fire) and
+*"the document named two different people"* (an identity conflict that must fail
+closed). Both were `None`.
+
+**Fix.**
+
+| Location | Change |
+|---|---|
+| `field_parser.py` | `ParseResult.patient_refs_seen` collects **every distinct** reference across lines and pages via `finditer`; `_finalize_identity` resolves the claim — one ⇒ that value, zero ⇒ no claim, **two or more ⇒ `None`** (unattributable). No "first wins", no majority vote |
+| `db/models.py` + migration `0003` | additive `document.document_patient_refs VARCHAR(240)` — the distinct set as compact JSON, so the conflict survives the request |
+| `intake.py` | persists the single claim and the set separately |
+| `quality.evaluate_identity` | a stored set with more than one distinct entry raises `VI-004` **before** the pointer is consulted |
+
+`VI-004` still blocks every decision (`409 E_VI_004_UNRESOLVED`) and never
+auto-resolves, so a multi-reference document reaches zero decisions and zero
+observations. No implicit re-attribution and no guess: the only way out remains an
+explicit re-attribution, which is out of scope and needs owner approval.
+
+**Tests.** `test_p3_r07_two_distinct_references_raise_vi_004` (parameterised
+`A→B` **and** `B→A`: `VI-004`, `document_patient_ref is NULL`, every decision
+`409`, zero observations, zero `fact_verification` rows),
+`..._references_on_separate_pages_fail_closed`,
+`..._repeated_same_reference_is_accepted` (control: A twice is fine),
+`..._single_reference_control_still_maps` (control: unchanged behaviour).
+
+## IV.3 P3-R08 — the byte cap was checked after the payload was materialized
+
+**Root cause.** `upload.py` called `file.file.read()` with no argument, so the whole
+multipart part was read into memory before `accept_upload → validate_upload`
+consulted `max_upload_bytes`. Starlette may spool the part to disk first, which
+bounds *disk* use but not the single `bytes` object the handler builds.
+
+**Fix.** `_read_bounded(stream, max_bytes=...)` reads exactly `max_bytes + 1` —
+the smallest read that can still separate "exactly at the cap" (allowed) from "one
+byte over" (refused) — and raises the documented `413 E_FILE_TOO_LARGE` from the
+read, before parsing, hashing or storage. The route is now one call to that helper.
+Keep-alive connections stay safe because the refusal happens inside the request
+handler, not by dropping the socket.
+
+**Tests.** `test_p3_r08_bounded_read_never_requests_the_whole_stream` (an
+argument-recording stream proves the only read is `cap+1`; a regression to
+`read()` fails here), `..._refuses_before_returning_oversize_bytes` (413 raised at
+the read, `ApiError.code is E_FILE_TOO_LARGE`),
+`..._accepts_exactly_the_cap` (boundary: `cap` accepted, `cap+1` refused),
+`..._oversized_payload_is_rejected_with_413` (end-to-end over HTTP: 413 and **no**
+document row, **no** facts, **no** stored file),
+`test_p3_r08_bad_multipart_does_not_leak_a_document` (no file part ⇒ 400/422 and
+no row).
+
+*Note on scope:* the R08 test asserts the helper the route calls plus the HTTP
+outcome, rather than monkeypatching Starlette internals. The first version did
+patch `UploadFile.read` and passed vacuously because the handler reads
+`file.file` — the same class of mistake as R07's "first match wins", so it is
+recorded here rather than quietly replaced.
+
+## IV.4 Secondary — `(document_id, issue_type)` had no database-level guarantee
+
+**Assessment: real, and worth fixing at the schema rather than documenting away.**
+`sync_issues` upserts on `(document_id, issue_type)`, but the table only carried
+`ix_vi_document_state` (non-unique). Two sessions that both read "no row" could
+each insert, producing two blockers for one document — and the read path would then
+return duplicate issues with different ids, exactly the R04 symptom the persistence
+was meant to remove. A "single-writer" guarantee is true today but is an implicit
+property, not an enforced one; an explicit one costs a unique index.
+
+**Fix (minimal, P3-scope only).** `ux_vi_document_type` on
+`(document_id, issue_type)`, added to both `VerificationIssue.__table_args__` and
+migration `0003` (created in `upgrade`, dropped first in `downgrade`). The
+migration is still a P3 draft in this PR, so no new revision is needed and no
+deployed schema is broken.
+
+**Documented residual:** `document_id` is nullable (the future workflow-run flavour
+of an issue), and SQLite treats NULLs as distinct, so run-scoped issues are not
+constrained by this index. That is acceptable for P3 — nothing writes them yet — and
+is stated rather than hidden.
+
+**Tests.** `test_vi_document_issue_type_is_unique_in_the_database` inserts through
+**raw SQL** against a real document id so only the unique index can reject the
+second row (the first version of this test failed on a foreign key and proved
+nothing — rewritten for that reason), and
+`test_vi_document_type_index_is_declared_unique` guards the metadata pair.
+`test_issue_sync_is_idempotent_across_two_sessions` is the positive control.
+
+## IV.5 Gate results at this head
+
+```
+$ python -m pytest backend/tests          → 506 passed in 65.09s   (was 488)
+$ python -m ruff check .                  → All checks passed!
+$ python -m ruff format --check .         → 97 files already formatted
+$ python scripts/python/check_openapi.py  → PASS (16 paths / 17 operations, 41 schemas)
+$ python scripts/python/scan_repository.py → PASS (185 tracked files)
+```
+
+Alembic, five states, driven with real `upgrade`/`downgrade` and asserted by
+`check_alembic_smoke.py`:
+
+| State | How produced | Result |
+|---|---|---|
+| `head` | `upgrade head` | PASS |
+| `p2` | `upgrade head` → `downgrade 0002_p2_patient_domain` | PASS |
+| `p1` | `upgrade head` → `downgrade 0001_p1_baseline` | PASS |
+| `base` | `upgrade head` → `downgrade base` | PASS |
+| `head` again | `head → base → head` round trip | PASS |
+
+`test_migration_matches_the_orm_metadata` (P2) passes, so the new column and the
+new unique index are present in **both** the migration and the declarative
+metadata — no drift.
+
+**No guarantee was weakened.** `MAP-01`, the one-measurement-tuple rule, the
+append-only decision log, `VI-004`'s refusal of every decision, and the
+"conflicts never promote silently" policy are all still enforced; R06 made the
+first and the last of those *reachable* again in the corrected-parseable case.
+`ci.yml`, `data/synthetic/*.json`, `docs/contracts/*`, `frontend/**`,
+`scripts/powershell/**`, `AGENTS.md`, `db/session.py`, `db/base.py`,
+`migrations/env.py`, `services/seed.py`, `core/clock.py`, `core/policies.py`,
+`services/audit.py` are untouched.
+
+## IV.6 Still NOT RUN — owner Windows required
+
+Unchanged and **not claimed**:
+
+1. Hash-locked Python 3.12 `pip install --require-hashes`.
+2. **Real Tesseract**: `OCR-LIVE-01`, `GOLD-EX-05..08/11`, `GET /health` engine
+   probe. The R01 OCR regression still uses a **mocked** engine.
+3. `pypdfium2` rasterization on Windows (D-01).
+4. `test_all.ps1`; Alembic round trip against a Windows-path SQLite file.
+5. CI on the new head is the owner's to confirm — this sandbox cannot read
+   GitHub Actions check results (`gh pr checks` returns 403 for this integration).
+
+## IV.7 Status after this round
+
+**P3 remains `IN_REVIEW`.** Three blocking findings and the secondary uniqueness
+point addressed with tests that failed first (or were shown to pass vacuously and
+rewritten). No PASS, no self-approval, no merge, no P4/P5.

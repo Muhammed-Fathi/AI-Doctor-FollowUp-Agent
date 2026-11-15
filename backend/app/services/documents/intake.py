@@ -14,6 +14,7 @@ The intake order is fixed and each step is a separate, testable function.
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 
@@ -358,10 +359,20 @@ def run_extraction(db: Session, *, document: Document, settings: Settings) -> Ex
     parse_result = parse_pages(pages)
 
     # The document's own identity claim, stored once so ``VI-004`` can be
-    # evaluated on every read without re-parsing the file. A document that
-    # printed no reference keeps ``None``.
-    if parse_result.document_patient_ref is not None:
-        document.document_patient_ref = parse_result.document_patient_ref
+    # evaluated on every read without re-parsing the file.
+    #
+    # **R07:** the single reference and the *set* of references are stored
+    # separately, because they answer different questions. One distinct value ->
+    # ``document_patient_ref`` is that value. Several distinct values -> the
+    # document is unattributable: ``document_patient_ref`` stays ``None`` and the
+    # conflict is recorded in ``document_patient_refs`` so ``VI-004`` can fail
+    # closed instead of silently trusting whichever reference came first.
+    document.document_patient_ref = parse_result.document_patient_ref
+    document.document_patient_refs = (
+        json.dumps(list(parse_result.patient_refs_seen), separators=(",", ":"))
+        if parse_result.patient_refs_seen
+        else None
+    )
 
     stored = _persist_facts(
         db,

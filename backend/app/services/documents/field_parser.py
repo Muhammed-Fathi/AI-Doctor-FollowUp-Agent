@@ -102,15 +102,33 @@ class ParseResult:
     """The full parse outcome for one document's pages."""
 
     facts: list[CandidateFact] = field(default_factory=list)
-    #: The synthetic patient reference printed in the document, if one was
-    #: readable (``DEMO-A-001``). ``None`` means the document made no claim; it
-    #: is **not** treated as agreement with the uploader (``VI-004`` semantics).
+    #: The **single** synthetic patient reference printed in the document, if one
+    #: was readable (``DEMO-A-001``). ``None`` means either that the document made
+    #: no claim, or that it made **more than one conflicting claim** — the two are
+    #: indistinguishable downstream on purpose, because both mean "this document
+    #: cannot be attributed". ``None`` is **not** treated as agreement with the
+    #: uploader (``VI-004`` semantics).
     #:
     #: This is deliberately not a ``CandidateFact``: it is document identity, not
     #: a reported measurement, so it must never be verified, corrected or mapped
     #: by a doctor. Storing it separately is what keeps "who this report is about"
     #: out of the fact-verification surface.
     document_patient_ref: str | None = None
+    #: **R07:** every distinct reference printed anywhere in the document, in
+    #: first-seen order. ``len(...) > 1`` is an identity conflict that must fail
+    #: closed; it is recorded rather than discarded so the reason is inspectable.
+    patient_refs_seen: tuple[str, ...] = ()
+
+    @property
+    def identity_is_ambiguous(self) -> bool:
+        """Return ``True`` when the document printed conflicting references.
+
+        A document that names two different patients is not "the first one wins":
+        it is a document this demo cannot attribute at all, and it must raise
+        ``VI-004`` whatever order the references appear in (``VI-03``).
+        """
+        return len(self.patient_refs_seen) > 1
+
     #: True when instruction-like text was seen. Recorded, never acted on.
     untrusted_content_detected: bool = False
 
@@ -323,13 +341,16 @@ def parse_pages(pages: list[PageText]) -> ParseResult:
         if _looks_like_instruction(page.text):
             result.untrusted_content_detected = True
 
-        # The first readable reference wins. A document that prints two different
-        # references is not one this demo can attribute, so it keeps the first and
-        # the mismatch surfaces as ``VI-004`` against the uploader.
-        if result.document_patient_ref is None:
-            ref_match = _PATIENT_REF.search(page.text)
-            if ref_match is not None:
-                result.document_patient_ref = ref_match.group("ref").upper()
+        # **R07:** collect *every* distinct reference, across lines and pages.
+        # Taking only the first match silently reduced an ``A then B`` document to
+        # patient A, so the mismatch never surfaced. A document that prints two
+        # different references is one this demo cannot attribute, so it ends with
+        # ``document_patient_ref = None`` and raises ``VI-004`` regardless of the
+        # order the references appear in. No reference is preferred or guessed.
+        for ref_match in _PATIENT_REF.finditer(page.text):
+            seen = ref_match.group("ref").upper()
+            if seen not in result.patient_refs_seen:
+                result.patient_refs_seen = (*result.patient_refs_seen, seen)
 
         for candidate in (
             *_date_fact(page),
@@ -337,10 +358,26 @@ def parse_pages(pages: list[PageText]) -> ParseResult:
             *_reference_fact(page),
         ):
             if len(result.facts) >= MAX_FACTS:
+                _finalize_identity(result)
                 return result
             result.facts.append(candidate)
 
+    _finalize_identity(result)
     return result
+
+
+def _finalize_identity(result: ParseResult) -> None:
+    """Resolve the document's identity claim from every reference seen (R07).
+
+    Exactly one distinct reference -> that reference. Zero -> no claim. Two or
+    more -> ``None`` (unattributable), which ``evaluate_identity`` turns into
+    ``VI-004``. There is no "first wins" and no majority vote: identity is not
+    something this demo may guess.
+    """
+    if len(result.patient_refs_seen) == 1:
+        result.document_patient_ref = result.patient_refs_seen[0]
+    else:
+        result.document_patient_ref = None
 
 
 def page_text_for_span(pages: list[PageText], page_index: int) -> str:

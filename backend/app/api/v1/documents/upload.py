@@ -35,6 +35,7 @@ from app.api.v1.auth.dependencies import (
 from app.core.enums import AuditOutcome, DocumentMimeType
 from app.core.errors import (
     DUPLICATE_DOCUMENT_DETAIL,
+    FILE_TOO_LARGE_DETAIL,
     ApiError,
     ErrorCode,
     document_error,
@@ -73,6 +74,26 @@ _RESPONSES: dict[int | str, dict[str, object]] = {
 _DECLARED_TYPES = frozenset(mime.value for mime in DocumentMimeType)
 
 
+def _read_bounded(stream, *, max_bytes: int) -> bytes:
+    """Read at most ``max_bytes + 1`` from ``stream``, refusing an oversize part.
+
+    **R08.** ``stream.read()`` with no argument materializes the *entire* multipart
+    part in memory before ``accept_upload`` ever looks at its length, so a
+    deliberately huge body would be fully buffered before being rejected. Reading
+    ``max_bytes + 1`` is the smallest read that can still distinguish the two
+    boundary cases — exactly at the cap is allowed, one byte over is refused — and
+    nothing larger is ever held.
+
+    Raises the documented ``413 E_FILE_TOO_LARGE`` for anything past the cap, from
+    here rather than from the later byte validation, so the refusal happens before
+    parsing, hashing or storage. No row and no file are created (D-10).
+    """
+    payload = stream.read(max_bytes + 1)
+    if len(payload) > max_bytes:
+        raise document_error(ErrorCode.FILE_TOO_LARGE, FILE_TOO_LARGE_DETAIL)
+    return payload
+
+
 @router.post(
     "/upload",
     response_model=DocumentUploadResponse,
@@ -107,7 +128,7 @@ def upload_document(
             "declared_type must be application/pdf, image/png or image/jpeg.",
         )
 
-    payload = file.file.read()
+    payload = _read_bounded(file.file, max_bytes=settings.max_upload_bytes)
     outcome = accept_upload(
         db,
         patient_id=patient_id,

@@ -91,6 +91,7 @@ def upgrade() -> None:
         ),
         sa.Column("failure_code", sa.String(length=48), nullable=True),
         sa.Column("document_patient_ref", sa.String(length=40), nullable=True),
+        sa.Column("document_patient_refs", sa.String(length=240), nullable=True),
         sa.Column("uploaded_at", sa.String(length=20), nullable=False),
         sa.CheckConstraint(
             "mime_type IN ('application/pdf', 'image/png', 'image/jpeg')",
@@ -245,6 +246,11 @@ def upgrade() -> None:
     with op.batch_alter_table("verification_issue", schema=None) as batch_op:
         batch_op.create_index("ix_vi_document_state", ["document_id", "state"], unique=False)
         batch_op.create_index("ix_vi_run", ["workflow_run_id"], unique=False)
+        # Identity key of the issue lifecycle. Without it two concurrent sessions
+        # that both see "no row" insert two blockers for one document.
+        batch_op.create_index(
+            "ux_vi_document_type", ["document_id", "issue_type"], unique=True
+        )
 
     # --- P2's deliberately deferred column, added additively -----------------
     # No table rebuild: nullable column + inline REFERENCES, so every existing
@@ -278,6 +284,7 @@ def downgrade() -> None:
     op.execute("ALTER TABLE observation DROP COLUMN source_fact_id")
 
     with op.batch_alter_table("verification_issue", schema=None) as batch_op:
+        batch_op.drop_index("ux_vi_document_type")
         batch_op.drop_index("ix_vi_run")
         batch_op.drop_index("ix_vi_document_state")
 

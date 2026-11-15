@@ -85,10 +85,20 @@ def _existing_decision(db: Session, fact_id: str) -> FactVerification | None:
 
 
 def _document_fact_views(db: Session, document_id: str) -> list[VerifiedFactView]:
-    """Return every fact of ``document_id`` as a mapping view."""
+    """Return the *active* facts of ``document_id`` as mapping views.
+
+    **R06:** a superseded original (``rejected`` because a correction replaced it)
+    is deliberately absent. ``decide_mapping`` only reads ``verified`` facts, so
+    leaving it out changes nothing for it — but the same helper feeds the anchor
+    logic, and counting a replaced reading as a second measurement tuple is what
+    broke parsing after a correction.
+    """
     rows = db.execute(
         select(ExtractedFact)
-        .where(ExtractedFact.document_id == document_id)
+        .where(
+            ExtractedFact.document_id == document_id,
+            ExtractedFact.verification_status != FactVerificationStatus.REJECTED.value,
+        )
         .order_by(ExtractedFact.page_index, ExtractedFact.char_start, ExtractedFact.id)
     ).scalars()
     return [
@@ -140,6 +150,32 @@ def _recompute_document_status(db: Session, document: Document) -> str:
     return document.extraction_status
 
 
+def _active_value_candidates(db: Session, document_id: str) -> list[ExtractedFact]:
+    """Return the ``value`` facts that still describe the document's measurement.
+
+    **R06:** only a *current* reading qualifies. A fact that a doctor superseded
+    (``rejected`` by a correction) is history: it is retained for lineage, but it
+    is no longer one of the document's measurement tuples. Counting it made a
+    corrected-but-parseable document look like a two-value document, which broke
+    the anchor and silently dropped a valid mapping.
+
+    ``pending`` facts are excluded too, so an undecided document has no anchor and
+    cannot be promoted before its facts are decided (``VI-002``).
+    """
+    return list(
+        db.execute(
+            select(ExtractedFact)
+            .where(
+                ExtractedFact.document_id == document_id,
+                ExtractedFact.field_name == FactField.VALUE.value,
+                ExtractedFact.normalized_value.is_not(None),
+                ExtractedFact.verification_status != FactVerificationStatus.REJECTED.value,
+            )
+            .order_by(ExtractedFact.page_index, ExtractedFact.char_start, ExtractedFact.id)
+        ).scalars()
+    )
+
+
 def _document_measurement_anchor(db: Session, document_id: str) -> ExtractedFact | None:
     """Return the single fact that owns the document's measurement, if any.
 
@@ -148,18 +184,10 @@ def _document_measurement_anchor(db: Session, document_id: str) -> ExtractedFact
     verified last" would create one observation per verified field — a real bug
     this design avoids by resolving the anchor deterministically from the facts
     themselves, independent of decision order.
+
+    Only the *active* (unrejected) value facts are considered (R06).
     """
-    candidates = list(
-        db.execute(
-            select(ExtractedFact)
-            .where(
-                ExtractedFact.document_id == document_id,
-                ExtractedFact.field_name == FactField.VALUE.value,
-                ExtractedFact.normalized_value.is_not(None),
-            )
-            .order_by(ExtractedFact.page_index, ExtractedFact.char_start, ExtractedFact.id)
-        ).scalars()
-    )
+    candidates = _active_value_candidates(db, document_id)
     return candidates[0] if len(candidates) == 1 else None
 
 
