@@ -1539,7 +1539,7 @@ byte-identical.
    affects the exit code, and with no engine it is reported `NOT RUN` like the rest.
 
 `backend/tests/p3/test_windows_ocr_acceptance.py` grew from 7 to 15 tests
-(P3 directory: 151 collected tests; full suite 534 passed), covering
+(P3 directory: 164 collected tests; full suite 547 passed), covering
 the missing-wheel path, the `_guarded` conversion, the 07/08 accounting, the owner's
 real `E:\DEPI` paths, the detached-worktree/SHA guard, the "do not skip the
 frontend" rule and the `app.db` read-only guarantee.
@@ -1574,6 +1574,43 @@ tree and requires its own path-specific authorization.
 
 Windows acceptance must be **repeated on the corrected SHA**; this document records a
 correction, not an acceptance.
+
+## V.10 R11 — the pytesseract 0.3.13 integration
+
+Review [`5913283150`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#pullrequestreview-5913283150). Owner Windows evidence at `9ee6b4a`: the acceptance probe
+exited **2** with `ENV-01`, `ENV-02` and `PDFIUM-01` **PASS**, `OCR-ENGINE` **FAIL**, and
+six dependent OCR gates **NOT RUN**. The exception was
+`TypeError: get_tesseract_version() got an unexpected keyword argument 'tesseract_cmd'`,
+with Tesseract 5.4.0 and `eng.traineddata` confirmed installed.
+
+This was **production** code, not a probe defect. Two distinct faults in
+`backend/app/services/documents/ocr.py`:
+
+| # | Fault | Effect |
+|---|---|---|
+| 1 | `engine_version` called `pytesseract.get_tesseract_version(tesseract_cmd=...)` | pytesseract 0.3.13 takes **no arguments**; every version read raised `TypeError`. `engine_version` is used by `run_ocr` (for `tool_version`), by `/health`, and by the probe's `OCR-ENGINE` gate |
+| 2 | `run_ocr` resolved `executable` and then **ignored it** | `image_to_string`/`image_to_data` shell out to the module global `pytesseract.pytesseract.tesseract_cmd`. An explicit `TESSERACT_CMD` with nothing on `PATH` could not actually run OCR, and a version could be recorded for a different binary than the one that produced the text |
+
+**Fix.** A `_engine_selected` context manager installs the resolved executable into
+pytesseract's module global for the duration of the call and always restores the
+previous value. `engine_version` reads the version through it with **no keyword
+arguments**; `run_ocr` runs both `image_to_string` and `image_to_data` inside it, then
+reads the version from the same executable — so the recorded `tool_version` cannot name
+a binary that did not produce the text.
+
+**Provenance and safety preserved:** no dependency pin changed, no exception widened,
+no fabricated version or confidence. `get_tesseract_version` failure still yields
+``None``; a missing engine still raises `OcrUnavailableError` (mapped to
+`E_DEPENDENCY_MISSING`); unreported confidence is still ``None``, never ``0.0``.
+
+**Tests (13, `test_p3_ocr_integration.py`).** Written first; 8 failed against `9ee6b4a`,
+including one that reproduces the owner's exact `TypeError` and a real-subprocess
+end-to-end test that runs a generated engine binary through pytesseract's genuine code
+path (argv, output files, TSV parsing, `--version`). Both explicit-path and
+`PATH`-discovery modes are covered, plus a guard that the global is restored after use so
+one document's engine cannot leak into the next request.
+
+Windows live OCR is still **NOT RUN**; the owner must repeat acceptance.
 
 ## V.7 Status
 

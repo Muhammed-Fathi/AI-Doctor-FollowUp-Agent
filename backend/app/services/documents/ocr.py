@@ -18,8 +18,10 @@ owner's Windows machine.
 
 from __future__ import annotations
 
+import contextlib
 import re
 import shutil
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pytesseract
@@ -70,15 +72,46 @@ def resolve_engine(tesseract_cmd: str | None) -> str:
     return discovered
 
 
+@contextlib.contextmanager
+def _engine_selected(executable: str) -> Iterator[None]:
+    """Point pytesseract at ``executable`` for the duration of the block.
+
+    pytesseract 0.3.13 keeps the binary in a **module global**
+    (``pytesseract.pytesseract.tesseract_cmd``) and every call —
+    ``get_tesseract_version()``, ``image_to_string()``, ``image_to_data()`` — reads it.
+    None of them accepts a path argument, so a resolved ``executable`` has no effect
+    unless it is installed here first. This module previously resolved the path and
+    then ignored it, so an explicit ``TESSERACT_CMD`` with nothing on ``PATH`` could
+    not actually run OCR.
+
+    The previous value is always restored, because leaking one document's engine into
+    the next request would make provenance report a version that did not produce the
+    text.
+    """
+    previous = pytesseract.pytesseract.tesseract_cmd
+    pytesseract.pytesseract.tesseract_cmd = executable
+    try:
+        yield
+    finally:
+        pytesseract.pytesseract.tesseract_cmd = previous
+
+
 def engine_version(tesseract_cmd: str | None) -> str | None:
     """Return the engine's self-reported version, or ``None`` when unavailable.
 
     Recorded on ``extraction_attempt.tool_version`` at execution time and never
     claimed in advance.
+
+    ``get_tesseract_version()`` takes **no arguments** in the pinned pytesseract
+    0.3.13 — passing ``tesseract_cmd=`` raised
+    ``TypeError: get_tesseract_version() got an unexpected keyword argument``, which
+    is what broke the Windows acceptance run. The version is therefore read through
+    :func:`_engine_selected`, which sets the global the function actually consults.
     """
     try:
         executable = resolve_engine(tesseract_cmd)
-        version = str(pytesseract.get_tesseract_version(tesseract_cmd=executable))
+        with _engine_selected(executable):
+            version = str(pytesseract.get_tesseract_version())
     except (OcrUnavailableError, OSError, RuntimeError, pytesseract.TesseractNotFoundError):
         return None
     return version
@@ -137,22 +170,27 @@ def run_ocr(
     prepared = preprocess(image, preprocessing)
 
     config = f"--psm 6 -l {language}"
-    text = pytesseract.image_to_string(prepared, lang=language, config=config, timeout=20)
-
     confidence: float | None = None
-    try:
-        data = pytesseract.image_to_data(
-            prepared,
-            lang=language,
-            config=config,
-            output_type=pytesseract.Output.DICT,
-            timeout=20,
-        )
-        confidence = _mean_confidence(data)
-    except (OSError, RuntimeError, pytesseract.TesseractError):
-        # Confidence is optional telemetry; text extraction already succeeded.
-        confidence = None
+    with _engine_selected(executable):
+        # Both calls must run inside the selection: pytesseract shells out to the
+        # module-global command, so without this the resolved path would be ignored.
+        text = pytesseract.image_to_string(prepared, lang=language, config=config, timeout=20)
 
+        try:
+            data = pytesseract.image_to_data(
+                prepared,
+                lang=language,
+                config=config,
+                output_type=pytesseract.Output.DICT,
+                timeout=20,
+            )
+            confidence = _mean_confidence(data)
+        except (OSError, RuntimeError, pytesseract.TesseractError):
+            # Confidence is optional telemetry; text extraction already succeeded.
+            confidence = None
+
+    # Read the version from the same executable that produced the text, so the
+    # recorded provenance cannot name a different binary.
     return OcrResult(
         text=text,
         confidence=confidence,
