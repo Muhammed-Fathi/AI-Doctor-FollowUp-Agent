@@ -94,6 +94,11 @@ def _git_head() -> str | None:
     return completed.stdout.strip() or None
 
 
+#: Environment variables the ING-02 gate overrides; snapshotted and restored in
+#: ``finally`` so the probe never leaks its temporary configuration into the process.
+_PROBE_ENV_KEYS = ("DATABASE_URL", "APP_ENV", "UPLOAD_DIR", "DEMO_SEED_PASSWORD")
+
+
 def _verdicts_for(results: list[Result], gate: str) -> list[Result]:
     """Return the rows already recorded for ``gate``."""
     return [row for row in results if row.gate == gate]
@@ -541,6 +546,12 @@ def gate_api_ocr_upload(results: list[Result], *, engine_present: bool) -> None:
 
     tmp = tempfile.mkdtemp(prefix="p3-accept-")
     database_url = ""
+    # Bound before the ``try`` so ``finally`` can always reach it, even when the body
+    # fails before the engine is created.
+    engine = None
+    # Snapshot the overrides this gate mutates: the owner may legitimately have any of
+    # these set in their shell, and the probe must leave the process as it found it.
+    saved_env = {name: os.environ.get(name) for name in _PROBE_ENV_KEYS}
     try:
         from fastapi.testclient import TestClient
 
@@ -549,7 +560,8 @@ def gate_api_ocr_upload(results: list[Result], *, engine_present: bool) -> None:
         from app.services.seed import seed_demo_data
 
         db_path = Path(tmp) / "accept.db"
-        os.environ["DATABASE_URL"] = f"sqlite:///{db_path.as_posix()}"
+        database_url = f"sqlite:///{db_path.as_posix()}"
+        os.environ["DATABASE_URL"] = database_url
         os.environ["APP_ENV"] = "test"
         os.environ["UPLOAD_DIR"] = str(Path(tmp) / "uploads")
         os.environ["DEMO_SEED_PASSWORD"] = os.environ.get(
@@ -558,6 +570,7 @@ def gate_api_ocr_upload(results: list[Result], *, engine_present: bool) -> None:
 
         from app.core.config import get_settings, reset_settings_cache
 
+        reset_settings_cache()
         settings = get_settings()
 
         from alembic import command
@@ -687,18 +700,37 @@ def gate_api_ocr_upload(results: list[Result], *, engine_present: bool) -> None:
         # report any failure under its own identifier rather than as a second verdict
         # for this gate.
         teardown_errors: list[str] = []
+        # Dispose the engine this gate created. Closing a Session does not release the
+        # engine's pooled SQLite handle, and on Windows that handle is exactly what makes
+        # deleting ``accept.db`` fail with ``PermissionError [WinError 32]``.
+        if engine is not None:
+            try:
+                engine.dispose()
+            except Exception as error:
+                teardown_errors.append(f"standalone engine: {type(error).__name__}: {error}")
+        # Then the cached engine used by the app's request path (a different pool).
+        try:
+            from app.db.session import dispose_engines
+
+            dispose_engines(database_url)
+        except Exception as error:
+            teardown_errors.append(f"cached engine: {type(error).__name__}: {error}")
+        # Restore the environment before anything else uses it, then drop the settings
+        # cache so the next reader re-reads the restored values.
+        try:
+            for name, previous in saved_env.items():
+                if previous is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = previous
+        except Exception as error:  # pragma: no cover - defensive
+            teardown_errors.append(f"environment restore: {type(error).__name__}: {error}")
         try:
             from app.core.config import reset_settings_cache
 
             reset_settings_cache()
         except Exception as error:  # pragma: no cover - defensive
             teardown_errors.append(f"settings cache: {type(error).__name__}: {error}")
-        try:
-            from app.db.session import dispose_engines
-
-            dispose_engines(database_url or os.environ.get("DATABASE_URL", ""))
-        except Exception as error:
-            teardown_errors.append(f"engine disposal: {type(error).__name__}: {error}")
         try:
             shutil.rmtree(tmp)
         except PermissionError as error:

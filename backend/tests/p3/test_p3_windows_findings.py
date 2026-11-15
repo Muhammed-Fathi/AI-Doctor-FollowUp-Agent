@@ -387,35 +387,144 @@ def test_every_gate_emits_at_most_one_row_in_a_full_probe_run(monkeypatch):
     assert len(identifiers) == len(set(identifiers))
 
 
-def test_cleanup_closes_every_engine_so_the_database_can_be_removed(tmp_path):
-    """The engine cache must not keep a temporary SQLite file open.
+def test_cleanup_releases_every_pool_not_just_the_file(tmp_path):
+    """Issue 3: ``unlink()`` is not proof — assert the pools are empty.
 
-    Windows refuses to delete a file that still has an open handle (``WinError 32``),
-    so a cached engine holding a pooled connection breaks cleanup there while passing on
-    Linux. The helper must dispose every engine for the URL and clear the cache.
+    Unix allows unlinking a file that still has open handles, so the previous version of
+    this test passed while the defect was live. ``pool.checkedin() == 0`` is the
+    platform-independent statement of "no SQLite handle survives", which is what Windows
+    actually enforces when deleting the file.
     """
+    import subprocess
+    import sys
 
-    from sqlalchemy import text
-
-    from app.db.session import _engine_for_url, create_db_engine, dispose_engines
-
+    script = tmp_path / "probe_cleanup.py"
     db_path = tmp_path / "accept.db"
-    url = f"sqlite:///{db_path.as_posix()}"
+    script.write_text(
+        f"""
+import sys
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
-    engine = _engine_for_url(url)
-    with engine.connect() as connection:
-        connection.execute(text("CREATE TABLE t (x integer)"))
+from app.db.session import _engine_for_url, create_db_engine, dispose_engines
 
-    # A second, separately created engine must also be released by the helper.
-    standalone = create_db_engine(url)
-    with standalone.connect() as connection:
-        connection.execute(text("INSERT INTO t VALUES (1)"))
+url = "sqlite:///{db_path.as_posix()}"
 
-    dispose_engines(url)
+# The gate does both: a standalone engine, and the cached one the app path uses.
+standalone = create_db_engine(url)
+with Session(standalone) as session:
+    session.execute(text("CREATE TABLE t (x integer)"))
+    session.commit()
+cached = _engine_for_url(url)
+with cached.connect() as connection:
+    connection.execute(text("INSERT INTO t VALUES (1)"))
 
-    # No handle remains: the file can be removed and no checkpoint is pending.
-    db_path.unlink()
-    assert not db_path.exists()
+print("standalone_before", standalone.pool.checkedin())
+print("cached_before", cached.pool.checkedin())
+
+# The fix under test.
+standalone.dispose()
+dispose_engines(url)
+
+print("standalone_after", standalone.pool.checkedin())
+print("cached_after", cached.pool.checkedin())
+print("checked_out_after", standalone.pool.checkedout() + cached.pool.checkedout())
+sys.exit(0)
+""",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "PYTHONPATH": str(Path(__file__).resolve().parents[3] / "backend"),
+            "HOME": str(tmp_path),
+        },
+        check=False,
+        timeout=120,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    values = dict(line.split() for line in completed.stdout.splitlines() if len(line.split()) == 2)
+    # Both pools held a handle before cleanup — otherwise the test proves nothing.
+    assert int(values["standalone_before"]) > 0
+    assert int(values["cached_before"]) > 0
+    # After the fix, neither pool retains a connection.
+    assert int(values["standalone_after"]) == 0, "standalone engine still holds a handle"
+    assert int(values["cached_after"]) == 0, "cached engine still holds a handle"
+    assert int(values["checked_out_after"]) == 0
+
+
+def test_probe_teardown_restores_the_environment(tmp_path):
+    """Issue 4: a full probe run must leave the process environment as it found it.
+
+    Runs the real probe in a subprocess with sentinel values and asserts they survive.
+    """
+    import subprocess
+    import sys
+
+    sentinels = {
+        "DATABASE_URL": "sqlite:///sentinel-do-not-touch.db",
+        "APP_ENV": "sentinel-env",
+        "UPLOAD_DIR": str(tmp_path / "sentinel-uploads"),
+        "DEMO_SEED_PASSWORD": "sentinel-password",
+    }
+    script = tmp_path / "run_probe.py"
+    script.write_text(
+        f"""
+import os, sys
+for key, value in {sentinels!r}.items():
+    os.environ[key] = value
+
+sys.path.insert(0, {str(Path(__file__).resolve().parents[3] / "scripts" / "python")!r})
+sys.argv = ["probe"]
+
+import importlib.util
+spec = importlib.util.spec_from_file_location(
+    "probe_r16", {str(PROBE)!r}
+)
+module = importlib.util.module_from_spec(spec)
+# Register before exec: the probe defines a dataclass, which needs a real module entry
+# in sys.modules or dataclasses raises AttributeError on __dict__.
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+
+results = []
+# engine_present=False takes the early return; use True so the body and finally run.
+try:
+    module.gate_api_ocr_upload(results, engine_present=True)
+except Exception as error:
+    print("gate raised", type(error).__name__, error)
+
+after = {{key: os.environ.get(key) for key in {sorted(sentinels)!r}}}
+print("ENV", after)
+""",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": "/usr/bin:/bin:/tmp/v/bin",
+            "PYTHONPATH": str(Path(__file__).resolve().parents[3] / "backend"),
+            "HOME": str(tmp_path),
+        },
+        check=False,
+        timeout=300,
+    )
+    line = next((row for row in completed.stdout.splitlines() if row.startswith("ENV ")), None)
+    assert line is not None, completed.stdout[-2000:] + completed.stderr[-2000:]
+
+    import ast
+
+    restored = ast.literal_eval(line[4:])
+    for key, value in sentinels.items():
+        assert restored[key] == value, f"{key} was not restored: {restored[key]!r}"
 
 
 def test_dispose_engines_is_safe_when_nothing_is_cached():
@@ -544,3 +653,170 @@ def test_a_preserved_ambiguous_token_and_a_substitution_are_distinguishable():
     # Different inputs, different evidence — so a reviewer can tell them apart later.
     assert ambiguous.raw_text != substituted.raw_text
     assert ambiguous.normalized_value != substituted.normalized_value
+
+
+# ==================================== R16: the cleanup fix was still incomplete
+#
+# The R15 fix disposed the *cached* engine, but the gate also creates its own
+# standalone engine via ``create_db_engine``. Closing a Session does not release that
+# engine's pooled SQLite handle, so ``accept.db`` stays locked on Windows.
+#
+# ``pool.checkedin() == 0`` is used as the assertion because it is platform
+# independent: on Windows a non-zero value is exactly the open file handle that causes
+# ``PermissionError [WinError 32]``. ``unlink()`` cannot be used as proof — Unix happily
+# unlinks a file that still has open handles, which is why the previous test passed
+# while the defect was live.
+
+
+def _pooled_engines(url: str) -> list:
+    """Return engines known to hold pooled connections for ``url``."""
+    from app.db.session import _engine_for_url
+
+    known = []
+    cached = _engine_for_url.cache_info()
+    assert cached is not None  # the cache exists
+    try:
+        engine = _engine_for_url(url)
+    except Exception:  # pragma: no cover - defensive
+        return known
+    known.append(engine)
+    return known
+
+
+def test_closing_a_session_does_not_release_the_standalone_engine_pool(tmp_path):
+    """Pins the premise of R16: a Session close leaves the pool holding a connection.
+
+    This is the fact the previous fix missed. It is asserted rather than assumed,
+    because the whole cleanup design depends on it.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.orm import Session
+
+    from app.db.session import create_db_engine
+
+    db_path = tmp_path / "accept.db"
+    url = f"sqlite:///{db_path.as_posix()}"
+    engine = create_db_engine(url)
+    try:
+        with Session(engine) as session:
+            session.execute(text("CREATE TABLE t (x integer)"))
+            session.commit()
+        # Session is closed, yet the pool still retains a live connection.
+        assert engine.pool.checkedin() > 0, (
+            "if this ever becomes 0, the Windows lock risk has changed"
+        )
+    finally:
+        engine.dispose()
+
+
+def test_disposing_the_standalone_engine_releases_every_connection(tmp_path):
+    """The remedy for issue 1: explicit ``dispose()`` drops the pool to zero."""
+    from sqlalchemy import text
+
+    from app.db.session import create_db_engine
+
+    db_path = tmp_path / "accept.db"
+    engine = create_db_engine(f"sqlite:///{db_path.as_posix()}")
+    with engine.connect() as connection:
+        connection.execute(text("CREATE TABLE t (x integer)"))
+    assert engine.pool.checkedin() > 0
+
+    engine.dispose()
+
+    assert engine.pool.checkedin() == 0
+    assert engine.pool.checkedout() == 0
+
+
+def test_dispose_engines_does_not_silently_leak_other_cached_engines(tmp_path):
+    """Issue 2: clearing the cache must not orphan engines for *other* URLs.
+
+    ``cache_clear()`` on its own evicts every entry without disposing it, so another
+    URL's engine keeps its pooled handle forever and can still be used — a silent leak
+    in a long-lived process.
+    """
+    from sqlalchemy import text
+
+    from app.db.session import _engine_for_url, dispose_engines
+
+    target = f"sqlite:///{(tmp_path / 'target.db').as_posix()}"
+    other = f"sqlite:///{(tmp_path / 'other.db').as_posix()}"
+
+    target_engine = _engine_for_url(target)
+    with target_engine.connect() as connection:
+        connection.execute(text("CREATE TABLE t (x integer)"))
+    other_engine = _engine_for_url(other)
+    with other_engine.connect() as connection:
+        connection.execute(text("CREATE TABLE u (y integer)"))
+
+    assert other_engine.pool.checkedin() > 0
+
+    dispose_engines(target)
+
+    # The target is gone from the cache and its pool is closed.
+    assert target_engine.pool.checkedin() == 0
+    # And the *other* engine was not silently leaked: either it was disposed, or it is
+    # still tracked by the cache (so a later call can dispose it). A bare
+    # ``cache_clear()`` would satisfy neither.
+    assert other_engine.pool.checkedin() == 0 or _engine_for_url(other) is other_engine
+
+
+def test_dispose_engines_releases_the_named_url_only(tmp_path):
+    """Disposing one URL must not touch an unrelated, still-cached engine's pool."""
+    from sqlalchemy import text
+
+    from app.db.session import _engine_for_url, dispose_engines
+
+    target = f"sqlite:///{(tmp_path / 'target.db').as_posix()}"
+    keep = f"sqlite:///{(tmp_path / 'keep.db').as_posix()}"
+
+    target_engine = _engine_for_url(target)
+    with target_engine.connect() as connection:
+        connection.execute(text("CREATE TABLE t (x integer)"))
+    keep_engine = _engine_for_url(keep)
+    with keep_engine.connect() as connection:
+        connection.execute(text("CREATE TABLE u (y integer)"))
+
+    dispose_engines(target)
+
+    assert target_engine.pool.checkedin() == 0, "the named URL must be released"
+    # An engine for a different URL is a different database: leaving it alone is correct
+    # and is what stops one test's cleanup from breaking another's pooling.
+    assert keep_engine.pool.checkedin() > 0
+
+
+# ------------------------------------------- probe ownership of the standalone engine
+
+
+def test_the_gate_owns_and_disposes_its_standalone_engine():
+    """The gate must keep a reference to its own engine and dispose it in teardown."""
+    source = PROBE.read_text(encoding="utf-8")
+    body = source[source.index("def gate_api_ocr_upload") : source.index("def main(")]
+
+    # The engine handle is bound to a name declared before the ``try`` so ``finally``
+    # can reach it even when the body fails early.
+    assert "engine = None" in body, "the engine handle must exist before the try block"
+    assert "engine = create_db_engine(" in body
+    assert "engine.dispose()" in body, "the standalone engine must be disposed"
+
+    finally_at = body.index("finally:")
+    standalone_dispose = body.index("engine.dispose()")
+    rmtree_at = body.index("shutil.rmtree(")
+    assert finally_at < standalone_dispose < rmtree_at, (
+        "dispose the standalone engine in finally, before removing the directory"
+    )
+
+
+def test_the_gate_restores_environment_overrides_on_every_path():
+    """Issue 4: the probe must not leak its temporary environment into the process."""
+    source = PROBE.read_text(encoding="utf-8")
+    body = source[source.index("def gate_api_ocr_upload") : source.index("def main(")]
+
+    for name in ("DATABASE_URL", "APP_ENV", "UPLOAD_DIR", "DEMO_SEED_PASSWORD"):
+        assert f'"{name}"' in body, f"{name} override is missing"
+
+    # A saved-snapshot + restore pattern, not a bare delete: the owner may legitimately
+    # have these set in their shell.
+    assert "saved_env" in body or "_saved" in body, "overrides must be snapshotted"
+    finally_at = body.index("finally:")
+    restore_at = body.index("os.environ", finally_at)
+    assert finally_at < restore_at, "restoration must happen in the finally block"

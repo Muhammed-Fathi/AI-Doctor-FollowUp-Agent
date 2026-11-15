@@ -1539,7 +1539,7 @@ byte-identical.
    affects the exit code, and with no engine it is reported `NOT RUN` like the rest.
 
 `backend/tests/p3/test_windows_ocr_acceptance.py` grew from 7 to 15 tests
-(P3 directory: 196 collected tests; full suite 579 passed), covering
+(P3 directory: 203 collected tests; full suite 586 passed), covering
 the missing-wheel path, the `_guarded` conversion, the 07/08 accounting, the owner's
 real `E:\DEPI` paths, the detached-worktree/SHA guard, the "do not skip the
 frontend" rule and the `app.db` read-only guarantee.
@@ -1730,6 +1730,41 @@ The owner's JSON contained **two** rows for ING-02: PASS, then FAIL with
 
 The owner's `data/runtime` database is never referenced; all state stays in the temporary
 directory.
+
+## V.13 R16 — the cleanup fix was still incomplete
+
+Review [`5913517645`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#pullrequestreview-5913517645). CI at `f376157` was **completed/success**, but source
+inspection found the R15 cleanup incomplete in four respects. All four were reproduced
+before being fixed.
+
+| # | Defect | Reproduction |
+|---|---|---|
+| 1 | The gate creates its **own** engine via `create_db_engine`, and nothing disposed it. Closing a `Session` does not release that engine's pooled SQLite handle | `pool.checkedin() == 1` after `with Session(...)` exits |
+| 2 | `dispose_engines` called `_engine_for_url.cache_clear()`, evicting **every** URL's engine *without disposing any*: other engines kept their pooled handles and stayed usable | another URL's engine still opened a connection after the call — a silent leak |
+| 3 | `db_path.unlink()` does not prove handles are closed; Unix unlinks open files, which is why the previous test passed while the defect was live | new test asserts `pool.checkedin() == 0` for both pools |
+| 4 | The gate overwrote `DATABASE_URL`/`APP_ENV`/`UPLOAD_DIR`/`DEMO_SEED_PASSWORD` and never restored them | subprocess test with sentinel values |
+
+**Fixes.**
+
+1. The gate binds `engine = None` *before* the `try` and disposes it in `finally`, before
+   the directory is removed.
+2. The engine cache became an explicit `dict` keyed by URL (`_ENGINE_CACHE`) supporting
+   per-URL eviction. `dispose_engines` now disposes **only** the named URL; other engines
+   keep their pools, so one caller's cleanup cannot disturb an unrelated database. Cache
+   bounding still disposes what it evicts, so it cannot leak either. The request path is
+   unchanged: one engine per URL, created lazily and reused.
+3. Cleanup order in `finally`: **dispose standalone engine → dispose cached engine →
+   restore environment → reset settings cache → remove directory**. Every step is
+   individually guarded and appended to `ING-02 teardown`, so a cleanup failure is still
+   reported separately and the gate keeps exactly one verdict.
+4. `saved_env` snapshots the four overrides and restores them (deleting a key that was
+   originally unset), then resets the settings cache so the next reader re-reads the
+   restored values.
+
+**Windows honesty.** No Windows machine was available, so the Windows-specific failure is
+**not** claimed as verified. `pool.checkedin() == 0` is asserted instead of `unlink()`,
+because a non-zero pool is precisely the open handle Windows refuses to delete. The owner's
+Windows re-run remains the authority.
 
 ## V.7 Status
 
