@@ -27,9 +27,33 @@ _PUBLIC = {"security": []}
 
 router = APIRouter(tags=["system"])
 
-#: Dependency components that are not implemented yet (P3/P5). They are reported
+#: Dependency components that are not implemented yet (P5). They are reported
 #: as ``not_configured`` — an honest state, never a fake ``ok``.
 _UNIMPLEMENTED: DependencyState = "not_configured"
+
+
+def _tesseract_state() -> DependencyState:
+    """Report the local OCR engine truthfully.
+
+    Three states, each meaning exactly one thing:
+
+    * ``ok`` — an engine was located and reported a version;
+    * ``not_configured`` — no engine path is configured on this host, so OCR was
+      never attempted (the default for a sandbox or CI run);
+    * ``unavailable`` — a path *is* configured but the engine could not be run.
+
+    The probe never raises: liveness must not fail because a local binary is
+    missing (``API_CONTRACT.md`` §2.1). It also never claims ``ok`` without having
+    asked the engine for its version, so a stale config cannot produce a false
+    positive.
+    """
+    settings = get_settings()
+    if not settings.tesseract_cmd:
+        return "not_configured"
+
+    from app.services.documents.ocr import engine_version
+
+    return "ok" if engine_version(settings.tesseract_cmd) else "unavailable"
 
 
 @router.get(
@@ -51,7 +75,7 @@ def get_health() -> Health:
         version=APP_VERSION,
         db=db_state,
         ollama=_UNIMPLEMENTED,  # P5: OllamaProvider health probe
-        tesseract=_UNIMPLEMENTED,  # P3: OCR engine availability probe
+        tesseract=_tesseract_state(),
         disclaimer=DEMO_NOTICE,
     )
 

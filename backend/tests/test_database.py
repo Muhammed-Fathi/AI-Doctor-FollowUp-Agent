@@ -19,9 +19,9 @@ from app.db.models import SchemaMeta
 from app.db.session import create_db_engine, ensure_sqlite_directory
 
 BASELINE_REVISION = "0001_p1_baseline"
-HEAD_REVISION = "0002_p2_patient_domain"
+HEAD_REVISION = "0003_p3_documents"
 
-#: The seven tables the P2 revision owns. Equality is asserted below, so a P3+
+#: The seven tables the P2 revision owns. Equality is asserted below, so a P4+
 #: table created early fails just as loudly as a missing one.
 P2_TABLES = {
     "audit_event",
@@ -33,12 +33,18 @@ P2_TABLES = {
     "user",
 }
 
-#: Tables owned by later phases; none of them may exist in P2.
-P3_PLUS_TABLES = {
+#: The five tables the P3 revision owns (``0003``). Equality against
+#: ``P1 + P2 + P3`` is asserted at ``head``, so a P4+ table still fails.
+P3_TABLES = {
     "document",
     "extraction_attempt",
     "extracted_fact",
     "fact_verification",
+    "verification_issue",
+}
+
+#: Tables owned by later phases; none of them may exist at P3 ``head``.
+P4_PLUS_TABLES = {
     "review_item",
     "summary_draft",
     "approval_decision",
@@ -68,17 +74,18 @@ def test_migration_creates_baseline_table(engine: Engine) -> None:
     assert revision == HEAD_REVISION
 
 
-def test_migrated_schema_is_exactly_p1_plus_the_p2_allowlist(engine: Engine) -> None:
-    """The migrated schema equals P1 plus the seven P2 tables — no extras.
+def test_migrated_schema_is_exactly_p1_plus_p2_plus_p3(engine: Engine) -> None:
+    """The migrated schema equals P1 + the seven P2 tables + the five P3 tables.
 
-    Phase 1's assertion was "no patient-domain table exists". P2 legitimately
-    adds seven, so the check becomes an equality against the explicit allowlist:
-    a P3+ table appearing early still fails.
+    Phase 1's assertion was "no patient-domain table exists"; P2 added seven and
+    P3 adds five, so the check stays an **equality** against the explicit
+    allowlist. A P4+ table appearing early still fails, which is the property
+    that matters — the allowlist grew, the strictness did not shrink.
     """
     tables = set(inspect(engine).get_table_names())
 
-    assert tables == {"schema_meta", "alembic_version"} | P2_TABLES
-    assert tables.isdisjoint(P3_PLUS_TABLES)
+    assert tables == {"schema_meta", "alembic_version"} | P2_TABLES | P3_TABLES
+    assert tables.isdisjoint(P4_PLUS_TABLES)
 
 
 def test_migration_is_reversible(sqlite_url: str) -> None:

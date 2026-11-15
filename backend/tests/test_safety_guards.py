@@ -24,12 +24,15 @@ from app.core.version import DEMO_NOTICE
 
 BACKEND_APP = REPO_ROOT / "backend" / "app"
 
-#: Modules that would indicate a Phase-2+ or forbidden capability in P1 code.
+#: Modules that would indicate a later-phase or forbidden capability in this code.
+#:
+#: ``pypdf`` and ``pytesseract`` left this list in P3: OCR and PDF text extraction
+#: are now authorized deliverables. They did **not** become freely importable —
+#: ``OCR_IMPORTS`` below confines them to the one extraction package, so a
+#: notification service or a workflow node still cannot pull in an OCR engine.
 FORBIDDEN_IMPORTS = (
     "langgraph",
     "ollama",
-    "pytesseract",
-    "pypdf",
     "smtplib",
     "sendgrid",
     "twilio",
@@ -38,13 +41,25 @@ FORBIDDEN_IMPORTS = (
     "aiohttp",
 )
 
+#: OCR/PDF libraries, importable only from the authorized extraction package.
+OCR_IMPORTS = ("pypdf", "pypdfium2", "pytesseract", "PIL")
+
+#: The single package allowed to import :data:`OCR_IMPORTS` (owner authorization,
+#: Phase 3). Path-scoped rather than name-scoped: any file outside this directory
+#: that imports an OCR library fails, whatever it is called.
+OCR_ALLOWED_PREFIX = BACKEND_APP / "services" / "documents"
+
 
 def _python_sources() -> list[Path]:
     return sorted(path for path in BACKEND_APP.rglob("*.py") if "__pycache__" not in path.parts)
 
 
-def test_p1_backend_has_no_forbidden_imports() -> None:
-    """P1 imports only FastAPI/Pydantic/SQLAlchemy/Alembic — no agent, OCR or egress."""
+def test_backend_has_no_forbidden_imports() -> None:
+    """No agent, model-runtime or egress library is imported anywhere in the app.
+
+    OCR/PDF libraries are checked separately by
+    :func:`test_ocr_imports_are_confined_to_the_authorized_extraction_package`.
+    """
     offenders: list[str] = []
     for path in _python_sources():
         text = path.read_text(encoding="utf-8")
@@ -53,6 +68,46 @@ def test_p1_backend_has_no_forbidden_imports() -> None:
                 if pattern in text:
                     offenders.append(f"{path.relative_to(REPO_ROOT)} -> {module}")
     assert offenders == []
+
+
+def test_ocr_imports_are_confined_to_the_authorized_extraction_package() -> None:
+    """Only ``backend/app/services/documents`` may import an OCR/PDF library.
+
+    This replaces a blanket ban with a narrower, still-exact rule: the capability
+    is authorized for Phase 3 extraction, and nowhere else. A new consumer outside
+    the package — a route, a schema, a future workflow node — fails here.
+    """
+    offenders: list[str] = []
+    for path in _python_sources():
+        if OCR_ALLOWED_PREFIX in path.parents:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for module in OCR_IMPORTS:
+            for pattern in (f"import {module}", f"from {module}"):
+                if pattern in text:
+                    offenders.append(f"{path.relative_to(REPO_ROOT)} -> {module}")
+
+    assert offenders == []
+
+
+def test_ocr_libraries_are_declared_and_not_optional() -> None:
+    """The extraction dependencies are real project dependencies, not imports of chance.
+
+    Pinning them in ``pyproject.toml`` is what makes ``E_DEPENDENCY_MISSING`` a
+    statement about the *engine*, not about a missing Python package.
+    """
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    # Exact pins only: a floating range would make the install non-reproducible
+    # and the lockfiles unverifiable.
+    for declaration in (
+        "python-multipart==0.0.33",
+        "pypdf==7.1.0",
+        "pypdfium2==5.15.2",
+        "pytesseract==0.3.13",
+        "pillow==13.0.0",
+    ):
+        assert f'"{declaration}"' in pyproject, f"{declaration} is not pinned"
 
 
 def test_p1_implements_no_clinical_capability() -> None:
@@ -78,6 +133,15 @@ def test_p1_implements_no_clinical_capability() -> None:
     assert hits == []
 
 
+#: The complete P3 document surface.
+P3_ROUTES = {
+    "/api/v1/documents/upload",
+    "/api/v1/documents/{document_id}",
+    "/api/v1/documents/{document_id}/extraction",
+    "/api/v1/documents/{document_id}/verify",
+    "/api/v1/documents/{document_id}/file",
+}
+
 #: The complete P2 surface. Anything outside this set is out of scope, and the
 #: assertion below is an equality check for exactly that reason.
 P2_ROUTES = {
@@ -93,11 +157,11 @@ P2_ROUTES = {
 }
 
 
-def test_backend_exposes_only_health_version_and_allowlisted_p2_routes() -> None:
-    """The app must not register speculative P3+ routes or a demo seed endpoint.
+def test_backend_exposes_only_health_version_and_allowlisted_p2_p3_routes() -> None:
+    """The app must not register speculative P4+ routes or a demo seed endpoint.
 
-    P1's two paths are still required, and the P2 additions are enumerated: a
-    third-party route slipping in (documents, workflows, review items, tasks)
+    P1's two paths are still required, and the P2 and P3 additions are enumerated:
+    a third-party route slipping in (workflows, review items, tasks, summaries)
     fails this guard.
     """
     from app.main import create_app
@@ -105,13 +169,29 @@ def test_backend_exposes_only_health_version_and_allowlisted_p2_routes() -> None
     paths = set(create_app().openapi()["paths"])
 
     assert {"/health", "/version"} <= paths
-    assert paths == {"/health", "/version"} | P2_ROUTES
+    assert paths == {"/health", "/version"} | P2_ROUTES | P3_ROUTES
+
+    # Later-phase surfaces are named explicitly as well as excluded by equality.
+    for forbidden in (
+        "/api/v1/workflows/follow-up",
+        "/api/v1/review-items",
+        "/api/v1/tasks",
+        "/api/v1/notifications",
+        "/api/v1/summaries",
+        "/api/v1/demo/seed",
+        "/api/v1/demo/status",
+    ):
+        assert forbidden not in paths
     assert "/api/v1/demo/seed" not in paths
     assert "/api/v1/demo/status" not in paths
+
+    # "document" left this keyword list in P3 because document routes are the
+    # phase's deliverable. The remaining words are later-phase surfaces, so the
+    # check stays as a substring guard over the whole path set.
     assert not any(
         keyword in path
         for path in paths
-        for keyword in ("document", "workflow", "review", "task", "notification", "summary")
+        for keyword in ("workflow", "review", "task", "notification", "summary")
     )
 
 

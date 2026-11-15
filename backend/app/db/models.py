@@ -73,14 +73,22 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.enums import (
     ActorType,
     AuditOutcome,
+    DocumentMimeType,
+    DocumentStatus,
     EncounterType,
+    ExtractionPath,
+    FactField,
+    FactVerificationStatus,
+    IssueType,
     MeasureType,
     ObservationSource,
+    Preprocessing,
     Role,
     SexAtBirth,
     TrustLevel,
     Unit,
     ValidationState,
+    VerificationDecision,
 )
 from app.db.base import Base
 
@@ -255,6 +263,11 @@ class Observation(Base):
         ),
         Index("ix_obs_patient_type_time", "patient_id", "measure_type", "measured_at"),
         Index("ix_obs_trust", "patient_id", "trust_level"),
+        # P3: one observation per verified fact. SQLite treats NULLs as
+        # distinct, so seeded and check-in rows are unaffected; replaying a
+        # verification can therefore never duplicate a measurement
+        # (REQ-DATA-05, ``ux_obs_source_fact``).
+        Index("ux_obs_source_fact", "source_fact_id", unique=True),
         # Semantic check-in identity, enforced by the database so two racing
         # writers cannot persist the same self-reported measurement twice
         # (``E_DUPLICATE_CHECKIN``). Partial on purpose: document facts (P3) and
@@ -293,6 +306,11 @@ class Observation(Base):
     )
     verified_at: Mapped[str | None] = mapped_column(String(20), nullable=True)
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    #: Set only when ``source='verified_document'``. Deferred by P2 until
+    #: ``extracted_fact`` existed; the foreign key is added by migration 0003.
+    source_fact_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("extracted_fact.id", ondelete="RESTRICT"), nullable=True
+    )
     created_at: Mapped[str] = mapped_column(String(20), nullable=False)
     created_by_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
@@ -395,14 +413,265 @@ class AuditEvent(Base):
         return f"AuditEvent(event_type={self.event_type!r}, outcome={self.outcome!r})"
 
 
+# =============================================================================
+# P3 — document ingestion, extraction provenance and doctor verification
+# =============================================================================
+#
+# Five tables from ``DATA_DICTIONARY.md`` §2.4-§2.8a. Every candidate fact is
+# unverified by construction: ``verification_status`` defaults to ``pending``
+# and only ``services.documents.verification`` may change it, inside the same
+# transaction that appends the ``fact_verification`` row.
+
+
+class Document(Base):
+    """An uploaded synthetic report (``DATA_DICTIONARY.md`` §2.4).
+
+    ``mime_type`` comes from magic bytes, never from the client filename
+    (``EXTRACTION_PROVENANCE.md`` §1 rule 1). ``stored_path`` is a generated
+    name relative to the gitignored runtime upload directory, so a client can
+    never influence the path on disk.
+    """
+
+    __tablename__ = "document"
+    __table_args__ = (
+        CheckConstraint(f"mime_type IN ({_in_list(DocumentMimeType)})", name="mime_type_allowed"),
+        CheckConstraint(
+            f"extraction_status IN ({_in_list(DocumentStatus)})", name="status_allowed"
+        ),
+        CheckConstraint("length(sha256) = 64", name="sha256_length"),
+        CheckConstraint("size_bytes > 0 AND size_bytes <= 10485760", name="size_within_cap"),
+        CheckConstraint("page_count IS NULL OR page_count <= 20", name="page_count_within_cap"),
+        CheckConstraint("length(original_filename) > 0", name="filename_not_empty"),
+        Index("ix_document_patient", "patient_id"),
+        # Duplicate-upload detection is per patient, so an identical report
+        # belonging to another patient is not blocked (NEG-18).
+        Index("ux_document_sha_patient", "patient_id", "sha256", unique=True),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    patient_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("patient.id", ondelete="RESTRICT"), nullable=False
+    )
+    uploaded_by_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("user.id", ondelete="RESTRICT"), nullable=False
+    )
+    #: Sanitized metadata only: no path separators, no control characters.
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: Generated name relative to the runtime upload directory. Never committed.
+    stored_path: Mapped[str] = mapped_column(String(255), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    extraction_status: Mapped[str] = mapped_column(
+        String(24),
+        nullable=False,
+        default=DocumentStatus.PENDING_EXTRACTION.value,
+        server_default=DocumentStatus.PENDING_EXTRACTION.value,
+    )
+    #: Mirrors the tool error codes; enum/ID only, never document text.
+    failure_code: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    uploaded_at: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging helper
+        return f"Document(id={self.id!r}, status={self.extraction_status!r})"
+
+
+class ExtractionAttempt(Base):
+    """One bounded extraction attempt (``DATA_DICTIONARY.md`` §2.5).
+
+    These rows are the only typed source for triage decisions. ``engine_confidence``
+    is **engine-reported only**: NULL means the engine reported nothing, and is
+    never estimated or back-filled (``API_CONTRACT.md`` §1.1 rule 1a).
+    """
+
+    __tablename__ = "extraction_attempt"
+    __table_args__ = (
+        CheckConstraint(f"path IN ({_in_list(ExtractionPath)})", name="path_allowed"),
+        CheckConstraint(
+            f"preprocessing IN ({_in_list(Preprocessing)})", name="preprocessing_allowed"
+        ),
+        CheckConstraint(
+            "engine_confidence IS NULL OR (engine_confidence >= 0.0 AND engine_confidence <= 1.0)",
+            name="confidence_in_range",
+        ),
+        CheckConstraint("text_char_count >= 0", name="text_char_count_non_negative"),
+        CheckConstraint("duration_ms >= 0", name="duration_non_negative"),
+        CheckConstraint("page_from >= 0 AND page_to >= page_from", name="page_range_valid"),
+        Index("ix_attempt_document", "document_id", "created_at"),
+        Index("ix_attempt_doc_conf", "document_id", "engine_confidence"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    document_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("document.id", ondelete="CASCADE"), nullable=False
+    )
+    path: Mapped[str] = mapped_column(String(16), nullable=False)
+    preprocessing: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=Preprocessing.NONE.value, server_default="none"
+    )
+    engine_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    text_char_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    page_from: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    page_to: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    succeeded: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    error_code: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    tool_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging helper
+        return f"ExtractionAttempt(path={self.path!r}, succeeded={self.succeeded!r})"
+
+
+class ExtractedFact(Base):
+    """A candidate fact — **unverified by construction** (§2.6).
+
+    ``raw_text`` is stored exactly as extracted (bounded), ``normalized_value``
+    carries deterministic normalization only, and the span makes the value
+    auditable against the source page.
+    """
+
+    __tablename__ = "extracted_fact"
+    __table_args__ = (
+        CheckConstraint(f"field_name IN ({_in_list(FactField)})", name="field_allowed"),
+        CheckConstraint(
+            f"verification_status IN ({_in_list(FactVerificationStatus)})",
+            name="verification_status_allowed",
+        ),
+        CheckConstraint("raw_text <> ''", name="raw_text_not_empty"),
+        CheckConstraint("length(raw_text) <= 300", name="raw_text_bounded"),
+        CheckConstraint("page_index >= 0", name="page_index_non_negative"),
+        CheckConstraint("char_start >= 0 AND char_end >= char_start", name="span_ordered"),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0)",
+            name="confidence_in_range",
+        ),
+        Index("ix_fact_document", "document_id"),
+        Index("ix_fact_status", "patient_id", "verification_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    document_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("document.id", ondelete="CASCADE"), nullable=False
+    )
+    #: Denormalized so every scope check is a single-index read.
+    patient_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("patient.id", ondelete="RESTRICT"), nullable=False
+    )
+    field_name: Mapped[str] = mapped_column(String(24), nullable=False)
+    raw_text: Mapped[str] = mapped_column(String(300), nullable=False)
+    normalized_value: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    #: Document unit text (``mmHg``/``bpm``/``mg/dL``/``g/dL``/``%``) — never an
+    #: ``Observation`` unit unless the closed mapping table says so (P0-R06).
+    unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    page_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    char_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    char_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: JSON array of ``QualityFlag`` values.
+    quality_flags: Mapped[str] = mapped_column(
+        String(200), nullable=False, default="[]", server_default="[]"
+    )
+    #: OCR confidence when the engine reported one; NULL for a text layer.
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    verification_status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=FactVerificationStatus.PENDING.value,
+        server_default=FactVerificationStatus.PENDING.value,
+    )
+    created_at: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging helper
+        return f"ExtractedFact(field={self.field_name!r}, status={self.verification_status!r})"
+
+
+class FactVerification(Base):
+    """Append-only human decision log (``DATA_DICTIONARY.md`` §2.7).
+
+    There is no update or delete path in the service layer, and migration 0003
+    installs a ``BEFORE INSERT`` trigger that rejects a ``verified_by_user_id``
+    whose ``user.role`` is not ``doctor``. Service *and* database, per the
+    accepted data dictionary.
+    """
+
+    __tablename__ = "fact_verification"
+    __table_args__ = (
+        CheckConstraint(f"decision IN ({_in_list(VerificationDecision)})", name="decision_allowed"),
+        Index("ix_factver_fact", "fact_id", "decided_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    fact_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("extracted_fact.id", ondelete="CASCADE"), nullable=False
+    )
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    previous_value: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    new_value: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    new_unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    verified_by_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("user.id", ondelete="RESTRICT"), nullable=False
+    )
+    decided_at: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging helper
+        return f"FactVerification(decision={self.decision!r})"
+
+
+class VerificationIssue(Base):
+    """Pre-verification blocker (``DATA_DICTIONARY.md`` §2.8a).
+
+    There is deliberately **no ``rule_id`` column**: a ``VerificationIssue`` can
+    never be stored or rendered as a ``DR-*`` review item (``P0-R03``).
+    """
+
+    __tablename__ = "verification_issue"
+    __table_args__ = (
+        CheckConstraint(f"issue_type IN ({_in_list(IssueType)})", name="issue_type_allowed"),
+        CheckConstraint("blocking = 1", name="always_blocking"),
+        CheckConstraint("state IN ('open', 'resolved', 'superseded')", name="state_allowed"),
+        CheckConstraint("length(message) <= 240", name="message_bounded"),
+        Index("ix_vi_document_state", "document_id", "state"),
+        Index("ix_vi_run", "workflow_run_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    patient_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("patient.id", ondelete="RESTRICT"), nullable=False
+    )
+    workflow_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    document_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("document.id", ondelete="CASCADE"), nullable=True
+    )
+    issue_type: Mapped[str] = mapped_column(String(8), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    blocking: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    message: Mapped[str] = mapped_column(String(240), nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(12), nullable=False, default="open", server_default="open"
+    )
+    created_at: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging helper
+        return f"VerificationIssue(issue_type={self.issue_type!r})"
+
+
 __all__ = [
     "AuditEvent",
     "CheckinIdempotency",
+    "Document",
     "Encounter",
+    "ExtractedFact",
+    "ExtractionAttempt",
+    "FactVerification",
     "Observation",
     "Patient",
     "SchemaMeta",
     "User",
     "UserSession",
+    "VerificationIssue",
     "new_uuid",
 ]

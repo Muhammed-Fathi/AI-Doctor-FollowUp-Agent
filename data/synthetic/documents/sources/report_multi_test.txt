@@ -1,0 +1,6 @@
+SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD
+Demo Patient A            Ref: DEMO-A-002            Report date: 2026-10-21
+Test: Hemoglobin          Value: 13.4 g/dL
+Reference range: 12.0 - 15.5 g/dL
+Test: Fasting glucose     Value: 104 mg/dL
+Reference range: 70 - 99 mg/dL

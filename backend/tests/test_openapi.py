@@ -1,9 +1,10 @@
-"""Generated OpenAPI checks: the P1 + P2 surface must match the accepted contract.
+"""Generated OpenAPI checks: the P1 + P2 + P3 surface must match the contract.
 
-The Phase 1 assertions are kept as they were (P1 paths, schemas, public
-``security: []``). They are *extended* by an explicit P2 allowlist rather than
-relaxed to "at least these paths", so an unplanned route still fails the test —
-which is the whole point of the gate.
+The Phase 1 and Phase 2 assertions are kept as they were (P1 paths, P2 paths and
+verbs, schemas, public ``security: []``). They are *extended* by an explicit P3
+document allowlist rather than relaxed to "at least these paths", so an unplanned
+route — including a P4 workflow route — still fails the test, which is the whole
+point of the gate.
 """
 
 from __future__ import annotations
@@ -30,8 +31,18 @@ P2_PATHS = {
     "/api/v1/demo/reset",
 }
 
-#: Every path the application may expose in P2.
-EXPECTED_PATHS = P1_PATHS | P2_PATHS
+#: Phase 3 document allowlist: 5 paths / 5 operations. Fixed by
+#: ``API_CONTRACT.md`` §2.4; there is no P3 route outside this set.
+P3_PATHS = {
+    "/api/v1/documents/upload",
+    "/api/v1/documents/{document_id}",
+    "/api/v1/documents/{document_id}/extraction",
+    "/api/v1/documents/{document_id}/verify",
+    "/api/v1/documents/{document_id}/file",
+}
+
+#: Every path the application may expose through P3.
+EXPECTED_PATHS = P1_PATHS | P2_PATHS | P3_PATHS
 
 #: Method sets per path: ``/patient/check-ins`` is the one path with two verbs.
 EXPECTED_METHODS = {
@@ -46,6 +57,12 @@ EXPECTED_METHODS = {
     "/api/v1/doctor/patients/{patient_id}/observations": {"get"},
     "/api/v1/patient/check-ins": {"get", "post"},
     "/api/v1/demo/reset": {"post"},
+    # P3 — documents
+    "/api/v1/documents/upload": {"post"},
+    "/api/v1/documents/{document_id}": {"get"},
+    "/api/v1/documents/{document_id}/extraction": {"get"},
+    "/api/v1/documents/{document_id}/verify": {"post"},
+    "/api/v1/documents/{document_id}/file": {"get"},
 }
 
 
@@ -56,7 +73,7 @@ def _schema() -> dict[str, Any]:
 
 
 def test_generated_openapi_declares_only_the_allowlisted_paths() -> None:
-    """P1 paths plus the explicit P2 allowlist; nothing speculative."""
+    """P1 paths plus the explicit P2 and P3 allowlists; nothing speculative."""
     assert set(_schema()["paths"]) == EXPECTED_PATHS
 
 
@@ -76,6 +93,26 @@ def test_no_demo_seed_or_demo_status_route_exists() -> None:
 
     assert "/api/v1/demo/seed" not in paths
     assert "/api/v1/demo/status" not in paths
+
+
+def test_no_p4_or_later_route_exists() -> None:
+    """P4+ surfaces must not appear early, however plausible they look.
+
+    Workflows, review items, tasks, notifications and summaries are later-phase
+    deliverables; a route for one of them in P3 would be scope creep that the path
+    equality above already rejects. This test names the specific ones so a future
+    reader sees the intent, not just a set difference.
+    """
+    paths = set(_schema()["paths"])
+
+    for forbidden in (
+        "/api/v1/workflows/follow-up",
+        "/api/v1/review-items",
+        "/api/v1/tasks",
+        "/api/v1/notifications",
+        "/api/v1/summaries",
+    ):
+        assert forbidden not in paths
 
 
 def test_generated_openapi_is_served(client: TestClient) -> None:
@@ -137,6 +174,81 @@ def test_p2_operations_require_the_bearer_scheme() -> None:
         for method, operation in schema["paths"][path].items():
             if method in {"get", "post"}:
                 assert operation["security"] == [{"bearerAuth": []}], f"{method} {path}"
+
+
+def test_p3_document_operations_require_the_bearer_scheme() -> None:
+    """Every P3 document operation is authenticated; none is public.
+
+    Upload is patient-self, extraction/verify are doctor-assigned and the two read
+    routes are scope-checked. None of them may be reachable anonymously, so the
+    assertion is unconditional over the whole P3 set.
+    """
+    schema = _schema()
+
+    for path in sorted(P3_PATHS):
+        for method, operation in schema["paths"][path].items():
+            if method in {"get", "post"}:
+                assert operation["security"] == [{"bearerAuth": []}], f"{method} {path}"
+
+
+def test_p3_document_schemas_are_exactly_the_contract_set() -> None:
+    """The ten P3 components are present, and no later-phase schema leaked in."""
+    components = set(_schema()["components"]["schemas"])
+
+    assert {
+        "DocumentMeta",
+        "DocumentUploadResponse",
+        "EvidenceRef",
+        "ExtractedFact",
+        "ExtractionAttemptSummary",
+        "ExtractionResponse",
+        "VerificationIssue",
+        "VerificationRecord",
+        "VerifyRequest",
+        "VerifyResponse",
+    } <= components
+
+    # P4/P5 deliverable shapes must not exist yet.
+    assert {
+        "DraftSummary",
+        "WorkflowRun",
+        "ReviewItem",
+        "ApprovalDecision",
+        "FollowUpTask",
+        "Notification",
+    }.isdisjoint(components)
+
+
+def test_verification_issue_schema_has_no_rule_id() -> None:
+    """``VI-*`` issues are a different output type from ``DR-*`` review items.
+
+    The contract is explicit that a verification issue never carries a
+    ``rule_id``; a shared shape would let the two blend in the UI.
+    """
+    components = _schema()["components"]["schemas"]
+    issue = components["VerificationIssue"]
+
+    assert "rule_id" not in issue["properties"]
+    # ``issue_type`` is a $ref to the IssueType component, so the enum lives
+    # there rather than inline.
+    assert set(components["IssueType"]["enum"]) == {
+        "VI-001",
+        "VI-002",
+        "VI-003",
+        "VI-004",
+        "VI-005",
+        "VI-006",
+    }
+    assert issue["properties"]["blocking"]["const"] is True
+    assert issue["required"] == [
+        "issue_id",
+        "issue_type",
+        "reason_code",
+        "blocking",
+        "message",
+        "evidence",
+        "created_at",
+    ]
 
 
 def test_bearer_scheme_matches_the_p0_contract() -> None:

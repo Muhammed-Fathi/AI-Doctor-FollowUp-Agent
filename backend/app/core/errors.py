@@ -70,6 +70,21 @@ class ErrorCode(StrEnum):
     RATE_LIMITED = "E_RATE_LIMITED"
     INTERNAL = "E_INTERNAL"
 
+    # --- P3 document ingestion and verification (owner-authorized) -----------
+    #: Structural parse failure *during upload validation*. No document row is
+    #: created for this outcome (owner decision D-10).
+    PARSE_FAILED = "E_PARSE_FAILED"
+    #: Recognised file type, but the bytes are unreadable/encrypted/truncated.
+    UNSUPPORTED_MEDIA = "E_UNSUPPORTED_MEDIA"
+    FILE_TOO_LARGE = "E_FILE_TOO_LARGE"
+    PAGE_LIMIT_EXCEEDED = "E_PAGE_LIMIT_EXCEEDED"
+    DUPLICATE_DOCUMENT = "E_DUPLICATE_DOCUMENT"
+    EXTRACTION_PENDING = "E_EXTRACTION_PENDING"
+    FACT_ALREADY_DECIDED = "E_FACT_ALREADY_DECIDED"
+    #: Tesseract/Poppler-equivalent tooling unavailable. Never a crash and never
+    #: a silent substitution (``TOOL_CONTRACTS.md`` §6 rule 5).
+    DEPENDENCY_MISSING = "E_DEPENDENCY_MISSING"
+
 
 #: Default human-readable titles; the contract's catalogue wording, kept short.
 _TITLES: dict[ErrorCode, str] = {
@@ -85,13 +100,61 @@ _TITLES: dict[ErrorCode, str] = {
     ErrorCode.IDEMPOTENCY_CONFLICT: "Idempotency conflict",
     ErrorCode.RATE_LIMITED: "Too many attempts",
     ErrorCode.INTERNAL: "Internal error",
+    ErrorCode.PARSE_FAILED: "Document could not be parsed",
+    ErrorCode.UNSUPPORTED_MEDIA: "Unsupported media type",
+    ErrorCode.FILE_TOO_LARGE: "File too large",
+    ErrorCode.PAGE_LIMIT_EXCEEDED: "Page limit exceeded",
+    ErrorCode.DUPLICATE_DOCUMENT: "Duplicate document",
+    ErrorCode.EXTRACTION_PENDING: "Extraction pending",
+    ErrorCode.FACT_ALREADY_DECIDED: "Fact already decided",
+    ErrorCode.DEPENDENCY_MISSING: "Local dependency missing",
 }
+
+#: HTTP status the contract assigns to each P3 document error
+#: (``API_CONTRACT.md`` §4 plus the owner ruling D-10).
+#:
+#: ``E_TIMEOUT`` is deliberately **absent**: an extraction timeout is never
+#: returned to a client. It is a persisted ``document.failure_code`` surfaced
+#: through ``200 ExtractionResponse`` with ``document_status='failed'``. Adding a
+#: ``503`` for it would be an undocumented response and is not authorized.
+DOCUMENT_ERROR_STATUS: dict[ErrorCode, int] = {
+    ErrorCode.PARSE_FAILED: 422,
+    ErrorCode.UNSUPPORTED_MEDIA: 415,
+    ErrorCode.FILE_TOO_LARGE: 413,
+    ErrorCode.PAGE_LIMIT_EXCEEDED: 422,
+    ErrorCode.DUPLICATE_DOCUMENT: 409,
+    ErrorCode.EXTRACTION_PENDING: 409,
+    ErrorCode.FACT_ALREADY_DECIDED: 409,
+    ErrorCode.DEPENDENCY_MISSING: 503,
+}
+
+
+def document_error(code: ErrorCode, detail: str) -> ApiError:
+    """Build an ``ApiError`` at the contract-defined status for ``code``.
+
+    Keeping the mapping in one place stops a route from choosing its own status
+    and silently drifting from ``API_CONTRACT.md`` §4.
+    """
+    return ApiError(DOCUMENT_ERROR_STATUS[code], code, detail)
+
 
 #: Uniform wording for every unauthenticated response (no existence leak).
 UNAUTHENTICATED_DETAIL: str = "A valid session is required."
 
 #: Uniform wording for every credential failure (no user-existence leak).
 INVALID_CREDENTIALS_DETAIL: str = "Username or password is incorrect."
+
+#: Neutral wording for every P3 failure. ``detail`` must never carry document
+#: text, an OCR fragment, a stored path or another patient's data
+#: (``API_CONTRACT.md`` §1.1 rule 1, ``REQ-AUDIT-02``).
+PARSE_FAILED_DETAIL: str = "This file could not be read as a valid PDF or image."
+UNSUPPORTED_MEDIA_DETAIL: str = "Only PDF, PNG and JPEG files are accepted."
+FILE_TOO_LARGE_DETAIL: str = "The file exceeds the 10 MiB upload limit."
+PAGE_LIMIT_EXCEEDED_DETAIL: str = "The document exceeds the 20 page limit."
+DUPLICATE_DOCUMENT_DETAIL: str = "This patient already has an identical document."
+EXTRACTION_PENDING_DETAIL: str = "Extraction for this document has not finished yet."
+FACT_ALREADY_DECIDED_DETAIL: str = "This fact already has a recorded doctor decision."
+DEPENDENCY_MISSING_DETAIL: str = "The local OCR engine is not available."
 
 
 class ApiError(Exception):

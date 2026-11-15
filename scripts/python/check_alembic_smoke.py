@@ -13,8 +13,16 @@ Usage::
 ``--state`` (default ``head``):
 
 ``head``
-    revision ``0002_p2_patient_domain``; tables = P1 + the seven P2 tables;
-    ``user.patient_id`` foreign key present; ``PRAGMA foreign_key_check`` empty.
+    revision ``0003_p3_documents``; tables = P1 + the seven P2 tables + the five
+    P3 tables; ``user.patient_id`` foreign key present;
+    ``observation.source_fact_id`` + ``ux_obs_source_fact`` present; the
+    ``trg_fact_verification_doctor_only`` trigger present;
+    ``PRAGMA foreign_key_check`` empty.
+``p2``
+    revision ``0002_p2_patient_domain``; tables = P1 + the seven P2 tables and
+    **no** P3 table and **no** ``observation.source_fact_id``. This is what
+    ``0003 -> 0002`` must leave behind, and it is how the exact P2 schema is
+    proven to survive P3 (owner decision D-05).
 ``p1``
     revision ``0001_p1_baseline``; tables = ``schema_meta`` + ``alembic_version``
     and **no** P2 table — this is what ``0002 -> 0001`` must leave behind, and the
@@ -40,7 +48,11 @@ import sys
 from pathlib import Path
 
 P1_REVISION = "0001_p1_baseline"
-HEAD_REVISION = "0002_p2_patient_domain"
+
+#: Doctor-only guard installed by ``0003`` (``DATA_DICTIONARY.md`` §2.7).
+DOCTOR_TRIGGER_NAME = "trg_fact_verification_doctor_only"
+HEAD_REVISION = "0003_p3_documents"
+P2_REVISION = "0002_p2_patient_domain"
 
 P1_TABLES = {"schema_meta", "alembic_version"}
 
@@ -55,21 +67,27 @@ P2_TABLES = {
     "user",
 }
 
-#: Anything belonging to a later phase. Their appearance is a scope violation.
-P3_PLUS_TABLES = {
+#: Tables owned by the P3 revision (exactly the five in ``0003``).
+P3_TABLES = {
     "document",
     "extraction_attempt",
     "extracted_fact",
     "fact_verification",
+    "verification_issue",
+}
+
+#: Anything belonging to a later phase. Their appearance is a scope violation.
+P4_PLUS_TABLES = {
     "review_item",
     "summary_draft",
     "approval_decision",
     "follow_up_task",
     "in_app_notification",
     "workflow_run",
+    "evidence_link",
 }
 
-VALID_STATES = {"head", "p1", "base"}
+VALID_STATES = {"head", "p3", "p2", "p1", "base"}
 
 
 def _parse_args(argv: list[str]) -> tuple[Path, str] | None:
@@ -90,6 +108,10 @@ def _parse_args(argv: list[str]) -> tuple[Path, str] | None:
 
 def _expected_tables(state: str) -> set[str]:
     if state == "head":
+        return P1_TABLES | P2_TABLES | P3_TABLES
+    if state == "p3":
+        return P1_TABLES | P2_TABLES | P3_TABLES
+    if state == "p2":
         return P1_TABLES | P2_TABLES
     if state == "p1":
         return set(P1_TABLES)
@@ -97,8 +119,10 @@ def _expected_tables(state: str) -> set[str]:
 
 
 def _expected_revisions(state: str) -> list[str]:
-    if state == "head":
+    if state in {"head", "p3"}:
         return [HEAD_REVISION]
+    if state == "p2":
+        return [P2_REVISION]
     if state == "p1":
         return [P1_REVISION]
     return []
@@ -109,7 +133,7 @@ def main(argv: list[str]) -> int:
     parsed = _parse_args(argv)
     if parsed is None:
         print(
-            "usage: check_alembic_smoke.py <path-to-sqlite-db> [--state head|p1|base]",
+            "usage: check_alembic_smoke.py <path-to-sqlite-db> [--state head|p3|p2|p1|base]",
             file=sys.stderr,
         )
         return 1
@@ -133,6 +157,29 @@ def main(argv: list[str]) -> int:
         user_foreign_keys = (
             list(connection.execute("PRAGMA foreign_key_list('user')")) if "user" in tables else []
         )
+        observation_columns = (
+            [row[1] for row in connection.execute("PRAGMA table_info('observation')")]
+            if "observation" in tables
+            else []
+        )
+        observation_indexes = (
+            [
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='observation'"
+                )
+            ]
+            if "observation" in tables
+            else []
+        )
+        triggers = (
+            [
+                row[0]
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'")
+            ]
+            if tables
+            else []
+        )
         foreign_key_violations = (
             connection.execute("PRAGMA foreign_key_check").fetchall() if tables else []
         )
@@ -147,9 +194,29 @@ def main(argv: list[str]) -> int:
     if unexpected:
         problems.append(f"unexpected tables for state {state!r}: {sorted(unexpected)}")
 
-    early = P3_PLUS_TABLES & tables
+    early = P4_PLUS_TABLES & tables
     if early:
         problems.append(f"later-phase tables must not exist: {sorted(early)}")
+
+    # --- P3 structural assertions (owner decision D-05) ---------------------
+    # At ``head``/``p3``: the deferred P2 column, its unique index and the
+    # doctor-only trigger must all exist. A "later-phase" table check alone
+    # would not catch a P3 revision that forgot one of them.
+    if state in {"head", "p3"}:
+        if "source_fact_id" not in observation_columns:
+            problems.append("observation.source_fact_id must exist after 0003")
+        if "ux_obs_source_fact" not in observation_indexes:
+            problems.append("observation must carry the unique index ux_obs_source_fact")
+        if DOCTOR_TRIGGER_NAME not in triggers:
+            problems.append(f"migration 0003 must install the trigger {DOCTOR_TRIGGER_NAME}")
+
+    # At ``p2`` the exact P2 schema must be intact: the P3 column and trigger
+    # must be gone, which is what ``0003 -> 0002`` has to leave behind.
+    if state in {"p2", "p1", "base"}:
+        if "source_fact_id" in observation_columns:
+            problems.append("observation.source_fact_id must not exist below 0003")
+        if DOCTOR_TRIGGER_NAME in triggers:
+            problems.append(f"trigger {DOCTOR_TRIGGER_NAME} must not exist below 0003")
 
     expected_revisions = _expected_revisions(state)
     if revisions != expected_revisions:
