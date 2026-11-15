@@ -143,7 +143,7 @@ def verify_fact(
     )
 
     return VerifyResponse(
-        fact=_fact_schema(outcome.fact) if outcome.fact is not None else None,
+        fact=_fact_schema(outcome.fact),
         verification=VerificationRecord(
             decision=outcome.verification.decision,
             verified_by=outcome.verification.verified_by_user_id,

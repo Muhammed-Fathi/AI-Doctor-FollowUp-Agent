@@ -246,7 +246,7 @@ class VerificationRecord(ApiModel):
 class VerifyResponse(ApiModel):
     """The updated fact, its decision, and the recomputed document status."""
 
-    fact: ExtractedFact | None = None
+    fact: ExtractedFact
     verification: VerificationRecord
     document_status: DocumentStatus
 

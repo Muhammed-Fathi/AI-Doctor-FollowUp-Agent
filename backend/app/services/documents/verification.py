@@ -63,9 +63,10 @@ class VerificationOutcome:
     correction created one, keeping both ends of the lineage reachable.
     """
 
-    #: ``None`` only when the decision superseded the fact it was recorded on (a
-    #: correction); the corrected row is then the live fact and is reported instead.
-    fact: ExtractedFact | None
+    #: Always the fact that is now current: the decided fact, or — for a
+    #: correction — the new verified row that supersedes it. Never ``None``, so the
+    #: response keeps the contract's required ``fact``.
+    fact: ExtractedFact
     verification: FactVerification
     document_status: str
     observation_created: bool
