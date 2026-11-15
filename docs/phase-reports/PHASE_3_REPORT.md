@@ -1539,7 +1539,7 @@ byte-identical.
    affects the exit code, and with no engine it is reported `NOT RUN` like the rest.
 
 `backend/tests/p3/test_windows_ocr_acceptance.py` grew from 7 to 15 tests
-(P3 directory: 186 collected tests; full suite 569 passed), covering
+(P3 directory: 196 collected tests; full suite 579 passed), covering
 the missing-wheel path, the `_guarded` conversion, the 07/08 accounting, the owner's
 real `E:\DEPI` paths, the detached-worktree/SHA guard, the "do not skip the
 frontend" rule and the `app.db` read-only guarantee.
@@ -1675,6 +1675,61 @@ asserted *blocked* — and both fail when the lock is neutralised.
 
 Limit recorded honestly: the lock is process-local. It cannot coordinate separate
 processes, which each have their own copy of the module global.
+
+## V.12 R13 refined and R15 — engine substitution, and evidence integrity
+
+Owner evidence at `1cbc86a` ([review `5913471266`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#pullrequestreview-5913471266)). Two findings, both from
+the real Windows run.
+
+### R13 refined — the engine substituted `1O5` → `105`
+
+The owner's raw OCR output for a source line of `Value: 1O5 mg/dL`:
+
+```
+SYNTHETIC DEMODATA- NOTAREAL MEDICAL RECORD
+DemoPatientA ef DEMOAOOT —‘Reprtdate: 2026-10-20
+Test Gluccse Value: 105 mgldl.
+```
+
+Three distinct things are now separated, because conflating them was the earlier error:
+
+| Case | Evidence | Application behaviour |
+|---|---|---|
+| Engine preserves `1O5` | `raw_text="1O5"`, `unparseable_value` | flagged, never repaired |
+| Engine substitutes `105` **and** damages labels | no value fact parsed | routed to human review, value not accepted |
+| Engine substitutes `105`, labels intact | `raw_text="105"`, low page confidence | **not** silently trusted: confidence is preserved for the readability rules |
+
+The substitution happened **in Tesseract**, not in the application — the source image says
+`1O5` and the engine returned `105`. So the current fixture does *not* prove an automatic
+correction; nor does it prove safe handling of a plausible-but-wrong `105`. Both are now
+pinned deterministically against the owner's verbatim OCR text.
+
+The gate records the source/engine split explicitly (`source_token`,
+`engine_preserved_ambiguous_token`, `engine_substituted_plausible_value`,
+`application_substituted_value: false`) and states its own limitation. It reports
+**not proven** rather than claiming a case it did not demonstrate.
+
+**Fixture proposal (authorization required — not implemented).** See §V.13.
+
+### R15 — duplicate verdict and Windows file lock
+
+The owner's JSON contained **two** rows for ING-02: PASS, then FAIL with
+`PermissionError [WinError 32]` during temporary-directory removal. Two defects:
+
+1. **Evidence integrity.** `_guarded` appended a FAIL even when the gate had already
+   concluded. A gate now has exactly **one** verdict; a subsequent exception is attributed
+   to a separate `ING-02 teardown` row, so a cleanup failure stays visible and can never
+   be mistaken for a pass.
+2. **Resource lifecycle.** `_engine_for_url` is `@lru_cache`d, so a pooled connection to
+   the throwaway SQLite file outlived the gate. `with TemporaryDirectory(...)` then
+   deleted the directory *before* any outer `finally` could dispose it — fine on Linux,
+   `WinError 32` on Windows. Added `dispose_engines(url)`, which disposes the cached
+   engine and clears the cache, and restructured the gate to `mkdtemp` + `finally`:
+   reset the settings cache, dispose engines, **then** remove the directory — on every
+   path, including exceptions and early returns.
+
+The owner's `data/runtime` database is never referenced; all state stays in the temporary
+directory.
 
 ## V.7 Status
 

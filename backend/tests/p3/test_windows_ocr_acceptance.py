@@ -220,7 +220,12 @@ def test_the_probe_never_points_at_the_runtime_database():
     assert "data/runtime" not in executable, (
         "the probe must not use the repository runtime database"
     )
-    assert "TemporaryDirectory" in source, "all probe state belongs in a temp directory"
+    # All probe state lives in a temporary directory. It is created explicitly with
+    # ``mkdtemp`` rather than ``TemporaryDirectory``, because the latter deletes the
+    # directory before an outer ``finally`` can dispose the engine still holding the
+    # SQLite file open — which fails on Windows with WinError 32.
+    assert "tempfile.mkdtemp(" in source, "all probe state belongs in a temp directory"
+    assert "shutil.rmtree(" in source, "the probe must remove its temporary directory"
     assert "create_app" in source, "the end-to-end gate must use an isolated app instance"
 
 
@@ -266,7 +271,7 @@ def test_handoff_never_touches_the_main_runtime_database():
     for line in text.splitlines():
         if "app.db" in line and line.strip().startswith("&"):
             raise AssertionError(f"no executable command may consume app.db: {line!r}")
-    assert "TemporaryDirectory" in text or r"P3-Acceptance\artifacts" in text
+    assert "P3-Acceptance\\artifacts" in text or "temp" in text.lower()
 
 
 def test_handoff_pins_the_sha_and_refuses_a_stale_fetch():

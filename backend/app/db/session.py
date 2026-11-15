@@ -89,6 +89,33 @@ def _engine_for_url(database_url: str) -> Engine:
     return create_db_engine(database_url)
 
 
+def dispose_engines(database_url: str) -> None:
+    """Dispose every cached engine for ``database_url`` and drop it from the cache.
+
+    A cached engine keeps pooled connections open, which on Windows leaves the SQLite
+    file handle in place — deleting a temporary database then fails with
+    ``PermissionError [WinError 32]`` even though every logical session was closed.
+    Callers that own a throwaway database (acceptance probes, tests) must release it
+    here *before* removing the file.
+
+    ``cache_clear()`` alone is not enough: it drops the reference but leaves the engine
+    waiting for garbage collection, whose timing is not guaranteed — so the file can
+    still be open when the caller tries to delete it. Each engine is disposed
+    explicitly first.
+
+    Safe to call repeatedly, and for URLs that were never cached.
+    """
+    try:
+        cached = _engine_for_url(database_url)
+    except Exception:  # pragma: no cover - creating an engine can fail on a bad URL
+        cached = None
+    if cached is not None:
+        cached.dispose()
+    # ``lru_cache`` has no per-key eviction, and the cache is tiny (maxsize=4): drop it
+    # wholesale. Engines are recreated lazily on next use.
+    _engine_for_url.cache_clear()
+
+
 def get_engine() -> Engine:
     """Return the engine for the current settings (cache key = resolved URL)."""
     return _engine_for_url(get_settings().database_url)
@@ -134,6 +161,7 @@ __all__ = [
     "RUNTIME_DIR",
     "check_database",
     "create_db_engine",
+    "dispose_engines",
     "ensure_sqlite_directory",
     "get_db_session",
     "get_engine",

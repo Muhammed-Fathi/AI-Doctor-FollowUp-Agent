@@ -304,3 +304,243 @@ def test_seeding_still_rejects_an_empty_password():
     source = inspect.getsource(seed_demo_data)
     assert "password.strip()" in source
     assert issubclass(SeedConfigurationError, Exception)
+
+
+# ============================================ R15: verdict and cleanup integrity
+#
+# The owner's JSON contained TWO rows for ING-02 — PASS, then FAIL on a Windows
+# `PermissionError [WinError 32]` while the temporary SQLite directory was being
+# removed. Two defects, both asserted below: a cached engine kept the file open, and
+# the gate could emit a second verdict after already concluding.
+
+GATE_IDS = (
+    "ENV-01 python",
+    "ENV-02 libraries",
+    "OCR-ENGINE",
+    "OCR-ENGINE eng.traineddata",
+    "GOLD-EX-05 PNG",
+    "GOLD-EX-06 JPEG",
+    "GOLD-EX-07/08 coverage",
+    "OCR-LIVE-01 measured",
+    "GOLD-EX-11 OCR-produced 1O5",
+    "PDFIUM-01 rasterize",
+    "ING-02 OCR upload end-to-end",
+)
+
+
+def test_a_successful_gate_cannot_be_followed_by_a_second_verdict():
+    """Exactly one terminal verdict per gate, even when cleanup then fails.
+
+    Reproduces the owner's PASS-then-FAIL pair: the gate concluded, and an exception in
+    the ``finally`` path appended a second row. A conforming report must show the PASS
+    once, with the cleanup problem recorded separately.
+    """
+    module = _probe_module()
+    results: list = []
+
+    def _passes_then_cleanup_raises() -> None:
+        module._record(results, module.Result("ING-02 OCR upload end-to-end", module.PASS, "ok"))
+        raise PermissionError(13, "cleanup failed")
+
+    module._guarded(results, "ING-02 OCR upload end-to-end", _passes_then_cleanup_raises)
+
+    gate_rows = [row for row in results if row.gate == "ING-02 OCR upload end-to-end"]
+    assert len(gate_rows) == 1, f"a gate must have one verdict, got {len(gate_rows)}"
+    assert gate_rows[0].status == module.PASS, "a cleanup error must not erase the verdict"
+    # The cleanup failure is reported, not hidden — under its own identifier.
+    cleanup = [row for row in results if "cleanup" in row.gate.lower()]
+    assert cleanup, "a cleanup failure must be recorded, never swallowed"
+    assert cleanup[0].status == module.FAIL
+
+
+def test_a_failed_gate_is_reported_once():
+    """A gate that fails before concluding gets exactly one FAIL row."""
+    module = _probe_module()
+    results: list = []
+
+    def _raises() -> None:
+        raise RuntimeError("boom")
+
+    module._guarded(results, "GOLD-EX-11 OCR-produced 1O5", _raises)
+
+    rows = [row for row in results if row.gate == "GOLD-EX-11 OCR-produced 1O5"]
+    assert len(rows) == 1
+    assert rows[0].status == module.FAIL
+
+
+def test_every_gate_emits_at_most_one_row_in_a_full_probe_run(monkeypatch):
+    """End-to-end: no gate identifier appears twice in the evidence."""
+    module = _probe_module()
+    results: list = []
+
+    # No engine here, so every OCR gate reports NOT RUN; the non-engine gates run.
+    module.gate_environment(results)
+    module.gate_ocr_live(results, engine_present=False)
+    module.gate_ocr_corruption(results, engine_present=False)
+    module.gate_rasterizer(results)
+    module.gate_api_ocr_upload(results, engine_present=False)
+
+    identifiers = [row.gate for row in results]
+    duplicates = {gate for gate in identifiers if identifiers.count(gate) > 1}
+    assert not duplicates, f"duplicate gate verdicts: {sorted(duplicates)}"
+    # And every declared gate appears exactly once.
+    assert len(identifiers) == len(set(identifiers))
+
+
+def test_cleanup_closes_every_engine_so_the_database_can_be_removed(tmp_path):
+    """The engine cache must not keep a temporary SQLite file open.
+
+    Windows refuses to delete a file that still has an open handle (``WinError 32``),
+    so a cached engine holding a pooled connection breaks cleanup there while passing on
+    Linux. The helper must dispose every engine for the URL and clear the cache.
+    """
+
+    from sqlalchemy import text
+
+    from app.db.session import _engine_for_url, create_db_engine, dispose_engines
+
+    db_path = tmp_path / "accept.db"
+    url = f"sqlite:///{db_path.as_posix()}"
+
+    engine = _engine_for_url(url)
+    with engine.connect() as connection:
+        connection.execute(text("CREATE TABLE t (x integer)"))
+
+    # A second, separately created engine must also be released by the helper.
+    standalone = create_db_engine(url)
+    with standalone.connect() as connection:
+        connection.execute(text("INSERT INTO t VALUES (1)"))
+
+    dispose_engines(url)
+
+    # No handle remains: the file can be removed and no checkpoint is pending.
+    db_path.unlink()
+    assert not db_path.exists()
+
+
+def test_dispose_engines_is_safe_when_nothing_is_cached():
+    """Idempotent: disposing twice, or for an unseen URL, must not raise."""
+    from app.db.session import dispose_engines
+
+    dispose_engines("sqlite:///definitely-not-created.db")
+    dispose_engines("sqlite:///definitely-not-created.db")
+
+
+def test_the_probe_disposes_before_removing_the_temporary_directory():
+    """Order matters: dispose, then delete. A retained handle breaks Windows.
+
+    ``with TemporaryDirectory(...)`` removes the directory as the block exits, which is
+    *before* an outer ``finally`` could dispose the engine still holding the SQLite file
+    open. That is exactly how the owner's run produced ``WinError 32``. The gate must
+    therefore own an explicit directory and tear it down in the right order.
+    """
+    source = PROBE.read_text(encoding="utf-8")
+    body = source[source.index("def gate_api_ocr_upload") : source.index("def main(")]
+
+    assert "tempfile.mkdtemp(" in body, "the gate must own its directory explicitly"
+    assert "with tempfile.TemporaryDirectory(" not in body, (
+        "TemporaryDirectory deletes before an outer finally can dispose the engine"
+    )
+
+    # Teardown runs in a finally, disposes the engine cache, and only then deletes.
+    finally_at = body.index("finally:")
+    dispose_at = body.index("dispose_engines(")
+    rmtree_at = body.index("shutil.rmtree(")
+    assert finally_at < dispose_at < rmtree_at, (
+        "teardown must run in a finally, dispose engines, and remove the directory last"
+    )
+
+    # A cleanup failure gets its own identifier, never a second verdict for the gate.
+    assert '"ING-02 teardown"' in body
+    assert "PermissionError" in body
+
+
+# ================================== R13b: source-image vs OCR-output, both outcomes
+#
+# The owner's real Tesseract run returned:
+#
+#     Test Gluccse Value: 105 mgldl.
+#
+# from an image whose source text says ``Value: 1O5 mg/dL``. So the engine itself
+# substituted ``1O5`` -> ``105``. That is a *different* situation from the parser
+# receiving ``1O5``, and from the parser receiving a plausible ``105`` on a damaged
+# line. All three must be distinguished, and none may be silently "fixed".
+#
+# These tests use the recorded OCR text verbatim. They prove parser behaviour on real
+# engine output; they do not claim the engine was run here.
+
+#: The owner's actual Windows OCR output at commit 1cbc86a (fragment of line 3).
+OWNER_OCR_LINE = "Test Gluccse Value: 105 mgldl."
+
+#: The synthetic source that image was rendered from.
+SOURCE_LINE = "Test: Glucose             Value: 1O5 mg/dL"
+
+
+def test_source_image_and_ocr_output_disagree_and_that_is_recorded():
+    """The substitution ``1O5`` -> ``105`` happened in the *engine*, not the parser.
+
+    This is the decisive evidence split the review asked for: the source says one thing,
+    the engine said another. Nothing in the application did it.
+    """
+    assert "1O5" in SOURCE_LINE
+    assert "105" in OWNER_OCR_LINE
+    assert "1O5" not in OWNER_OCR_LINE, "the engine transcribed the O as a zero"
+
+
+def test_owner_ocr_text_yields_no_value_fact():
+    """The owner's damaged line must not produce an accepted value fact.
+
+    ``Gluccse`` and ``mgldl.`` are mangled, and the conservative pattern requires
+    ``test``/``value`` labels it can trust. The safe outcome is *no* fact, not a guessed
+    one — the document then routes to human review rather than silently using 105.
+    """
+    facts = _value_facts(OWNER_OCR_LINE)
+
+    assert facts == [], "a damaged line must not be attributed as a verified value"
+    # And nothing anywhere claimed 105 from this text.
+    page = PageText(
+        page_index=0, text=OWNER_OCR_LINE, extractor=ExtractionPath.TESSERACT, confidence=0.6
+    )
+    parsed = parse_pages([page])
+    assert all(fact.normalized_value != "105" for fact in parsed.facts)
+
+
+def test_a_plausible_105_from_damaged_ocr_is_never_silently_accepted():
+    """If the labels survive but the value is a substituted ``105``, it is still unsafe.
+
+    This is the case that matters clinically: a *plausible but wrong* number. The parser
+    cannot know the engine lied, so it must not invent confidence it does not have. The
+    value is recorded with the page's OCR confidence so the review path can see the
+    uncertainty — it is not laundered into a clean reading.
+    """
+    # Labels intact, engine substituted the value, OCR confidence low.
+    text = "Test: Glucose             Value: 105 mg/dL"
+    page = PageText(page_index=0, text=text, extractor=ExtractionPath.TESSERACT, confidence=0.64)
+    parsed = parse_pages([page])
+    values = [fact for fact in parsed.facts if fact.field_name.value == "value"]
+
+    assert len(values) == 1
+    fact = values[0]
+    # The parser records what it saw; it does not pretend to have verified it.
+    assert fact.raw_text == "105"
+    assert fact.extractor is ExtractionPath.TESSERACT
+    assert fact.confidence == pytest.approx(0.64)
+    # Crucially, the fact is NOT marked CLEAN-verified by the OCR layer: the low
+    # confidence is preserved for the readability rules to act on.
+    assert fact.confidence < 0.70, "low OCR confidence must remain visible to the rules"
+
+
+def test_a_preserved_ambiguous_token_and_a_substitution_are_distinguishable():
+    """The two outcomes must produce different evidence, not the same 'clean' claim."""
+    ambiguous = _value_facts("Test: Glucose             Value: 1O5 mg/dL")[0]
+    substituted = _value_facts("Test: Glucose             Value: 105 mg/dL")[0]
+
+    assert ambiguous.normalized_value is None
+    assert "unparseable_value" in {flag.value for flag in ambiguous.quality_flags}
+
+    assert substituted.normalized_value == "105"
+    assert "unparseable_value" not in {flag.value for flag in substituted.quality_flags}
+
+    # Different inputs, different evidence — so a reviewer can tell them apart later.
+    assert ambiguous.raw_text != substituted.raw_text
+    assert ambiguous.normalized_value != substituted.normalized_value

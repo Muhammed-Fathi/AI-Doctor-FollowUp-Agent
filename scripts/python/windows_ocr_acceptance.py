@@ -37,6 +37,7 @@ import io
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -93,6 +94,11 @@ def _git_head() -> str | None:
     return completed.stdout.strip() or None
 
 
+def _verdicts_for(results: list[Result], gate: str) -> list[Result]:
+    """Return the rows already recorded for ``gate``."""
+    return [row for row in results if row.gate == gate]
+
+
 def _guarded(results: list[Result], gate: str, probe) -> object:
     """Run ``probe`` and convert any escape into a truthful ``FAIL`` result.
 
@@ -100,18 +106,22 @@ def _guarded(results: list[Result], gate: str, probe) -> object:
     abort the run with a traceback: the JSON evidence file is the artifact the
     owner hands back, so it has to be written even when a gate blows up. The
     traceback is included — an error is reported, never hidden.
+
+    **One verdict per gate.** A gate may record its conclusion and *then* raise, usually
+    from a teardown path. Appending a second row would contradict the first — an earlier
+    owner run contained ING-02 as both PASS and FAIL, making the evidence unreadable. If
+    the gate has already concluded, that verdict stands and the exception is attributed
+    to a separate ``<gate> cleanup`` row, so a cleanup failure stays visible and can
+    never be mistaken for a pass.
     """
     try:
         return probe()
     except Exception as error:
-        _record(
-            results,
-            Result(
-                gate,
-                FAIL,
-                f"unexpected {type(error).__name__}: {error}\n{traceback.format_exc(limit=3)}",
-            ),
-        )
+        detail = f"unexpected {type(error).__name__}: {error}\n{traceback.format_exc(limit=3)}"
+        if _verdicts_for(results, gate):
+            _record(results, Result(f"{gate} cleanup", FAIL, detail))
+        else:
+            _record(results, Result(gate, FAIL, detail))
         return None
 
 
@@ -443,6 +453,13 @@ def gate_ocr_corruption(results: list[Result], *, engine_present: bool) -> None:
                 "normalized_values": normalized,
                 "raw_tokens": raw_tokens,
                 "ocr_text": ocr.text,
+                # Explicit source-vs-engine split. The application never substitutes a
+                # value here; this records whether the ENGINE did, which is what the
+                # owner's Windows run showed (1O5 rendered, 105 returned).
+                "source_token": "1O5",
+                "engine_preserved_ambiguous_token": "1O5" in ocr.text,
+                "engine_substituted_plausible_value": ("105" in ocr.text and "1O5" not in ocr.text),
+                "application_substituted_value": False,
                 "limitation": (
                     "the gate proves the parser flags an OCR-produced ambiguous token only "
                     "when the engine actually emits one; a low-resolution render may lose "
@@ -522,155 +539,270 @@ def gate_api_ocr_upload(results: list[Result], *, engine_present: bool) -> None:
 
     import generate_p3_fixtures as fixtures
 
+    tmp = tempfile.mkdtemp(prefix="p3-accept-")
+    database_url = ""
     try:
-        with tempfile.TemporaryDirectory(prefix="p3-accept-") as tmp:
-            from fastapi.testclient import TestClient
+        from fastapi.testclient import TestClient
 
-            from app.db.session import create_db_engine
-            from app.services.accounts import issue_session
-            from app.services.seed import seed_demo_data
+        from app.db.session import create_db_engine
+        from app.services.accounts import issue_session
+        from app.services.seed import seed_demo_data
 
-            db_path = Path(tmp) / "accept.db"
-            os.environ["DATABASE_URL"] = f"sqlite:///{db_path.as_posix()}"
-            os.environ["APP_ENV"] = "test"
-            os.environ["UPLOAD_DIR"] = str(Path(tmp) / "uploads")
-            os.environ["DEMO_SEED_PASSWORD"] = os.environ.get(
-                "DEMO_SEED_PASSWORD", "acceptance-only-password"
+        db_path = Path(tmp) / "accept.db"
+        os.environ["DATABASE_URL"] = f"sqlite:///{db_path.as_posix()}"
+        os.environ["APP_ENV"] = "test"
+        os.environ["UPLOAD_DIR"] = str(Path(tmp) / "uploads")
+        os.environ["DEMO_SEED_PASSWORD"] = os.environ.get(
+            "DEMO_SEED_PASSWORD", "acceptance-only-password"
+        )
+
+        from app.core.config import get_settings, reset_settings_cache
+
+        settings = get_settings()
+
+        from alembic import command
+        from alembic.config import Config
+
+        config = Config(str(REPO_ROOT / "backend" / "migrations" / "alembic.ini"))
+        config.set_main_option("sqlalchemy.url", settings.database_url)
+        config.attributes["configure_logger"] = False
+        command.upgrade(config, "head")
+
+        engine = create_db_engine(settings.database_url)
+        from sqlalchemy import select
+        from sqlalchemy.orm import Session
+
+        from app.db.models import ExtractedFact, User
+        from app.main import create_app
+
+        with Session(engine) as session:
+            seed_demo_data(
+                session,
+                password=_seed_password(settings),
+                now=__import__("datetime").datetime(
+                    2026, 11, 15, tzinfo=__import__("datetime").timezone.utc
+                ),
+                iterations=1000,
             )
+            session.commit()
+            patient = session.execute(
+                select(User).where(User.username == "demo_patient_a")
+            ).scalar_one()
+            doctor = session.execute(
+                select(User).where(User.username == "demo_doctor")
+            ).scalar_one()
+            # ``issue_session`` is keyword-only and takes an explicit clock; the
+            # reviewed probe omitted it and raised TypeError before any upload.
+            #
+            # The clock must be *now*, not a fixed date: a session lives for 60
+            # minutes, so a hard-coded midnight expiry is already in the past and
+            # the upload answers 401. That is the probe borrowing the seed's
+            # deterministic timestamp for something time-sensitive.
+            issued_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+            patient_token, _ = issue_session(session, user=patient, now=issued_at, ttl_minutes=60)
+            doctor_token, _ = issue_session(session, user=doctor, now=issued_at, ttl_minutes=60)
+            session.commit()
 
-            from app.core.config import get_settings, reset_settings_cache
-
-            reset_settings_cache()
-            settings = get_settings()
-
-            from alembic import command
-            from alembic.config import Config
-
-            config = Config(str(REPO_ROOT / "backend" / "migrations" / "alembic.ini"))
-            config.set_main_option("sqlalchemy.url", settings.database_url)
-            config.attributes["configure_logger"] = False
-            command.upgrade(config, "head")
-
-            engine = create_db_engine(settings.database_url)
-            from sqlalchemy import select
-            from sqlalchemy.orm import Session
-
-            from app.db.models import ExtractedFact, User
-            from app.main import create_app
-
-            with Session(engine) as session:
-                seed_demo_data(
-                    session,
-                    password=_seed_password(settings),
-                    now=__import__("datetime").datetime(
-                        2026, 11, 15, tzinfo=__import__("datetime").timezone.utc
-                    ),
-                    iterations=1000,
-                )
-                session.commit()
-                patient = session.execute(
-                    select(User).where(User.username == "demo_patient_a")
-                ).scalar_one()
-                doctor = session.execute(
-                    select(User).where(User.username == "demo_doctor")
-                ).scalar_one()
-                # ``issue_session`` is keyword-only and takes an explicit clock; the
-                # reviewed probe omitted it and raised TypeError before any upload.
-                #
-                # The clock must be *now*, not a fixed date: a session lives for 60
-                # minutes, so a hard-coded midnight expiry is already in the past and
-                # the upload answers 401. That is the probe borrowing the seed's
-                # deterministic timestamp for something time-sensitive.
-                issued_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
-                patient_token, _ = issue_session(
-                    session, user=patient, now=issued_at, ttl_minutes=60
-                )
-                doctor_token, _ = issue_session(session, user=doctor, now=issued_at, ttl_minutes=60)
-                session.commit()
-
-                with TestClient(create_app(settings)) as client:
-                    upload = client.post(
-                        "/api/v1/documents/upload",
-                        headers={"Authorization": f"Bearer {patient_token}"},
-                        files={
-                            "file": (
-                                "scan.png",
-                                fixtures.image_bytes("report_a_clean.txt", fmt="PNG"),
-                                "image/png",
-                            )
-                        },
-                    )
-                    if upload.status_code != 202:
-                        _record(
-                            results,
-                            Result(
-                                gate, FAIL, f"upload answered {upload.status_code}: {upload.text}"
-                            ),
+            with TestClient(create_app(settings)) as client:
+                upload = client.post(
+                    "/api/v1/documents/upload",
+                    headers={"Authorization": f"Bearer {patient_token}"},
+                    files={
+                        "file": (
+                            "scan.png",
+                            fixtures.image_bytes("report_a_clean.txt", fmt="PNG"),
+                            "image/png",
                         )
-                        return
-                    document_id = upload.json()["document_id"]
-
-                    extraction = client.get(
-                        f"/api/v1/documents/{document_id}/extraction",
-                        headers={"Authorization": f"Bearer {doctor_token}"},
+                    },
+                )
+                if upload.status_code != 202:
+                    _record(
+                        results,
+                        Result(gate, FAIL, f"upload answered {upload.status_code}: {upload.text}"),
                     )
-                    if extraction.status_code != 200:
-                        _record(
-                            results,
-                            Result(
-                                gate,
-                                FAIL,
-                                f"extraction answered {extraction.status_code}: {extraction.text}",
-                            ),
-                        )
-                        return
+                    return
+                document_id = upload.json()["document_id"]
 
-                    body = extraction.json()
-                    facts = body["facts"]
-                    extractors = {fact["evidence"]["extractor"] for fact in facts}
-                    attempts = [
-                        {
-                            "path": attempt["path"],
-                            "succeeded": attempt["succeeded"],
-                            "confidence": attempt.get("engine_confidence"),
-                        }
-                        for attempt in body["attempts"]
-                    ]
-                    stored = session.execute(
-                        select(ExtractedFact).where(ExtractedFact.document_id == document_id)
-                    ).scalars()
-                    stored_extractors = {row.extractor for row in stored}
-
-                    ok = (
-                        facts and extractors == {"tesseract"} and stored_extractors == {"tesseract"}
-                    )
+                extraction = client.get(
+                    f"/api/v1/documents/{document_id}/extraction",
+                    headers={"Authorization": f"Bearer {doctor_token}"},
+                )
+                if extraction.status_code != 200:
                     _record(
                         results,
                         Result(
                             gate,
-                            PASS if ok else FAIL,
-                            (
-                                f"facts={len(facts)} evidence_extractors={sorted(extractors)} "
-                                f"stored_extractors={sorted(stored_extractors)} attempts={attempts}"
-                            ),
-                            {
-                                "fact_count": len(facts),
-                                "evidence_extractors": sorted(extractors),
-                                "stored_extractors": sorted(stored_extractors),
-                                "attempts": attempts,
-                                "ocr_issues": sorted(
-                                    issue["issue_type"] for issue in body["verification_issues"]
-                                ),
-                            },
+                            FAIL,
+                            f"extraction answered {extraction.status_code}: {extraction.text}",
                         ),
                     )
-            engine.dispose()
-            reset_settings_cache()
+                    return
+
+                body = extraction.json()
+                facts = body["facts"]
+                extractors = {fact["evidence"]["extractor"] for fact in facts}
+                attempts = [
+                    {
+                        "path": attempt["path"],
+                        "succeeded": attempt["succeeded"],
+                        "confidence": attempt.get("engine_confidence"),
+                    }
+                    for attempt in body["attempts"]
+                ]
+                stored = session.execute(
+                    select(ExtractedFact).where(ExtractedFact.document_id == document_id)
+                ).scalars()
+                stored_extractors = {row.extractor for row in stored}
+
+                ok = facts and extractors == {"tesseract"} and stored_extractors == {"tesseract"}
+                _record(
+                    results,
+                    Result(
+                        gate,
+                        PASS if ok else FAIL,
+                        (
+                            f"facts={len(facts)} evidence_extractors={sorted(extractors)} "
+                            f"stored_extractors={sorted(stored_extractors)} attempts={attempts}"
+                        ),
+                        {
+                            "fact_count": len(facts),
+                            "evidence_extractors": sorted(extractors),
+                            "stored_extractors": sorted(stored_extractors),
+                            "attempts": attempts,
+                            "ocr_issues": sorted(
+                                issue["issue_type"] for issue in body["verification_issues"]
+                            ),
+                        },
+                    ),
+                )
     except Exception:
-        _record(results, Result(gate, FAIL, traceback.format_exc(limit=3)))
+        # A gate that has already concluded keeps its verdict; a failure before that
+        # point is the verdict. Either way cleanup below still runs.
+        if not _verdicts_for(results, gate):
+            _record(results, Result(gate, FAIL, traceback.format_exc(limit=3)))
+    finally:
+        # Teardown order matters on Windows: a cached engine keeps a pooled connection
+        # to the throwaway SQLite file, and the file cannot be deleted while any handle
+        # is open (``PermissionError [WinError 32]``). Dispose first, delete second, and
+        # report any failure under its own identifier rather than as a second verdict
+        # for this gate.
+        teardown_errors: list[str] = []
+        try:
+            from app.core.config import reset_settings_cache
+
+            reset_settings_cache()
+        except Exception as error:  # pragma: no cover - defensive
+            teardown_errors.append(f"settings cache: {type(error).__name__}: {error}")
+        try:
+            from app.db.session import dispose_engines
+
+            dispose_engines(database_url or os.environ.get("DATABASE_URL", ""))
+        except Exception as error:
+            teardown_errors.append(f"engine disposal: {type(error).__name__}: {error}")
+        try:
+            shutil.rmtree(tmp)
+        except PermissionError as error:
+            teardown_errors.append(
+                f"temporary directory still locked: {type(error).__name__}: {error} "
+                "(a retained SQLite handle prevents deletion on Windows)"
+            )
+        except OSError as error:
+            teardown_errors.append(f"temporary directory: {type(error).__name__}: {error}")
+
+        if teardown_errors:
+            _record(
+                results,
+                Result(
+                    "ING-02 teardown",
+                    FAIL,
+                    "; ".join(teardown_errors),
+                    {"cleanup_errors": teardown_errors},
+                ),
+            )
 
 
-# --- main --------------------------------------------------------------------
+def main(argv: list[str]) -> int:
+    """Run every Windows-only gate and return 0 only if none is NOT RUN/FAIL."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--json", type=Path, default=None, help="write the results as JSON")
+    args = parser.parse_args(argv[1:])
+
+    if not SOURCES.is_dir():
+        print(f"FAIL: fixture sources not found at {SOURCES}", file=sys.stderr)
+        return 2
+
+    system_path = str(REPO_ROOT / "scripts" / "python")
+    if system_path not in sys.path:
+        sys.path.insert(0, system_path)
+
+    results: list[Result] = []
+    _guarded(results, "ENV-01/02 environment", lambda: gate_environment(results))
+    executable = _guarded(results, "OCR-ENGINE", lambda: gate_engine(results))
+    engine_present = executable is not None
+
+    _guarded(
+        results,
+        "GOLD-EX-05/06/OCR-LIVE-01",
+        lambda: gate_ocr_live(results, engine_present=engine_present),
+    )
+    _guarded(
+        results,
+        "GOLD-EX-11 OCR-produced 1O5",
+        lambda: gate_ocr_corruption(results, engine_present=engine_present),
+    )
+    _guarded(results, "PDFIUM-01 rasterize", lambda: gate_rasterizer(results))
+    _guarded(
+        results,
+        "ING-02 OCR upload end-to-end",
+        lambda: gate_api_ocr_upload(results, engine_present=engine_present),
+    )
+
+    print()
+    print("=" * 78)
+    for result in results:
+        print(f"{result.status:>7}  {result.gate}")
+    failures = [result for result in results if result.status not in {PASS, DERIVED}]
+    print("=" * 78)
+    if failures:
+        print(f"{len(failures)} gate(s) not passed. This is reported, not hidden.")
+    else:
+        print("All Windows-only gates passed.")
+
+    if args.json is not None:
+        payload = {
+            "generated_at_utc": datetime.now(UTC)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "platform": platform.platform(),
+            "python": platform.python_version(),
+            "repository_head": _git_head(),
+            "gates": [
+                {"gate": r.gate, "status": r.status, "detail": r.detail, "data": r.data}
+                for r in results
+            ],
+            "summary": {
+                PASS: sum(1 for r in results if r.status == PASS),
+                FAIL: sum(1 for r in results if r.status == FAIL),
+                NOT_RUN: sum(1 for r in results if r.status == NOT_RUN),
+                DERIVED: sum(1 for r in results if r.status == DERIVED),
+            },
+            "notice": "EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE",
+        }
+        try:
+            args.json.parent.mkdir(parents=True, exist_ok=True)
+            args.json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            print(f"Wrote {args.json}")
+        except OSError as error:
+            # Losing the evidence file is itself a failure to report, not a crash.
+            print(f"[   FAIL] EVIDENCE: could not write {args.json}: {error}")
+            return 2
+
+    return 0 if not failures else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))
 
 
 def main(argv: list[str]) -> int:
