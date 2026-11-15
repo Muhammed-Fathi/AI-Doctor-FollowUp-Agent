@@ -136,22 +136,55 @@ def _facts(db: Session, document_id: str) -> list[ExtractedFact]:
     )
 
 
-def _structural_measurement_count(facts: list[ExtractedFact]) -> int:
-    """Return how many measurement tuples the document appears to describe.
+def superseded_fact_ids(facts: list[ExtractedFact]) -> set[str]:
+    """Return the facts a correction replaced (``R09``).
 
-    Counted from the stored candidate facts with **no** regard to verification
-    status: two ``test_name`` fields, or two ``value`` fields, describe two
-    measurements whatever a doctor has decided so far. A document with one of each
-    is a single tuple.
+    A fact is **superseded** — not merely rejected — when it is ``rejected`` *and*
+    another fact of the same document points at it through
+    ``corrected_from_fact_id``. That is the signature of an immutable historical
+    version kept for provenance, and it is precisely the row that must stop being
+    counted as an active measurement tuple.
+
+    A plain rejection is deliberately **not** in this set: rejecting a value is a
+    doctor's verdict about a current reading, and ``DEMO_REVIEW_RULES.md`` §4
+    counts it. Only correction *history* is excluded.
     """
+    replaced = {
+        fact.corrected_from_fact_id for fact in facts if fact.corrected_from_fact_id is not None
+    }
+    return {
+        fact.id
+        for fact in facts
+        if fact.verification_status == FactVerificationStatus.REJECTED.value and fact.id in replaced
+    }
+
+
+def _structural_measurement_count(facts: list[ExtractedFact]) -> int:
+    """Return how many measurement tuples the document describes **now**.
+
+    Counted from the stored candidate facts with no regard to verification
+    *verdicts*: two ``test_name`` fields, or two ``value`` fields, describe two
+    measurements whatever a doctor has decided about them. A document with one of
+    each is a single tuple.
+
+    **R09:** a superseded version is not one of those tuples. A correction keeps
+    the rejected original beside the verified correction, and counting both made a
+    one-measurement report look like a two-test document, so a false
+    ``VI-002 / multi_measurement_document`` was persisted as OPEN on a document
+    that had just mapped correctly. History is retained (status, excerpt, span and
+    lineage all stay), but it no longer participates in the count.
+    """
+    superseded = superseded_fact_ids(facts)
+    active = [fact for fact in facts if fact.id not in superseded]
+
     test_names = {
         (fact.normalized_value or "").strip().lower()
-        for fact in facts
+        for fact in active
         if fact.field_name == FactField.TEST_NAME.value and fact.normalized_value
     }
     values = [
         fact
-        for fact in facts
+        for fact in active
         if fact.field_name == FactField.VALUE.value and fact.normalized_value is not None
     ]
     return max(len(test_names), len(values))
@@ -355,10 +388,18 @@ def compute_drafts(
         evaluate_conflicts(db, document=document, facts=facts, tolerance=conflict_tolerance)
     )
 
+    # **R09:** ``VI-002`` counts facts that still need a decision, not the
+    # immutable history a correction leaves behind. A superseded original is
+    # ``rejected`` by construction and would otherwise keep "1 extracted value(s)
+    # are not yet verified." open forever on a document that is fully decided —
+    # a permanent blocker no doctor action could ever clear. A plain rejection
+    # still counts, exactly as ``DEMO_REVIEW_RULES.md`` §4/§6.1 specifies.
+    superseded = superseded_fact_ids(facts)
     pending = [
         (index, fact.verification_status)
         for index, fact in enumerate(facts)
         if fact.verification_status != FactVerificationStatus.VERIFIED.value
+        and fact.id not in superseded
     ]
     unverified = collect_unverified_issue(pending)
     # ``VI-002`` has two documented reasons: the generic ``fact_unverified`` and
@@ -561,6 +602,7 @@ __all__ = [
     "identity_blocked",
     "open_issues",
     "summarize",
+    "superseded_fact_ids",
     "sync_issues",
     "uploader_patient_ref",
 ]

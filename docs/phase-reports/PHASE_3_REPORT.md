@@ -1323,3 +1323,181 @@ Unchanged and **not claimed**:
 **P3 remains `IN_REVIEW`.** Three blocking findings and the secondary uniqueness
 point addressed with tests that failed first (or were shown to pass vacuously and
 rewritten). No PASS, no self-approval, no merge, no P4/P5.
+
+---
+
+# Part V — P3-R09: superseded history vs. the active measurement tuple
+
+Review `5912326335` (`COMMENTED`) on head `af7d59d8ee10e9a631b68e161cbcbaf7a18fa7b7`.
+Same method: tests written and executed against that head before the fix.
+
+**Test-first proof.** Five new tests in `backend/tests/p3/test_p3_edge_cases.py`
+were run at `af7d59d`: **3 failed, 2 passed** (the two passing ones are controls
+that had to stay green). A sixth, `test_p3_r09_plain_rejection_still_counts_for_vi_002`,
+was added afterwards as the guardrail for the policy boundary in §V.3.
+
+| Test | At `af7d59d` |
+|---|---|
+| `test_p3_r09_corrected_single_measurement_has_no_false_multi_measurement_blocker` | **FAIL** |
+| `test_p3_r09_generic_vi_002_is_not_left_stale_after_a_correction` | **FAIL** |
+| `test_p3_r09_repeated_get_keeps_issue_identity_after_correction` | **FAIL** |
+| `test_p3_r09_genuine_two_measurement_document_still_blocks` | pass (control) |
+| `test_p3_r09_historical_version_is_retained_but_not_active` | pass (control) |
+
+The failure text at the reviewed head, from the first test:
+
+```
+AssertionError: a corrected one-test report is still one measurement; a superseded
+historical version must not be counted as a second tuple:
+[{'issue_type': 'VI-002', 'reason_code': 'multi_measurement_document',
+  'message': '2 extracted value(s) are not yet verified.', 'fact_ids': [],
+  'blocking': True, ...}]
+```
+
+## V.1 Root cause
+
+`_structural_measurement_count` counted every `value` fact with a non-null
+`normalized_value`, with **no** regard to status. A correction keeps the rejected
+original (`104`) beside the verified correction (`105`), so the count became 2 and
+`compute_drafts` emitted `VI-002 / multi_measurement_document` for a document that
+describes exactly one measurement. R06 fixed the *mapping* to read only the active
+fact, which is why the document mapped correctly **and** carried a blocking issue
+saying it could not be mapped — two contradictory statements persisted at once.
+
+The same defect had a second, permanent form: the generic `VI-002` counted every
+non-`verified` row, so the superseded original kept
+`1 extracted value(s) are not yet verified.` **open forever** on a fully decided
+document. No doctor action could ever clear it, because the append-only rule
+forbids deciding that fact a second time.
+
+## V.2 Fix
+
+A new predicate makes the distinction the review asked for — *historical superseded
+version* vs. *active measurement tuple*:
+
+```python
+def superseded_fact_ids(facts):
+    replaced = {f.corrected_from_fact_id for f in facts if f.corrected_from_fact_id}
+    return {f.id for f in facts
+            if f.verification_status == "rejected" and f.id in replaced}
+```
+
+A fact is **superseded** when it is `rejected` **and** another fact of the same
+document points at it through `corrected_from_fact_id`. That is the precise
+signature of a version retained for provenance — and it is *not* the same thing as
+a plain rejection, which stays counted (see §V.3).
+
+`_structural_measurement_count` and the `VI-002` pending count both skip superseded
+rows. Nothing else changes: the row keeps `rejected`, its `raw_text`, span,
+`extractor`, `confidence` and `normalized_value`, and the corrected row keeps the
+`corrected_from_fact_id` lineage. **History is preserved; only its participation in
+the active tuple stops.**
+
+## V.3 Policy reconciliation — and one item for the owner
+
+The review is right that the two documents pull in opposite directions:
+
+| Source | Says |
+|---|---|
+| `EXTRACTION_PROVENANCE.md` §6 | `corrected` ⇒ "mark the original `rejected` and create a corrected fact marked `verified`" |
+| `DEMO_REVIEW_RULES.md` §4 / §6.1 | `VI-002` trigger = "any fact … `verification_status != verified`"; message count = "the number of candidate fact rows with `verification_status != verified`" |
+
+Read literally and together, those two rules make a **permanent, unclearable
+blocker**: §6 *requires* a `rejected` row, and §4 counts that row forever. Every
+corrected document would therefore end `verified` at document level while still
+carrying a blocking issue — and, because the specific reason wins over the generic
+one, the message would even claim a multi-measurement document. That is not a
+protection; it is a rule that reports something false.
+
+**What I did *not* do:** I did not weaken §4's generic rule. A **plain rejection**
+(a doctor's verdict on a current reading) is still counted, and
+`test_p3_r09_plain_rejection_still_counts_for_vi_002` pins that boundary. The
+narrowing applies to exactly one category: a row that a correction replaced, which
+is by construction never a live candidate.
+
+**Owner decision requested (one, small, not a blocker for this push):** §4/§6.1
+should state that the `VI-002` trigger and count range over facts that are not
+`verified` **and not superseded by a correction** — i.e. over the *active*
+candidate set. Until that sentence exists in `docs/clinical-safety/*`, the shipped
+behaviour is the interpretation above, and Part V records it as an interpretation
+rather than as a contract I silently edited. `DEMO_REVIEW_RULES.md` is on the
+do-not-modify list, so I have not touched it; say the word and I will propose the
+exact two-line amendment as a separate, reviewable change.
+
+**Under P0-R14 nothing moves:** `multi_measurement_document` still means "this
+document describes more than one measurement", and a genuine two-test document
+still blocks and still maps zero observations
+(`test_p3_r09_genuine_two_measurement_document_still_blocks`).
+
+## V.4 Tests
+
+| Test | What it proves |
+|---|---|
+| `test_p3_r09_corrected_single_measurement_has_no_false_multi_measurement_blocker` | Full HTTP flow `104→105`, remaining facts decided, GET extraction: no `multi_measurement_document`, document `verified`, exactly one observation of `105`, and **no** `VI-002` row left `open` |
+| `test_p3_r09_generic_vi_002_is_not_left_stale_after_a_correction` | The generic `fact_unverified` form is gone too; the row is `resolved` **in place**, not deleted |
+| `test_p3_r09_genuine_two_measurement_document_still_blocks` | Control: two real tests still emit the blocker, still map zero observations, and deciding the facts does not make them attributable |
+| `test_p3_r09_repeated_get_keeps_issue_identity_after_correction` | Three consecutive GETs return identical `(issue_type, issue_id, created_at)` tuples, and none at all once fully decided |
+| `test_p3_r09_historical_version_is_retained_but_not_active` | The rejected original keeps `104`, its excerpt and span; the corrected row keeps `105` and the lineage link |
+| `test_p3_r09_plain_rejection_still_counts_for_vi_002` | Guardrail: a plain rejection is **still** `VI-002 / fact_unverified` and nothing is superseded |
+
+## V.5 Gate results at this head
+
+```
+$ python -m pytest backend/tests           → 512 passed in 65.34s   (was 506; 128 P3)
+$ python -m ruff check .                   → All checks passed!
+$ python -m ruff format --check .          → 97 files already formatted
+$ python scripts/python/check_openapi.py   → PASS (16 paths / 17 operations, 41 schemas)
+$ python scripts/python/scan_repository.py → PASS (185 tracked files)
+$ pytest backend/tests/p2/test_p2_migration.py → PASS (9, incl. migration↔metadata drift)
+```
+
+Alembic, five states driven with real `upgrade`/`downgrade`:
+
+| State | How produced | Result |
+|---|---|---|
+| `head` | `upgrade head` | PASS |
+| `p2` | `upgrade head` → `downgrade 0002_p2_patient_domain` | PASS |
+| `p1` | `upgrade head` → `downgrade 0001_p1_baseline` | PASS |
+| `base` | `upgrade head` → `downgrade base` | PASS |
+| `head` again | `head → base → head` round trip | PASS |
+
+No schema change was needed for R09 — it is a counting defect, not a storage one —
+so the migration is untouched by this round and the round-trip result is identical
+to Part IV's.
+
+## V.6 Windows handoff
+
+The executable acceptance procedure lives in
+**`docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md`** and its probe is
+**`scripts/python/windows_ocr_acceptance.py`**. The probe covers, in one run:
+Tesseract version + `eng.traineddata`, real PNG and JPEG OCR (`GOLD-EX-05/06`),
+`OCR-LIVE-01` measurements, the OCR-produced `1O5` case (`GOLD-EX-11`),
+`pypdfium2` rasterization (D-01), and OCR provenance end-to-end through the HTTP
+API. It writes nothing outside a temporary directory, emits `PASS`/`FAIL`/`NOT RUN`
+and exits `2` if any gate did not pass.
+
+It was **executed here** to prove it is honest rather than decorative, and that run
+is the honest state of this environment:
+
+```
+[   FAIL] ENV-01 runtime: Linux … Python 3.11.2 … project requires Python 3.12.x
+[NOT RUN] OCR-ENGINE: engine not resolvable (tesseract is not installed or not on PATH)
+[NOT RUN] GOLD-EX-05 PNG / GOLD-EX-06 JPEG / OCR-LIVE-01 / GOLD-EX-11
+[   PASS] PDFIUM-01 rasterize: page 0 rendered size=(1224, 1584) wall=0.02s
+[NOT RUN] ING-02 OCR upload end-to-end: no Tesseract engine available
+exit code = 2
+```
+
+`PDFIUM-01` passing on Linux is a rasterizer sanity check, **not** D-01 acceptance:
+D-01 is about the Windows wheel, which remains NOT RUN.
+
+`backend/tests/p3/test_windows_ocr_acceptance.py` (7 tests) pins the honesty
+contract: a missing engine must report `NOT RUN`, never `PASS`; the script must exit
+non-zero in that case; and its executable lines must not reference
+`data/runtime`.
+
+## V.7 Status
+
+**P3 remains `IN_REVIEW`.** No PASS, no self-approval, no merge, no P4/P5. One
+small contract clarification is requested in §V.3; it does not block the Windows
+handoff in §V.6.

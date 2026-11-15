@@ -602,3 +602,278 @@ class ErrorCodeName:
 def _json(value: object) -> str:  # pragma: no cover - helper kept for debugging
     """Pretty-print a response body while debugging a failure."""
     return json.dumps(value, indent=2, sort_keys=True)
+
+
+# =============================================================================
+# P3-R09 — a superseded historical version is not a second measurement tuple
+# =============================================================================
+
+
+def test_p3_r09_corrected_single_measurement_has_no_false_multi_measurement_blocker(
+    api, patient_headers, doctor_headers, fixtures, db: Session
+):
+    """R09: ``104 -> 105`` on a one-test report must not raise multi-measurement.
+
+    The correction keeps the rejected original (``value=104``) beside the verified
+    correction (``value=105``). R06 fixed the *mapping* to read only the active
+    fact; ``_structural_measurement_count`` still counted both versions, so a
+    document that describes **one** measurement was reported as describing two and
+    a false ``VI-002 / multi_measurement_document`` was persisted as OPEN — on a
+    document that had just mapped correctly.
+    """
+    _clear_glucose(db)
+    payload = _report_pdf(fixtures, _glucose_report(value="104"))
+    document_id = _accepted(api, patient_headers, payload)
+
+    facts = _extraction(api, doctor_headers, document_id)["facts"]
+    value_fact = _value_fact(facts)
+    assert value_fact["normalized_value"] == "104"
+
+    corrected = _verify(
+        api,
+        doctor_headers,
+        document_id,
+        value_fact["fact_id"],
+        decision="corrected",
+        corrected_value="105",
+        corrected_unit="mg/dL",
+        reason="transcription error",
+    )
+    assert corrected.status_code == 200, corrected.text
+
+    for fact in facts:
+        if fact["field_name"] != "value":
+            assert _verify(api, doctor_headers, document_id, fact["fact_id"]).status_code == 200
+
+    body = _extraction(api, doctor_headers, document_id)
+
+    multi = [
+        issue
+        for issue in body["verification_issues"]
+        if issue["reason_code"] == "multi_measurement_document"
+    ]
+    assert multi == [], (
+        "a corrected one-test report is still one measurement; a superseded "
+        f"historical version must not be counted as a second tuple: {multi}"
+    )
+
+    # The document really did map: this is not "blocked for a different reason".
+    document = db.execute(select(Document).where(Document.id == document_id)).scalar_one()
+    assert document.extraction_status == "verified"
+    observation = _document_observations(db, document_id)
+    assert len(observation) == 1 and observation[0].value == 105.0
+
+    # And the persisted row agrees with the wire: the blocker is not left OPEN.
+    rows = list(
+        db.execute(
+            select(VerificationIssue).where(
+                VerificationIssue.document_id == document_id,
+                VerificationIssue.issue_type == "VI-002",
+            )
+        ).scalars()
+    )
+    stale = [row for row in rows if row.state == "open"]
+    assert stale == [], (
+        "no stale VI-002 may remain OPEN after every fact is decided and the "
+        f"document mapped: {[(r.reason_code, r.state) for r in rows]}"
+    )
+
+
+def test_p3_r09_generic_vi_002_is_not_left_stale_after_a_correction(
+    api, patient_headers, doctor_headers, fixtures, db: Session
+):
+    """R09: the identical check for the *generic* ``fact_unverified`` reason.
+
+    The review asked explicitly whether the accepted generic ``VI-002`` rule
+    leaves a stale issue behind. It does not: once every fact is decided — the
+    rejected original included — nothing is ``pending``, so no open ``VI-002`` of
+    either reason survives. This test makes that a guarantee rather than a
+    coincidence of ordering.
+    """
+    _clear_glucose(db)
+    payload = _report_pdf(fixtures, _glucose_report(value="104"))
+    document_id = _accepted(api, patient_headers, payload)
+    facts = _extraction(api, doctor_headers, document_id)["facts"]
+    value_fact = _value_fact(facts)
+
+    _verify(
+        api,
+        doctor_headers,
+        document_id,
+        value_fact["fact_id"],
+        decision="corrected",
+        corrected_value="105",
+        corrected_unit="mg/dL",
+    )
+    for fact in facts:
+        if fact["field_name"] != "value":
+            _verify(api, doctor_headers, document_id, fact["fact_id"])
+
+    body = _extraction(api, doctor_headers, document_id)
+    assert [issue for issue in body["verification_issues"] if issue["issue_type"] == "VI-002"] == []
+
+    rows = list(
+        db.execute(
+            select(VerificationIssue).where(VerificationIssue.document_id == document_id)
+        ).scalars()
+    )
+    assert [row for row in rows if row.state == "open"] == []
+    resolved = {row.issue_type for row in rows if row.state == "resolved"}
+    assert "VI-002" in resolved, "the blocker was raised and then resolved in place"
+
+
+def test_p3_r09_genuine_two_measurement_document_still_blocks(
+    api, patient_headers, doctor_headers, multi_test_pdf, db: Session
+):
+    """Control (must not regress): two real tests still block and map nothing."""
+    document_id = _accepted(api, patient_headers, multi_test_pdf)
+    body = _extraction(api, doctor_headers, document_id)
+
+    reasons = {issue["reason_code"] for issue in body["verification_issues"]}
+    assert "multi_measurement_document" in reasons
+
+    for fact in body["facts"]:
+        _verify(api, doctor_headers, document_id, fact["fact_id"])
+
+    assert _document_observations(db, document_id) == [], (
+        "a genuine two-measurement document must still map zero observations"
+    )
+    after = _extraction(api, doctor_headers, document_id)
+    still = [
+        issue
+        for issue in after["verification_issues"]
+        if issue["reason_code"] == "multi_measurement_document"
+    ]
+    assert still, "deciding the facts does not make a two-test document attributable"
+
+
+def test_p3_r09_repeated_get_keeps_issue_identity_after_correction(
+    api, patient_headers, doctor_headers, fixtures, db: Session
+):
+    """R09: the post-correction issue set is stable across repeated reads."""
+    _clear_glucose(db)
+    payload = _report_pdf(fixtures, _glucose_report(value="104"))
+    document_id = _accepted(api, patient_headers, payload)
+    facts = _extraction(api, doctor_headers, document_id)["facts"]
+    value_fact = _value_fact(facts)
+
+    _verify(
+        api,
+        doctor_headers,
+        document_id,
+        value_fact["fact_id"],
+        decision="corrected",
+        corrected_value="105",
+        corrected_unit="mg/dL",
+    )
+    for fact in facts:
+        if fact["field_name"] != "value":
+            _verify(api, doctor_headers, document_id, fact["fact_id"])
+
+    first = _extraction(api, doctor_headers, document_id)
+    second = _extraction(api, doctor_headers, document_id)
+    third = _extraction(api, doctor_headers, document_id)
+
+    def key(body: dict) -> list[tuple[str, str, str]]:
+        return [
+            (issue["issue_type"], issue["issue_id"], issue["created_at"])
+            for issue in body["verification_issues"]
+        ]
+
+    assert key(first) == key(second) == key(third)
+    assert key(first) == [], "a fully decided, corrected single-test document has no open blocker"
+
+
+def test_p3_r09_historical_version_is_retained_but_not_active(
+    api, patient_headers, doctor_headers, fixtures, db: Session
+):
+    """R09: the fix must not delete history to make the count agree.
+
+    The rejected original keeps its immutable excerpt, span and extractor, and the
+    corrected row keeps the lineage link. Only its *participation in the active
+    tuple* changed.
+    """
+    _clear_glucose(db)
+    payload = _report_pdf(fixtures, _glucose_report(value="104"))
+    document_id = _accepted(api, patient_headers, payload)
+    facts = _extraction(api, doctor_headers, document_id)["facts"]
+    value_fact = _value_fact(facts)
+    original_raw = value_fact["raw_text"]
+
+    _verify(
+        api,
+        doctor_headers,
+        document_id,
+        value_fact["fact_id"],
+        decision="corrected",
+        corrected_value="105",
+        corrected_unit="mg/dL",
+    )
+
+    original = db.execute(
+        select(ExtractedFact).where(ExtractedFact.id == value_fact["fact_id"])
+    ).scalar_one()
+    assert original.verification_status == "rejected", "history is preserved, not rewritten"
+    assert original.raw_text == original_raw
+    assert original.normalized_value == "104", "the historical value stays exactly as extracted"
+
+    corrected_rows = list(
+        db.execute(
+            select(ExtractedFact).where(ExtractedFact.corrected_from_fact_id == original.id)
+        ).scalars()
+    )
+    assert len(corrected_rows) == 1
+    assert corrected_rows[0].verification_status == "verified"
+    assert corrected_rows[0].normalized_value == "105"
+
+
+def test_p3_r09_plain_rejection_still_counts_for_vi_002(
+    api, patient_headers, doctor_headers, fixtures, db: Session
+):
+    """Guardrail: only *superseded* history is excluded, not plain rejections.
+
+    ``DEMO_REVIEW_RULES.md`` §4/§6.1 counts candidate facts whose status is not
+    ``verified``. A doctor rejecting a current reading is a verdict about live
+    data, and the generic ``VI-002`` must still report it. Narrowing the rule any
+    further than "a correction replaced this row" would weaken the accepted
+    contract, so this test pins the boundary.
+    """
+    _clear_glucose(db)
+    payload = _report_pdf(fixtures, _glucose_report(value="104"))
+    document_id = _accepted(api, patient_headers, payload)
+    facts = _extraction(api, doctor_headers, document_id)["facts"]
+
+    value_fact = _value_fact(facts)
+    assert (
+        _verify(
+            api,
+            doctor_headers,
+            document_id,
+            value_fact["fact_id"],
+            decision="rejected",
+            reason="not this patient's reading",
+        ).status_code
+        == 200
+    )
+
+    body = _extraction(api, doctor_headers, document_id)
+    vi_002 = [issue for issue in body["verification_issues"] if issue["issue_type"] == "VI-002"]
+    assert vi_002, "a rejected (not superseded) fact is still an open VI-002"
+    assert vi_002[0]["reason_code"] == "fact_unverified"
+
+    superseded = {
+        row.id
+        for row in db.execute(
+            select(ExtractedFact).where(
+                ExtractedFact.document_id == document_id,
+                ExtractedFact.verification_status == "rejected",
+            )
+        ).scalars()
+    }
+    assert superseded, "the fact really is rejected"
+    rows = list(
+        db.execute(select(ExtractedFact).where(ExtractedFact.document_id == document_id)).scalars()
+    )
+    assert all(row.corrected_from_fact_id is None for row in rows), (
+        "no correction happened, so nothing is superseded — the exclusion must not apply"
+    )
