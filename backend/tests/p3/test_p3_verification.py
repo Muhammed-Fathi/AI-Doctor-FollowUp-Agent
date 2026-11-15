@@ -22,7 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError, ErrorCode
-from app.db.models import ExtractedFact, FactVerification, Observation
+from app.db.models import Document, ExtractedFact, FactVerification, Observation
 from app.services.documents.mapping import (
     MappingDecision,
     VerifiedFactView,
@@ -67,10 +67,10 @@ def _verify(client, headers, document_id, fact_id, **body) -> object:
 
 
 def test_first_verification_is_recorded_and_returns_the_fact(
-    api, patient_headers, doctor_headers, report_b_pdf
+    api, patient_headers, doctor_headers, glucose_pdf
 ):
     """``200`` with the updated fact, the decision and the document status."""
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
     fact = _value_fact(_facts(api, doctor_headers, document_id))
 
     response = _verify(api, doctor_headers, document_id, fact["fact_id"])
@@ -83,7 +83,7 @@ def test_first_verification_is_recorded_and_returns_the_fact(
 
 
 def test_identical_repeat_decision_is_refused_with_409(
-    api, patient_headers, doctor_headers, report_b_pdf, db: Session
+    api, patient_headers, doctor_headers, glucose_pdf, db: Session
 ):
     """D-11: an identical repeat is ``409 E_FACT_ALREADY_DECIDED``, never a silent ``200``.
 
@@ -92,7 +92,7 @@ def test_identical_repeat_decision_is_refused_with_409(
     ``fact_verification`` row exists afterwards, so "refused" cannot mean
     "recorded twice".
     """
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
     fact = _value_fact(_facts(api, doctor_headers, document_id))
 
     first = _verify(api, doctor_headers, document_id, fact["fact_id"])
@@ -111,10 +111,10 @@ def test_identical_repeat_decision_is_refused_with_409(
 
 
 def test_conflicting_second_decision_is_also_refused(
-    api, patient_headers, doctor_headers, report_b_pdf
+    api, patient_headers, doctor_headers, glucose_pdf
 ):
     """Verify-then-reject is refused too: the first decision stands."""
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
     fact = _value_fact(_facts(api, doctor_headers, document_id))
 
     assert _verify(api, doctor_headers, document_id, fact["fact_id"]).status_code == 200
@@ -179,10 +179,10 @@ def test_correction_supersedes_the_original_fact(
 
 
 def test_fact_from_another_document_is_not_found(
-    api, patient_headers, doctor_headers, report_b_pdf, ambiguous_pdf
+    api, patient_headers, doctor_headers, glucose_pdf, ambiguous_pdf
 ):
     """A fact id belonging to a different document answers the neutral ``404``."""
-    first = _upload(api, patient_headers, report_b_pdf)
+    first = _upload(api, patient_headers, glucose_pdf)
     second = _upload(api, patient_headers, ambiguous_pdf, filename="b.pdf")
     foreign_fact = _value_fact(_facts(api, doctor_headers, second))
 
@@ -193,10 +193,10 @@ def test_fact_from_another_document_is_not_found(
 
 
 def test_all_facts_verified_promotes_the_document(
-    api, patient_headers, doctor_headers, report_b_pdf
+    api, patient_headers, doctor_headers, glucose_pdf
 ):
     """``verified`` at document level requires every blocking fact decided."""
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
     facts = _facts(api, doctor_headers, document_id)
 
     for index, fact in enumerate(facts):
@@ -207,10 +207,10 @@ def test_all_facts_verified_promotes_the_document(
 
 
 def test_document_with_every_fact_rejected_fails(
-    api, patient_headers, doctor_headers, report_b_pdf, db: Session
+    api, patient_headers, doctor_headers, glucose_pdf, db: Session
 ):
     """All-rejected is ``failed``, never ``verified``."""
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
     facts = _facts(api, doctor_headers, document_id)
 
     response = None
@@ -348,14 +348,14 @@ def test_measured_at_rejects_an_ambiguous_date():
 
 
 def test_verified_glucose_produces_one_observation_with_report_date(
-    api, patient_headers, doctor_headers, report_b_pdf, db: Session
+    api, patient_headers, doctor_headers, glucose_pdf, db: Session
 ):
     """The full path: upload, decide every fact, observe the derived row.
 
     Asserts the provenance class and the timestamp origin, because those are the
     two facts a reviewer cannot infer from the response body alone.
     """
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
     facts = _facts(api, doctor_headers, document_id)
     for fact in facts:
         assert _verify(api, doctor_headers, document_id, fact["fact_id"]).status_code == 200
@@ -390,9 +390,9 @@ def test_hemoglobin_document_produces_no_observation(
     assert created == []
 
 
-def test_no_observation_exists_before_a_decision(api, patient_headers, report_b_pdf, db: Session):
+def test_no_observation_exists_before_a_decision(api, patient_headers, glucose_pdf, db: Session):
     """Uploading and extracting promotes nothing on its own."""
-    _upload(api, patient_headers, report_b_pdf)
+    _upload(api, patient_headers, glucose_pdf)
 
     created = list(
         db.execute(select(Observation).where(Observation.source == "verified_document")).scalars()
@@ -416,7 +416,7 @@ def _insert_verification_raw(db: Session, *, fact_id: str, user_id: str) -> None
 
 
 def test_trigger_rejects_a_non_doctor_verifier(
-    api, patient_headers, doctor_headers, report_b_pdf, db: Session
+    api, patient_headers, doctor_headers, glucose_pdf, db: Session
 ):
     """Even with the service bypassed, SQLite refuses a patient as verifier.
 
@@ -426,7 +426,7 @@ def test_trigger_rejects_a_non_doctor_verifier(
     """
     from app.db.models import User
 
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
     fact = _value_fact(_facts(api, doctor_headers, document_id))
     patient = db.execute(select(User).where(User.username == "demo_patient_a")).scalar_one()
 
@@ -438,7 +438,7 @@ def test_trigger_rejects_a_non_doctor_verifier(
 
 
 def test_trigger_rejects_an_unknown_verifier(
-    api, patient_headers, doctor_headers, report_b_pdf, db: Session
+    api, patient_headers, doctor_headers, glucose_pdf, db: Session
 ):
     """A nonexistent user id fails the ``IS NOT 'doctor'`` comparison too.
 
@@ -446,7 +446,7 @@ def test_trigger_rejects_an_unknown_verifier(
     ``NULL``, and ``NULL <> 'doctor'`` would be ``NULL`` (not true), silently
     admitting the row.
     """
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
     fact = _value_fact(_facts(api, doctor_headers, document_id))
 
     with pytest.raises(IntegrityError):
@@ -457,12 +457,12 @@ def test_trigger_rejects_an_unknown_verifier(
 
 
 def test_trigger_allows_a_doctor_verifier(
-    api, patient_headers, doctor_headers, report_b_pdf, db: Session
+    api, patient_headers, doctor_headers, glucose_pdf, db: Session
 ):
     """The same raw insert succeeds for a doctor, proving the trigger is not vacuous."""
     from app.db.models import User
 
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
     fact = _value_fact(_facts(api, doctor_headers, document_id))
     doctor = db.execute(select(User).where(User.username == "demo_doctor")).scalar_one()
 
@@ -478,7 +478,7 @@ def test_trigger_allows_a_doctor_verifier(
 
 
 def test_service_refuses_a_second_decision_directly(
-    api, patient_headers, doctor_headers, report_b_pdf, db: Session
+    api, patient_headers, doctor_headers, glucose_pdf, db: Session
 ):
     """The service enforces append-only itself, not only via the route.
 
@@ -489,18 +489,22 @@ def test_service_refuses_a_second_decision_directly(
     from app.core.enums import VerificationDecision
     from app.services.documents.verification import record_decision
 
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
     fact_payload = _value_fact(_facts(api, doctor_headers, document_id))
     assert _verify(api, doctor_headers, document_id, fact_payload["fact_id"]).status_code == 200
 
     fact = db.execute(
         select(ExtractedFact).where(ExtractedFact.id == fact_payload["fact_id"])
     ).scalar_one()
+    # The document is now an input to the decision: ``record_decision`` evaluates
+    # the ``VI-004`` identity blocker before the append-only guard (P3-R02), so it
+    # must be the real row rather than a placeholder.
+    document = db.execute(select(Document).where(Document.id == document_id)).scalar_one()
 
     with pytest.raises(ApiError) as caught:
         record_decision(
             db,
-            document=None,  # type: ignore[arg-type]
+            document=document,
             fact=fact,
             decision=VerificationDecision.VERIFIED,
             doctor_user_id="irrelevant-because-it-is-refused-first",

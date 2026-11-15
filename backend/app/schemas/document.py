@@ -224,18 +224,29 @@ class VerifyRequest(ApiModel):
 
 
 class VerificationRecord(ApiModel):
-    """The append-only decision that was just written."""
+    """The append-only decision that was just written.
+
+    ``previous_value``/``new_value``/``new_unit`` make a correction auditable from
+    the response alone: what the document said, what the doctor accepted, and which
+    decision produced the change. The original fact keeps its immutable extracted
+    text and span, so the before/after pair is the *only* place the human edit
+    lives.
+    """
 
     decision: VerificationDecision
     verified_by: str
     decided_at: UtcDatetime
     reason: str | None = None
+    previous_value: str | None = None
+    new_value: str | None = Field(default=None, max_length=120)
+    new_unit: str | None = Field(default=None, max_length=32)
+    superseded_fact_id: str | None = None
 
 
 class VerifyResponse(ApiModel):
     """The updated fact, its decision, and the recomputed document status."""
 
-    fact: ExtractedFact
+    fact: ExtractedFact | None = None
     verification: VerificationRecord
     document_status: DocumentStatus
 

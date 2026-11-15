@@ -1,0 +1,4 @@
+SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD
+Demo Patient A            Ref: DEMO-A-001            Report date: 2026-11-02
+Test: Fasting glucose     Value: 104 mg/dL
+Reference range: 70 - 99 mg/dL

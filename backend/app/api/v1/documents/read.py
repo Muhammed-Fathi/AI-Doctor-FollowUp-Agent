@@ -32,10 +32,9 @@ from app.api.v1.auth.dependencies import (
     RequestId,
     bearer_scheme,
 )
-from app.core.clock import format_utc, utc_now
 from app.core.enums import AuditOutcome, DocumentStatus
 from app.core.errors import EXTRACTION_PENDING_DETAIL, ApiError, ErrorCode, document_error
-from app.db.models import ExtractedFact, ExtractionAttempt, new_uuid
+from app.db.models import ExtractedFact, ExtractionAttempt
 from app.schemas.document import (
     DocumentMeta,
     EvidenceRef,
@@ -53,7 +52,12 @@ from app.services.documents.access import (
     require_doctor_document_scope,
     require_document_read_access,
 )
-from app.services.documents.quality import QualitySummary, decode_flags, summarize
+from app.services.documents.quality import (
+    QualitySummary,
+    decode_fact_ids,
+    decode_flags,
+    summarize,
+)
 from app.services.documents.storage import UnsafePathError, resolve_for_read
 
 router = APIRouter(
@@ -93,7 +97,10 @@ def _evidence_for(fact: ExtractedFact) -> EvidenceRef:
         char_start=fact.char_start,
         char_end=fact.char_end,
         raw_text=fact.raw_text,
-        extractor="pypdf",
+        # R01: the real route that produced this fact. A scanned page inside a
+        # text PDF is a ``tesseract`` fact, and claiming ``pypdf`` for it would
+        # misrepresent where the evidence came from.
+        extractor=fact.extractor,
     )
 
 
@@ -150,20 +157,18 @@ def _attempt_summaries(db: DbSession, *, document_id: str) -> list[ExtractionAtt
 def _issue_schemas(
     summary: QualitySummary, *, document_id: str, facts: list[ExtractedFact]
 ) -> list[VerificationIssue]:
-    """Project computed issue drafts into the response schema.
+    """Project the **persisted** blocker rows into the response schema.
 
-    ``fact_ids`` links each blocking issue to the stored facts it refers to so a
-    doctor can act on it. Both lists are capped at 8 by the contract. ``issue_id``
-    is derived from the document, the issue type and the linked facts, so the same
-    unchanged document yields the same ids across reads (no id churn in a UI that
-    polls).
+    R04: ``issue_id``/``created_at`` come from the stored row, so a repeated GET of
+    unchanged state returns identical identities. The row is the source of truth
+    for the linkage too: ``fact_ids`` was resolved when the issue was raised, not
+    recomputed per request.
     """
-    created_at = format_utc(utc_now())
+    by_id = {fact.id: fact for fact in facts}
     issues: list[VerificationIssue] = []
-    for draft in summary.issues:
-        indices = [index for index in draft.fact_indices if 0 <= index < len(facts)]
-        linked = [facts[index].id for index in indices][:8]
-        evidence = [_evidence_for(facts[index]) for index in indices][:8]
+    for row in summary.issues:
+        linked_ids = [fact_id for fact_id in decode_fact_ids(row.fact_ids) if fact_id in by_id][:8]
+        evidence = [_evidence_for(by_id[fact_id]) for fact_id in linked_ids]
         if not evidence:
             # Document-level issues (VI-004) have no single fact; point at the
             # document itself rather than emitting an empty evidence array, which
@@ -173,15 +178,15 @@ def _issue_schemas(
             ]
         issues.append(
             VerificationIssue(
-                issue_id=new_uuid(),
-                issue_type=draft.issue_type,
-                reason_code=draft.reason_code,
+                issue_id=row.id,
+                issue_type=row.issue_type,
+                reason_code=row.reason_code,
                 blocking=True,
-                message=draft.message,
+                message=row.message,
                 document_id=document_id,
-                fact_ids=linked,
+                fact_ids=linked_ids,
                 evidence=evidence,
-                created_at=created_at,
+                created_at=row.created_at,
             )
         )
     return issues
@@ -242,6 +247,7 @@ def read_extraction(
     document_id: str,
     principal: PrincipalDep,
     db: DbSession,
+    settings: AppSettings,
     now: Now,
     request_id: RequestId,
 ) -> ExtractionResponse:
@@ -259,11 +265,13 @@ def read_extraction(
     if status == DocumentStatus.PENDING_EXTRACTION.value:
         raise document_error(ErrorCode.EXTRACTION_PENDING, EXTRACTION_PENDING_DETAIL)
 
+    # R02/R03/R04: reconcile and read the persisted blockers. The identity
+    # comparison and the conflict evaluation both happen inside `summarize`, so
+    # the read path can no longer feed itself a tautology.
     summary = summarize(
         db,
         document=document,
-        document_patient_ref=document.patient_id,
-        scope_patient_ref=document.patient_id,
+        conflict_tolerance=settings.conflict_tolerance,
     )
     facts = _fact_rows(db, document_id=document.id)
 

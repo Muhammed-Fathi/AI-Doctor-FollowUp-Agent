@@ -26,6 +26,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.clock import format_utc, utc_now
+from app.core.config import get_settings
 from app.core.enums import (
     DocumentStatus,
     FactField,
@@ -35,10 +36,12 @@ from app.core.enums import (
 )
 from app.core.errors import (
     FACT_ALREADY_DECIDED_DETAIL,
+    VI_004_UNRESOLVED_DETAIL,
     ErrorCode,
     document_error,
 )
 from app.db.models import Document, ExtractedFact, FactVerification, Observation
+from app.services.documents import quality
 from app.services.documents.mapping import (
     MappingDecision,
     VerifiedFactView,
@@ -52,13 +55,22 @@ _ALREADY_DECIDED = FACT_ALREADY_DECIDED_DETAIL
 
 @dataclass(frozen=True, slots=True)
 class VerificationOutcome:
-    """The result of one doctor decision."""
+    """The result of one doctor decision.
 
-    fact: ExtractedFact
+    ``fact`` is the **decided** fact: for a correction that is the new verified
+    row, not the superseded original, so a caller renders the accepted value
+    without a second read. ``superseded_fact_id`` names the original when a
+    correction created one, keeping both ends of the lineage reachable.
+    """
+
+    #: ``None`` only when the decision superseded the fact it was recorded on (a
+    #: correction); the corrected row is then the live fact and is reported instead.
+    fact: ExtractedFact | None
     verification: FactVerification
     document_status: str
     observation_created: bool
     mapped_reason: str | None
+    superseded_fact_id: str | None = None
 
 
 def _existing_decision(db: Session, fact_id: str) -> FactVerification | None:
@@ -156,6 +168,7 @@ def _maybe_promote_document(
     document: Document,
     doctor_user_id: str,
     decided_at: str,
+    conflict_tolerance: float,
 ) -> tuple[bool, str | None]:
     """Promote a fully decided document to one observation, if the rules allow.
 
@@ -163,7 +176,25 @@ def _maybe_promote_document(
     document, a multi-measurement document and an already-promoted document all
     return ``False`` with a reason; none of them raises, because promotion is a
     consequence of a decision, never a failure of it.
+
+    **R03:** an open ``VI-006`` conflict also refuses promotion. Recording a second
+    contradicting measurement for the same patient, measure, unit and UTC day would
+    manufacture two disagreeing "verified" values, which is exactly what the
+    ``DEMO_ONLY`` conflict policy is meant to prevent. The decision itself is still
+    recorded — a doctor's verdict on a fact is data — but no observation is derived
+    from a document whose value contradicts the stored record.
     """
+    open_issue_types = {
+        issue.issue_type
+        for issue in quality.sync_issues(
+            db, document=document, conflict_tolerance=conflict_tolerance
+        )
+    }
+    if quality.ISSUE_SOURCE_CONFLICT in open_issue_types:
+        return False, "source_conflict_at_intake"
+    if quality.IDENTITY_ISSUE_TYPE.value in open_issue_types:  # pragma: no cover - defensive
+        return False, "wrong_patient_document"
+
     anchor = _document_measurement_anchor(db, document.id)
     if anchor is None:
         return False, "no_single_measurement_fact"
@@ -248,6 +279,7 @@ def record_decision(
     corrected_value: str | None = None,
     corrected_unit: str | None = None,
     reason: str | None = None,
+    conflict_tolerance: float | None = None,
 ) -> VerificationOutcome:
     """Record one doctor decision and, if warranted, the derived observation.
 
@@ -257,6 +289,13 @@ def record_decision(
     The caller is responsible for the doctor/scope check; this function assumes
     an authorized doctor and additionally relies on the database trigger.
     """
+    # R02: an identity blocker cannot be cleared by a fact decision. Checked
+    # before the append-only guard so the caller learns the real reason: the
+    # document may not belong to this patient, which is more actionable than
+    # "already decided" and prevents any silent attribution.
+    if quality.ensure_identity_evaluated(db, document=document):
+        raise document_error(ErrorCode.VI_004_UNRESOLVED, VI_004_UNRESOLVED_DETAIL)
+
     if _existing_decision(db, fact.id) is not None:
         raise document_error(ErrorCode.FACT_ALREADY_DECIDED, _ALREADY_DECIDED)
 
@@ -283,16 +322,25 @@ def record_decision(
     # new corrected fact carries the verified value (§6 "corrected").
     if decision is VerificationDecision.CORRECTED:
         fact.verification_status = FactVerificationStatus.REJECTED.value
+        # The corrected row is a *new verified value*, not a rewritten excerpt.
+        # It copies the immutable provenance (`raw_text`, span, page, extractor,
+        # confidence) from the fact it supersedes, so the evidence still says what
+        # the page actually contains — a corrected `1O5` keeps `raw_text='1O5'`
+        # while carrying `normalized_value='105'`. Writing the human value into
+        # `raw_text` would assert that the page printed `105`, which it did not.
         corrected = ExtractedFact(
             document_id=fact.document_id,
             patient_id=fact.patient_id,
             field_name=fact.field_name,
-            raw_text=(corrected_value or fact.raw_text)[:300],
+            raw_text=fact.raw_text,
             normalized_value=corrected_value,
             unit=corrected_unit or fact.unit,
             page_index=fact.page_index,
             char_start=fact.char_start,
             char_end=fact.char_end,
+            extractor=fact.extractor,
+            # Lineage: the human decision is distinguishable from the extraction.
+            corrected_from_fact_id=fact.id,
             quality_flags=json.dumps(["clean"], separators=(",", ":")),
             confidence=fact.confidence,
             verification_status=FactVerificationStatus.VERIFIED.value,
@@ -300,11 +348,16 @@ def record_decision(
         )
         db.add(corrected)
         db.flush()
+        # Report the corrected row: the caller asked for a correction, so the
+        # response must show the accepted value, not the superseded original.
+        reported_fact = corrected
     elif decision is VerificationDecision.VERIFIED:
         fact.verification_status = FactVerificationStatus.VERIFIED.value
         db.flush()
+        reported_fact = fact
     else:
         fact.verification_status = FactVerificationStatus.REJECTED.value
+        reported_fact = fact
 
     document_status = _recompute_document_status(db, document)
 
@@ -317,14 +370,20 @@ def record_decision(
         document=document,
         doctor_user_id=doctor_user_id,
         decided_at=decided_at,
+        conflict_tolerance=(
+            conflict_tolerance
+            if conflict_tolerance is not None
+            else get_settings().conflict_tolerance
+        ),
     )
 
     return VerificationOutcome(
-        fact=fact,
+        fact=reported_fact,
         verification=verification,
         document_status=document_status,
         observation_created=mapped,
         mapped_reason=mapped_reason,
+        superseded_fact_id=(fact.id if decision is VerificationDecision.CORRECTED else None),
     )
 
 

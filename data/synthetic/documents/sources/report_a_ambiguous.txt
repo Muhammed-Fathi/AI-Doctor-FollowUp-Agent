@@ -1,0 +1,4 @@
+SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD
+Demo Patient A            Ref: DEMO-A-001            Report date: 03/11/2026
+Test: Glucose             Value: 1O5
+Reference range: 70 - 99 mg/dL

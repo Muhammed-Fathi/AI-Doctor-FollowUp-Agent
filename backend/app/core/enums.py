@@ -230,6 +230,20 @@ class VerificationDecision(StrEnum):
     CORRECTED = "corrected"
 
 
+class IssueState(StrEnum):
+    """``verification_issue.state`` — the lifecycle of one persisted blocker.
+
+    ``DATA_DICTIONARY.md`` §2.8a already declares this closed set. Recording the
+    lifecycle is what makes an issue *identifiable* across reads: the row keeps its
+    id and ``created_at`` while its state moves ``open`` -> ``resolved`` (or
+    ``superseded`` when a later blocker replaces it).
+    """
+
+    OPEN = "open"
+    RESOLVED = "resolved"
+    SUPERSEDED = "superseded"
+
+
 class IssueType(StrEnum):
     """``verification_issue.issue_type`` — ``DEMO_REVIEW_RULES.md`` §4.
 
@@ -307,6 +321,7 @@ __all__ = [
     "ExtractionPath",
     "FactField",
     "FactVerificationStatus",
+    "IssueState",
     "IssueType",
     "MeasureType",
     "ObservationSource",

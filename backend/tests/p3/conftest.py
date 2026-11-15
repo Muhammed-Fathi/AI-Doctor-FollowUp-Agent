@@ -204,6 +204,19 @@ def report_b_pdf(fixtures) -> bytes:
 
 
 @pytest.fixture(scope="session")
+def glucose_pdf(fixtures) -> bytes:
+    """Case A's own fasting-glucose report (``report_a_glucose.txt``).
+
+    Use this whenever a test needs a *verifiable* glucose document for patient A.
+    ``report_b_pdf`` carries patient **B**'s printed reference (``GOLD_FIXTURES.md``
+    §3.2), so filing it under patient A is a wrong-patient document by definition
+    and correctly raises ``VI-004`` (P3-R02). Keeping the two fixtures separate is
+    what makes that distinction testable instead of accidental.
+    """
+    return fixtures.build_report_pdf("report_a_glucose.txt")
+
+
+@pytest.fixture(scope="session")
 def report_a_pdf(fixtures) -> bytes:
     """Case A: a clean hemoglobin report in ``g/dL``."""
     return fixtures.build_report_pdf("report_a_clean.txt")
@@ -211,7 +224,19 @@ def report_a_pdf(fixtures) -> bytes:
 
 @pytest.fixture(scope="session")
 def ambiguous_pdf(fixtures) -> bytes:
-    """Case C: an ambiguous date and a corrupt value token (``1O5``)."""
+    """An ambiguous date and a corrupt value token (``1O5``), filed by its owner.
+
+    Same content as Case C, but printed with **patient A**'s reference so it can be
+    uploaded by patient A without tripping ``VI-004`` (P3-R02). The correction and
+    ``VI-003``/``VI-005`` tests need a document that reaches verification; a
+    wrong-patient document is correctly refused before any decision is recorded.
+    """
+    return fixtures.build_report_pdf("report_a_ambiguous.txt")
+
+
+@pytest.fixture(scope="session")
+def case_c_ambiguous_pdf(fixtures) -> bytes:
+    """Case C exactly as ``GOLD_FIXTURES.md`` prints it (``DEMO-C-001``)."""
     return fixtures.build_report_pdf("report_c_ambiguous.txt")
 
 

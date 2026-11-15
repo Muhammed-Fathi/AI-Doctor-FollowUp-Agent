@@ -81,6 +81,10 @@ class ErrorCode(StrEnum):
     DUPLICATE_DOCUMENT = "E_DUPLICATE_DOCUMENT"
     EXTRACTION_PENDING = "E_EXTRACTION_PENDING"
     FACT_ALREADY_DECIDED = "E_FACT_ALREADY_DECIDED"
+    #: The document's printed patient reference contradicts the patient it was
+    #: filed under (``VI-004``). Verification is refused until an explicit
+    #: re-attribution is recorded; a fact decision can never clear it.
+    VI_004_UNRESOLVED = "E_VI_004_UNRESOLVED"
     #: Tesseract/Poppler-equivalent tooling unavailable. Never a crash and never
     #: a silent substitution (``TOOL_CONTRACTS.md`` §6 rule 5).
     DEPENDENCY_MISSING = "E_DEPENDENCY_MISSING"
@@ -107,6 +111,7 @@ _TITLES: dict[ErrorCode, str] = {
     ErrorCode.DUPLICATE_DOCUMENT: "Duplicate document",
     ErrorCode.EXTRACTION_PENDING: "Extraction pending",
     ErrorCode.FACT_ALREADY_DECIDED: "Fact already decided",
+    ErrorCode.VI_004_UNRESOLVED: "Document identity unresolved",
     ErrorCode.DEPENDENCY_MISSING: "Local dependency missing",
 }
 
@@ -125,6 +130,7 @@ DOCUMENT_ERROR_STATUS: dict[ErrorCode, int] = {
     ErrorCode.DUPLICATE_DOCUMENT: 409,
     ErrorCode.EXTRACTION_PENDING: 409,
     ErrorCode.FACT_ALREADY_DECIDED: 409,
+    ErrorCode.VI_004_UNRESOLVED: 409,
     ErrorCode.DEPENDENCY_MISSING: 503,
 }
 
@@ -154,6 +160,10 @@ PAGE_LIMIT_EXCEEDED_DETAIL: str = "The document exceeds the 20 page limit."
 DUPLICATE_DOCUMENT_DETAIL: str = "This patient already has an identical document."
 EXTRACTION_PENDING_DETAIL: str = "Extraction for this document has not finished yet."
 FACT_ALREADY_DECIDED_DETAIL: str = "This fact already has a recorded doctor decision."
+VI_004_UNRESOLVED_DETAIL: str = (
+    "This document's patient reference does not match the patient it is filed "
+    "under, so no decision can be recorded on it."
+)
 DEPENDENCY_MISSING_DETAIL: str = "The local OCR engine is not available."
 
 
@@ -316,6 +326,7 @@ __all__ = [
     "PROBLEM_MEDIA_TYPE",
     "PROBLEM_TYPE_PREFIX",
     "UNAUTHENTICATED_DETAIL",
+    "VI_004_UNRESOLVED_DETAIL",
     "ApiError",
     "ErrorCode",
     "install_problem_handlers",

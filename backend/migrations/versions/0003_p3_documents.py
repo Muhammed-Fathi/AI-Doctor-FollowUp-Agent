@@ -90,6 +90,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("failure_code", sa.String(length=48), nullable=True),
+        sa.Column("document_patient_ref", sa.String(length=40), nullable=True),
         sa.Column("uploaded_at", sa.String(length=20), nullable=False),
         sa.CheckConstraint(
             "mime_type IN ('application/pdf', 'image/png', 'image/jpeg')",
@@ -162,6 +163,8 @@ def upgrade() -> None:
         sa.Column("page_index", sa.Integer(), nullable=False),
         sa.Column("char_start", sa.Integer(), nullable=False),
         sa.Column("char_end", sa.Integer(), nullable=False),
+        sa.Column("extractor", sa.String(length=16), server_default="pypdf", nullable=False),
+        sa.Column("corrected_from_fact_id", sa.String(length=36), nullable=True),
         sa.Column("quality_flags", sa.String(length=200), server_default="[]", nullable=False),
         sa.Column("confidence", sa.Float(), nullable=True),
         sa.Column("verification_status", sa.String(length=16), server_default="pending", nullable=False),
@@ -182,6 +185,7 @@ def upgrade() -> None:
             "confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0)",
             name="confidence_in_range",
         ),
+        sa.CheckConstraint("extractor IN ('pypdf', 'tesseract', 'manual')", name="extractor_allowed"),
         sa.ForeignKeyConstraint(["document_id"], ["document.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["patient_id"], ["patient.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
@@ -191,6 +195,7 @@ def upgrade() -> None:
         batch_op.create_index(
             "ix_fact_status", ["patient_id", "verification_status"], unique=False
         )
+        batch_op.create_index("ix_fact_corrected_from", ["corrected_from_fact_id"], unique=False)
 
     op.create_table(
         "fact_verification",
@@ -221,6 +226,7 @@ def upgrade() -> None:
         sa.Column("document_id", sa.String(length=36), nullable=True),
         sa.Column("issue_type", sa.String(length=8), nullable=False),
         sa.Column("reason_code", sa.String(length=64), nullable=False),
+        sa.Column("fact_ids", sa.String(length=1200), nullable=True),
         sa.Column("blocking", sa.Integer(), server_default="1", nullable=False),
         sa.Column("message", sa.String(length=240), nullable=False),
         sa.Column("state", sa.String(length=12), server_default="open", nullable=False),
@@ -281,6 +287,7 @@ def downgrade() -> None:
 
     op.drop_table("fact_verification")
     with op.batch_alter_table("extracted_fact", schema=None) as batch_op:
+        batch_op.drop_index("ix_fact_corrected_from")
         batch_op.drop_index("ix_fact_status")
         batch_op.drop_index("ix_fact_document")
 

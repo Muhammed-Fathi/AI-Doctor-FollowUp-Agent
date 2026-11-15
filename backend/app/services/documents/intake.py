@@ -239,6 +239,7 @@ def _persist_facts(
             char_end=candidate.char_end,
             quality_flags=_encode_flags(flags),
             confidence=confidence,
+            extractor=candidate.extractor.value,
             verification_status=FactVerificationStatus.PENDING.value,
             created_at=format_utc(utc_now()),
         )
@@ -355,6 +356,13 @@ def run_extraction(db: Session, *, document: Document, settings: Settings) -> Ex
         pages = ocr_pages
 
     parse_result = parse_pages(pages)
+
+    # The document's own identity claim, stored once so ``VI-004`` can be
+    # evaluated on every read without re-parsing the file. A document that
+    # printed no reference keeps ``None``.
+    if parse_result.document_patient_ref is not None:
+        document.document_patient_ref = parse_result.document_patient_ref
+
     stored = _persist_facts(
         db,
         document=document,

@@ -36,6 +36,11 @@ MESSAGES: dict[IssueType, str] = {
     IssueType.VI_006: "A document value conflicts with an existing record for {measure_type}.",
 }
 
+#: ``VI-004`` is unresolvable through fact verification. Resolving it requires
+#: explicit re-attribution with an audit record (``DEMO_REVIEW_RULES.md`` §4,
+#: ``VI-03``), which is why the verify route refuses while it is open.
+WRONG_PATIENT_ISSUE = IssueType.VI_004
+
 #: Reason code per issue type (``DEMO_REVIEW_RULES.md`` §4).
 REASON_CODES: dict[IssueType, str] = {
     IssueType.VI_001: "unit_missing_or_unsupported",
@@ -186,6 +191,65 @@ def collect_wrong_patient_issue(
     return None
 
 
+@dataclass(frozen=True, slots=True)
+class ConflictCandidate:
+    """One candidate measurement compared against the patient's stored history.
+
+    Everything needed for the comparison is passed in explicitly so the policy is
+    auditable in one place rather than scattered across a query.
+    """
+
+    fact_index: int
+    measure_type: str
+    value: float
+    unit: str
+    measured_at: str
+
+
+def collect_source_conflict_issue(
+    *,
+    candidate: ConflictCandidate,
+    existing: list[tuple[str, float, str]],
+    tolerance: float,
+) -> IssueDraft | None:
+    """Return ``VI-006`` when ``candidate`` contradicts an existing record.
+
+    The approved ``DEMO_ONLY`` policy (owner decision D-08/D-12) is evaluated here
+    and nowhere else:
+
+    * **Same patient** — the caller only ever passes this document's own patient's
+      observations, so a cross-patient row cannot produce a conflict.
+    * **Same mapped measure and unit** — the comparison is only meaningful once
+      ``map-1.0.0`` has resolved both sides to one measure. An unmapped candidate
+      never reaches this function.
+    * **Same UTC calendar day** — ``measured_at`` for a document value is
+      ``report_date T00:00:00Z``, so the day prefix is the comparison key.
+    * **``conflict_tolerance = 0``** — exact equality is required, so *any*
+      different value is a conflict. The tolerance is a parameter, not a constant,
+      because it is configuration (``Settings.conflict_tolerance``).
+
+    The candidate value is read from the **document**; ``existing`` is the
+    patient's stored history. This function never proposes which value is right —
+    that is a doctor decision, and stating a preference would be a clinical claim.
+    """
+    if not existing:
+        return None
+
+    day = candidate.measured_at[:10]
+    for existing_unit, existing_value, existing_at in existing:
+        if existing_unit != candidate.unit:
+            continue
+        if existing_at[:10] != day:
+            continue
+        if abs(existing_value - candidate.value) > tolerance:
+            return IssueDraft(
+                issue_type=IssueType.VI_006,
+                message=render_message(IssueType.VI_006, measure_type=candidate.measure_type),
+                fact_indices=(candidate.fact_index,),
+            )
+    return None
+
+
 def collect_multi_measurement_issue(*, candidate_count: int) -> IssueDraft | None:
     """Return the blocking ``VI-002`` for a multi-test document (``P0-R14``).
 
@@ -207,9 +271,12 @@ __all__ = [
     "MAX_MESSAGE_LENGTH",
     "MESSAGES",
     "REASON_CODES",
+    "WRONG_PATIENT_ISSUE",
+    "ConflictCandidate",
     "IssueDraft",
     "collect_flag_issues",
     "collect_multi_measurement_issue",
+    "collect_source_conflict_issue",
     "collect_unverified_issue",
     "collect_wrong_patient_issue",
     "render_message",

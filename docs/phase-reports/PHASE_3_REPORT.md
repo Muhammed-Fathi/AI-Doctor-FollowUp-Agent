@@ -898,3 +898,220 @@ These cannot be produced in this environment and are **not claimed**:
 **P3 is `IN_REVIEW`.** No PASS claim, no self-approval, no merge, and no P4 work
 has begun. The implementing agent stops here for independent review and owner
 Windows verification.
+
+---
+
+# Part III — Independent-review corrections (P3-R01..P3-R05)
+
+Review `5912038014` (`COMMENTED`, not APPROVE) verified head
+`9704fca05d5f5a65bcd312710e3bcf8f473add17` and returned five mandatory code
+corrections. This part records them defect-by-defect: root cause, the fix, the
+regression test that failed before it, and the honest residual limitation.
+
+**Method.** `backend/tests/p3/test_p3_review_corrections.py` (21 end-to-end HTTP
+tests) was written **first** and executed against `9704fca` **before** any fix.
+Result at that head: **14 failed / 6 passed of 20** (the 21st test was added with
+the R03 promotion guard). Every failure mapped to one of the five findings, so the
+defects were reproduced rather than assumed. The fix was then applied and the same
+file re-run: **21 passed**.
+
+Phase state is unchanged: **`IN_REVIEW`**. No PASS claim, no self-approval, no
+merge, no P4/P5. Everything below is sandbox-executable evidence; Windows-only
+items remain NOT RUN (§III.7).
+
+## III.1 P3-R01 — extractor provenance was hard-coded
+
+**Root cause.** `read.py` built every `EvidenceRef` with a literal
+`extractor="pypdf"`. Nothing carried the real extraction path from the stored fact
+to the wire, so an OCR'd scan reported a PDF text layer that does not exist.
+
+**Fix (durable, in the schema).**
+
+| Layer | Change |
+|---|---|
+| `core/enums.py` | `ExtractionPath` reused as the closed vocabulary (`pypdf`/`tesseract`/`manual`) |
+| `db/models.py` | `extracted_fact.extractor VARCHAR(16) NOT NULL DEFAULT 'pypdf'` + `CHECK` bound to the enum |
+| `migrations/versions/0003_p3_documents.py` | same column + CHECK, up **and** down |
+| `services/documents/field_parser.py` | `CandidateFact.extractor` is set per candidate from the `PageText` that produced it — a scanned page inside a text PDF is a `tesseract` fact |
+| `services/documents/intake.py` | persists `candidate.extractor` |
+| `api/v1/documents/read.py` | emits `fact.extractor`; the `"pypdf"` literal is gone |
+
+The value is stored, not derived at read time, so it survives a restart and cannot
+disagree with the attempt log.
+
+**Tests.** `test_p3_r01_text_layer_facts_report_pypdf` (control),
+`test_p3_r01_ocr_facts_report_tesseract`,
+`test_p3_r01_extractor_is_consistent_between_fact_and_attempt`.
+
+**Limitation, stated plainly.** The OCR test **monkeypatches** `intake.run_ocr`. It
+proves the plumbing, **not** OCR accuracy, and it does not prove Tesseract works.
+`OCR-LIVE-01` and the real Tesseract smoke remain **Windows-only, NOT RUN**.
+
+## III.2 P3-R02 — `VI-004` was unreachable and unenforcing
+
+**Root cause.** Two independent defects:
+1. `read.py` passed `document_patient_ref=document.patient_id` **and**
+   `scope_patient_ref=document.patient_id` to `summarize`, so the identity check
+   compared a value with itself. `collect_wrong_patient_issue` could never fire
+   through the API.
+2. Even if it had fired, nothing consulted it before a doctor decision. `VI-004`
+   was advisory: a doctor could verify through it and laundered a mis-filed
+   document into `doctor_verified` clinical data (`VI-03`).
+
+**Fix.**
+
+| Layer | Change |
+|---|---|
+| `db/models.py` + migration `0003` | `document.document_patient_ref VARCHAR(40)` — the reference **printed on the paper** |
+| `field_parser.py` | bounded synthetic-only regex `_PATIENT_REF` (`ref: DEMO-[A-Z0-9-]{1,32}`); `ParseResult.document_patient_ref` |
+| `intake.py` | stores the parsed header reference once, at intake |
+| `quality.py` | `evaluate_identity` compares the **printed** ref against the **uploading patient's** `external_ref` |
+| `quality.py` | `identity_blocked` / `ensure_identity_evaluated` |
+| `services/documents/verification.py` | `record_decision` raises `409 E_VI_004_UNRESOLVED` **before** the append-only guard, for *every* decision including `corrected` |
+| `core/errors.py` | `ErrorCode.VI_004_UNRESOLVED` (409) + `VI_004_UNRESOLVED_DETAIL` |
+| `quality.py` | `VI-004` is never auto-resolved by the sync pass |
+
+Deliberate ordering: the identity refusal is checked **first**, so the caller
+learns the real reason (the document may not belong to this patient) instead of
+"already decided".
+
+**Tests.** `test_p3_r02_mismatched_header_raises_vi_004`,
+`test_p3_r02_matching_header_does_not_raise_vi_004` (control),
+`test_p3_r02_wrong_patient_document_cannot_be_verified`,
+`test_p3_r02_wrong_patient_document_never_promotes_an_observation` (zero
+observations, zero `fact_verification` rows, document stays
+`needs_verification`), `test_p3_r02_corrected_fact_cannot_bypass_the_identity_blocker`.
+
+**Fixture correction this forced (worth your attention).** `report_b_glucose.txt`
+prints patient **B**'s reference (`GOLD_FIXTURES.md` §3.2, `GOLD-EX-02`), yet the
+pre-existing P3 suite uploaded it as patient **A** — which is, by the definition in
+`DEMO_REVIEW_RULES.md` §4, a wrong-patient document. With R02 working, those tests
+correctly got `409`. Two honest fixes, no guard weakened: (a) the existing glucose
+tests now upload a new `report_a_glucose.txt` (identical body, patient A's
+reference); (b) the five patient-A sources that carried invented refs
+(`DEMO-A-002..006`) now carry `DEMO-A-001`, the reference `patients.json` actually
+holds. Case B and Case C fixtures are unchanged and still exercise the mismatch.
+
+## III.3 P3-R03 — `VI-006` was never evaluated against observations
+
+**Root cause.** `summarize` composed pre-existing quality flags, the identity
+comparison, the multi-test count and the pending count. Nothing queried
+`observation`, so `source_conflict_at_intake` was vocabulary with no producer.
+
+**Fix.**
+
+| Layer | Change |
+|---|---|
+| `services/documents/issues.py` | `ConflictCandidate` + `collect_source_conflict_issue` — the approved `DEMO_ONLY` policy in one auditable function |
+| `quality.py` | `evaluate_conflicts`: same patient (query scope), same measure **and** unit resolved by `decide_mapping` (so the comparison can never disagree with `map-1.0.0`), same UTC calendar day, `abs(diff) > conflict_tolerance`; excludes `validation='rejected'` and the document's own derived observation |
+| `quality.py` | conflict evaluation reads the **candidate** from the document, never from the existing row |
+| `verification.py` | promotion is refused while `VI-006` is open (`source_conflict_at_intake`) |
+
+`conflict_tolerance = 0` (D-08) is read from settings, not hard-coded, so exact
+equality is a configuration consequence.
+
+**Semantics chosen, stated for review:** a conflict blocks **promotion**, not the
+doctor's decision. The decision is a clinical record and stays writable; what is
+refused is deriving an observation from a value that contradicts the stored
+record. If you want the decision itself refused instead, that is a policy change
+and I will stop for your ruling.
+
+**Tests.** `test_p3_r03_conflicting_value_raises_vi_006`,
+`test_p3_r03_matching_value_does_not_raise_vi_006` (control),
+`test_p3_r03_different_day_is_not_a_conflict` (control),
+`test_p3_r03_conflicting_document_does_not_promote_silently`.
+
+## III.4 P3-R04 — issue identity was regenerated per GET
+
+**Root cause.** `read.py` called `new_uuid()` and `format_utc(utc_now())` for every
+issue on every request while `quality.py` produced only transient `IssueDraft`
+values. The `verification_issue` table existed and was never written, so a polling
+UI saw new ids each read.
+
+**Fix.**
+
+| Layer | Change |
+|---|---|
+| `core/enums.py` | `IssueState` (`open`/`resolved`/`superseded`) |
+| `db/models.py` + migration `0003` | `verification_issue.fact_ids VARCHAR(1200)`; `state` CHECK bound to `IssueState` |
+| `quality.py` | `sync_issues` — the **only** writer: upsert keyed `(document_id, issue_type)`, keeps `id`/`created_at`, refreshes message/linkage, resolves in place, re-opens the same row if the cause returns, never auto-clears `VI-004` |
+| `api/v1/documents/read.py` | projects the **persisted rows**; per-GET `new_uuid()`/`utc_now()` synthesis deleted |
+
+`quality.summarize` reconciles and returns, so "read" and "reconcile" cannot
+diverge, and `verification.py` calls the same sync before promotion.
+
+**Tests.** `test_p3_r04_repeated_get_returns_stable_issue_ids`,
+`test_p3_r04_issues_are_persisted_rows`,
+`test_p3_r04_issue_state_updates_without_duplicating` (resolves **one** row in
+place, same id), `test_p3_r04_issue_ids_survive_a_new_session`.
+
+## III.5 P3-R05 — a correction falsified immutable source evidence
+
+**Root cause.** The corrected fact was created with `raw_text=corrected_value`
+while reusing the superseded fact's page/char span and confidence. For `1O5` →
+`105` the row asserted that `105` was extracted from a span that still reads
+`1O5`. The original's human edit was also indistinguishable from extraction, and
+the POST response returned the *rejected original*, not the accepted value.
+
+**Fix.**
+
+| Change | Detail |
+|---|---|
+| `extracted_fact.corrected_from_fact_id` (+ `ix_fact_corrected_from`) | explicit lineage: extraction row vs human-corrected row |
+| `verification.py` | corrected row **copies** `raw_text`, span, page, `extractor`, `confidence` — the excerpt stays what the page says — and sets `normalized_value=corrected_value` |
+| `verification.py` | `VerificationOutcome.fact` reports the **corrected** row; `superseded_fact_id` names the original |
+| `schemas/document.py` | `VerificationRecord` gains `previous_value`, `new_value`, `new_unit`, `superseded_fact_id` — before/after is auditable from the response alone |
+
+**Tests.** `test_p3_r05_correction_preserves_original_span_and_text`,
+`test_p3_r05_correction_is_visible_in_the_decision_log`,
+`test_p3_r05_response_returns_the_corrected_version`,
+`test_p3_r05_correction_still_produces_exactly_one_observation` (`MAP-01`),
+`test_p3_r05_correction_order_does_not_change_the_outcome`.
+
+## III.6 Gate results at this head
+
+```
+$ python -m pytest backend/tests        → 488 passed in 70.05s
+$ python -m ruff check backend/         → All checks passed!
+$ python -m ruff format --check backend/ → 92 files already formatted
+$ python scripts/python/check_openapi.py → PASS (16 paths / 17 operations, 41 schemas)
+$ python scripts/python/scan_repository.py → PASS (184 tracked files)
+```
+
+Alembic, five states driven with real `upgrade`/`downgrade` and asserted by
+`check_alembic_smoke.py`:
+
+| State | How produced | Result |
+|---|---|---|
+| `head` | `upgrade head` | PASS |
+| `p2` | `upgrade head` → `downgrade 0002_p2_patient_domain` | PASS |
+| `p1` | `upgrade head` → `downgrade 0001_p1_baseline` | PASS |
+| `base` | `upgrade head` → `downgrade base` | PASS |
+| `head` again | `head → base → head` round trip | PASS |
+
+Baseline for comparison: `9704fca` was 467 passed; the delta is +21 (the new
+regression module), with the pre-existing P3 modules unchanged in count and still
+green after the fixture correction described in §III.2.
+
+**No guard was weakened.** `ci.yml`, `data/synthetic/*.json`,
+`docs/contracts/*`, `frontend/**`, `scripts/powershell/**`, `AGENTS.md`,
+`db/session.py`, `db/base.py`, `migrations/env.py`, `services/seed.py`,
+`core/clock.py`, `core/policies.py`, `services/audit.py` are untouched.
+
+## III.7 Still NOT RUN — owner Windows required
+
+Unchanged by these fixes, and **not claimed**:
+
+1. Hash-locked Python 3.12 `pip install --require-hashes`.
+2. Real Tesseract smoke and `OCR-LIVE-01`, `GOLD-EX-05..08/11`.
+3. `pypdfium2` rasterization on Windows (D-01).
+4. `test_all.ps1`; Alembic round trip against a Windows-path SQLite file.
+
+**New, specific to this round:** the R01 OCR evidence is proven only against a
+mocked engine. The provenance *storage* is exercised, the *engine* is not.
+
+## III.8 Status after this round
+
+**P3 remains `IN_REVIEW`.** Five findings addressed with tests that failed first;
+no PASS, no self-approval, no merge. Awaiting renewed independent review and owner
+Windows verification.

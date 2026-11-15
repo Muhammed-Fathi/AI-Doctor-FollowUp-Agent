@@ -27,9 +27,9 @@ def _upload(client, headers, payload, *, filename="report.pdf"):
     return response.json()["document_id"]
 
 
-def test_patient_can_read_own_document_metadata(api, patient_headers, report_b_pdf):
+def test_patient_can_read_own_document_metadata(api, patient_headers, glucose_pdf):
     """The owning patient sees the safe metadata shape."""
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
 
     response = api.get(f"/api/v1/documents/{document_id}", headers=patient_headers)
 
@@ -51,22 +51,22 @@ def test_patient_can_read_own_document_metadata(api, patient_headers, report_b_p
     assert "raw_text" not in body
 
 
-def test_patient_can_download_own_file(api, patient_headers, report_b_pdf):
+def test_patient_can_download_own_file(api, patient_headers, glucose_pdf):
     """The original bytes are downloadable by the owner (``OQ-A03`` default)."""
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
 
     response = api.get(f"/api/v1/documents/{document_id}/file", headers=patient_headers)
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/pdf")
-    assert response.content == report_b_pdf
+    assert response.content == glucose_pdf
 
 
 def test_other_patient_cannot_read_metadata_or_file(
-    api, patient_headers, other_patient_headers, report_b_pdf
+    api, patient_headers, other_patient_headers, glucose_pdf
 ):
     """``403`` for a different patient, on both read routes."""
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
 
     meta = api.get(f"/api/v1/documents/{document_id}", headers=other_patient_headers)
     file_response = api.get(f"/api/v1/documents/{document_id}/file", headers=other_patient_headers)
@@ -76,9 +76,9 @@ def test_other_patient_cannot_read_metadata_or_file(
     assert file_response.status_code == 403
 
 
-def test_patient_cannot_read_extraction_even_for_own_document(api, patient_headers, report_b_pdf):
+def test_patient_cannot_read_extraction_even_for_own_document(api, patient_headers, glucose_pdf):
     """``NEG-01``: extraction is doctor-only. Pre-verification values stay hidden."""
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
 
     response = api.get(f"/api/v1/documents/{document_id}/extraction", headers=patient_headers)
 
@@ -86,9 +86,9 @@ def test_patient_cannot_read_extraction_even_for_own_document(api, patient_heade
     assert "facts" not in response.json()
 
 
-def test_patient_cannot_verify(api, patient_headers, doctor_headers, report_b_pdf):
+def test_patient_cannot_verify(api, patient_headers, doctor_headers, glucose_pdf):
     """A patient can never record a doctor decision on their own document."""
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
     extraction = api.get(
         f"/api/v1/documents/{document_id}/extraction", headers=doctor_headers
     ).json()
@@ -103,9 +103,9 @@ def test_patient_cannot_verify(api, patient_headers, doctor_headers, report_b_pd
     assert response.status_code == 403
 
 
-def test_assigned_doctor_can_read_extraction(api, patient_headers, doctor_headers, report_b_pdf):
+def test_assigned_doctor_can_read_extraction(api, patient_headers, doctor_headers, glucose_pdf):
     """The assigned doctor sees the candidate facts with provenance."""
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
 
     response = api.get(f"/api/v1/documents/{document_id}/extraction", headers=doctor_headers)
 
@@ -119,9 +119,9 @@ def test_assigned_doctor_can_read_extraction(api, patient_headers, doctor_header
         assert fact["evidence"]["page_index"] == 0
 
 
-def test_unassigned_doctor_is_denied(api, patient_headers, unassigned_doctor_headers, report_b_pdf):
+def test_unassigned_doctor_is_denied(api, patient_headers, unassigned_doctor_headers, glucose_pdf):
     """A doctor with no assignment gets ``403`` on metadata and extraction."""
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
 
     meta = api.get(f"/api/v1/documents/{document_id}", headers=unassigned_doctor_headers)
     extraction = api.get(
@@ -134,10 +134,10 @@ def test_unassigned_doctor_is_denied(api, patient_headers, unassigned_doctor_hea
 
 
 def test_demo_admin_has_no_clinical_document_access(
-    api, patient_headers, admin_headers, report_b_pdf
+    api, patient_headers, admin_headers, glucose_pdf
 ):
     """``demo_admin`` manages data, not clinical records."""
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
 
     meta = api.get(f"/api/v1/documents/{document_id}", headers=admin_headers)
     extraction = api.get(f"/api/v1/documents/{document_id}/extraction", headers=admin_headers)

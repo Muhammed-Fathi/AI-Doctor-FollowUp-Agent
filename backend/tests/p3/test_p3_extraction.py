@@ -77,10 +77,10 @@ def _issues(body: dict) -> dict[str, dict]:
 
 
 def test_clean_report_yields_the_five_declared_fields(
-    api, patient_headers, doctor_headers, report_b_pdf
+    api, patient_headers, doctor_headers, glucose_pdf
 ):
     """``GOLD-EX-02``: a clean report produces exactly the declared field set."""
-    body = _extraction(api, doctor_headers, _upload(api, patient_headers, report_b_pdf))
+    body = _extraction(api, doctor_headers, _upload(api, patient_headers, glucose_pdf))
 
     names = [fact["field_name"] for fact in body["facts"]]
     assert names == ["report_date", "test_name", "value", "unit", "reference_text"]
@@ -88,14 +88,14 @@ def test_clean_report_yields_the_five_declared_fields(
 
 
 def test_every_fact_span_resolves_against_its_page(
-    api, patient_headers, doctor_headers, report_b_pdf
+    api, patient_headers, doctor_headers, glucose_pdf
 ):
     """``REQ-VERIFY-01``: provenance must be re-resolvable, not merely present.
 
     The check is ``char_end > char_start`` plus equality between the stored
     ``raw_text`` and the slice it claims to reference.
     """
-    body = _extraction(api, doctor_headers, _upload(api, patient_headers, report_b_pdf))
+    body = _extraction(api, doctor_headers, _upload(api, patient_headers, glucose_pdf))
 
     for fact in body["facts"]:
         assert fact["char_end"] > fact["char_start"]
@@ -111,10 +111,10 @@ def test_facts_are_capped_by_the_contract_limit():
 
 
 def test_extraction_records_one_attempt_for_a_text_layer(
-    api, patient_headers, doctor_headers, report_b_pdf
+    api, patient_headers, doctor_headers, glucose_pdf
 ):
     """A text-layer extraction records a successful ``pypdf`` attempt."""
-    body = _extraction(api, doctor_headers, _upload(api, patient_headers, report_b_pdf))
+    body = _extraction(api, doctor_headers, _upload(api, patient_headers, glucose_pdf))
 
     assert len(body["attempts"]) == 1
     attempt = body["attempts"][0]
@@ -127,10 +127,10 @@ def test_extraction_records_one_attempt_for_a_text_layer(
 
 
 def test_extraction_response_carries_the_educational_disclaimer(
-    api, patient_headers, doctor_headers, report_b_pdf
+    api, patient_headers, doctor_headers, glucose_pdf
 ):
     """``REQ-SEC-05``: the notice is part of the payload, not only the UI."""
-    body = _extraction(api, doctor_headers, _upload(api, patient_headers, report_b_pdf))
+    body = _extraction(api, doctor_headers, _upload(api, patient_headers, glucose_pdf))
 
     assert body["disclaimer"] == "EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE"
 
@@ -174,10 +174,10 @@ def test_missing_unit_raises_vi_001(api, patient_headers, doctor_headers, missin
 
 
 def test_unverified_facts_raise_vi_002_with_a_computed_count(
-    api, patient_headers, doctor_headers, report_b_pdf
+    api, patient_headers, doctor_headers, glucose_pdf
 ):
     """``VI-01``: the count is the number of undecided facts, computed at render time."""
-    body = _extraction(api, doctor_headers, _upload(api, patient_headers, report_b_pdf))
+    body = _extraction(api, doctor_headers, _upload(api, patient_headers, glucose_pdf))
     issues = _issues(body)
 
     assert "VI-002" in issues
@@ -264,10 +264,10 @@ def test_failed_scan_is_reported_as_200_with_failed_status(
 
 
 def test_pending_document_answers_409(
-    api, patient_headers, doctor_headers, report_b_pdf, db: Session
+    api, patient_headers, doctor_headers, glucose_pdf, db: Session
 ):
     """``409 E_EXTRACTION_PENDING`` is reserved for the transitional state."""
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
 
     # Force the transitional state, which a synchronous upload otherwise leaves
     # immediately. This is the only state allowed to answer 409.
@@ -419,10 +419,10 @@ def test_span_outside_page_text_is_not_resolvable():
 
 
 def test_stored_facts_match_the_parsed_candidates(
-    api, patient_headers, doctor_headers, report_b_pdf, db: Session
+    api, patient_headers, doctor_headers, glucose_pdf, db: Session
 ):
     """Every stored fact carries a non-empty span and a valid field name."""
-    document_id = _upload(api, patient_headers, report_b_pdf)
+    document_id = _upload(api, patient_headers, glucose_pdf)
 
     rows = list(
         db.execute(select(ExtractedFact).where(ExtractedFact.document_id == document_id)).scalars()
@@ -436,14 +436,14 @@ def test_stored_facts_match_the_parsed_candidates(
 
 
 def test_no_verification_issue_rows_are_written_at_intake(
-    api, patient_headers, report_b_pdf, db: Session
+    api, patient_headers, glucose_pdf, db: Session
 ):
     """Issues are computed on read, not persisted on upload.
 
     A persisted issue would go stale the moment a doctor decided a fact; computing
     on read keeps the blocker list consistent with the facts it describes.
     """
-    _upload(api, patient_headers, report_b_pdf)
+    _upload(api, patient_headers, glucose_pdf)
 
     count = db.execute(select(func.count()).select_from(VerificationIssue)).scalar_one()
     assert count == 0

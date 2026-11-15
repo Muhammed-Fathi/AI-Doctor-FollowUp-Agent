@@ -27,6 +27,7 @@ from fastapi import APIRouter, Security
 from sqlalchemy import select
 
 from app.api.v1.auth.dependencies import (
+    AppSettings,
     DbSession,
     Now,
     PrincipalDep,
@@ -70,7 +71,12 @@ _FACT_NOT_IN_DOCUMENT = "This fact is not part of this document."
         401: {"description": "Not authenticated (uniform body)"},
         403: {"description": "Caller is not the assigned doctor"},
         404: {"description": "No such document or fact in the caller's scope"},
-        409: {"description": "This fact already has a recorded decision"},
+        409: {
+            "description": (
+                "This fact already has a recorded decision, or the document's "
+                "identity is unresolved (`VI-004`)"
+            )
+        },
     },
 )
 def verify_fact(
@@ -78,6 +84,7 @@ def verify_fact(
     payload: VerifyRequest,
     principal: PrincipalDep,
     db: DbSession,
+    settings: AppSettings,
     now: Now,
     request_id: RequestId,
 ) -> VerifyResponse:
@@ -114,6 +121,7 @@ def verify_fact(
         corrected_value=payload.corrected_value,
         corrected_unit=payload.corrected_unit,
         reason=payload.reason,
+        conflict_tolerance=settings.conflict_tolerance,
     )
 
     append_audit_event(
@@ -135,12 +143,16 @@ def verify_fact(
     )
 
     return VerifyResponse(
-        fact=_fact_schema(outcome.fact),
+        fact=_fact_schema(outcome.fact) if outcome.fact is not None else None,
         verification=VerificationRecord(
             decision=outcome.verification.decision,
             verified_by=outcome.verification.verified_by_user_id,
             decided_at=outcome.verification.decided_at,
             reason=outcome.verification.reason,
+            previous_value=outcome.verification.previous_value,
+            new_value=outcome.verification.new_value,
+            new_unit=outcome.verification.new_unit,
+            superseded_fact_id=outcome.superseded_fact_id,
         ),
         document_status=outcome.document_status,
     )

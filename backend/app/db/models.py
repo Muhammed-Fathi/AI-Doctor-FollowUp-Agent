@@ -79,6 +79,7 @@ from app.core.enums import (
     ExtractionPath,
     FactField,
     FactVerificationStatus,
+    IssueState,
     IssueType,
     MeasureType,
     ObservationSource,
@@ -471,6 +472,14 @@ class Document(Base):
     )
     #: Mirrors the tool error codes; enum/ID only, never document text.
     failure_code: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    #: The synthetic patient reference printed in the document header, when the
+    #: extractor could read one (``DEMO-A-001`` style, bounded).
+    #:
+    #: Compared against the *uploading patient's* ``external_ref`` to raise
+    #: ``VI-004``. Without it the wrong-patient safeguard is unreachable: the
+    #: document row only knows who uploaded it, never who the paper claims to be
+    #: about. Bounded to the contract's synthetic-reference width.
+    document_patient_ref: Mapped[str | None] = mapped_column(String(40), nullable=True)
     uploaded_at: Mapped[str] = mapped_column(String(20), nullable=False)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
@@ -551,6 +560,8 @@ class ExtractedFact(Base):
         ),
         Index("ix_fact_document", "document_id"),
         Index("ix_fact_status", "patient_id", "verification_status"),
+        # R05 lineage: "which fact supersedes this one?" is a per-correction lookup.
+        Index("ix_fact_corrected_from", "corrected_from_fact_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
@@ -570,6 +581,23 @@ class ExtractedFact(Base):
     page_index: Mapped[int] = mapped_column(Integer, nullable=False)
     char_start: Mapped[int] = mapped_column(Integer, nullable=False)
     char_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: Which extraction route produced this fact (``REQ-ING-02`` provenance).
+    #: ``pypdf`` for the embedded text layer, ``tesseract`` for OCR, ``manual``
+    #: only for a doctor-supplied correction. Stored per fact because a single
+    #: document may mix routes (a scanned page inside a text PDF), so the
+    #: document-level attempts cannot answer "where did *this* value come from".
+    extractor: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=ExtractionPath.PYPDF.value,
+        server_default=ExtractionPath.PYPDF.value,
+    )
+    #: Set on a doctor-corrected fact to the original fact it supersedes. The
+    #: original keeps its immutable ``raw_text``/span; the corrected row carries
+    #: the human-supplied value. This keeps the extraction evidence and the human
+    #: decision distinctly traceable instead of rewriting one into the other.
+    corrected_from_fact_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
     #: JSON array of ``QualityFlag`` values.
     quality_flags: Mapped[str] = mapped_column(
         String(200), nullable=False, default="[]", server_default="[]"
@@ -632,7 +660,7 @@ class VerificationIssue(Base):
     __table_args__ = (
         CheckConstraint(f"issue_type IN ({_in_list(IssueType)})", name="issue_type_allowed"),
         CheckConstraint("blocking = 1", name="always_blocking"),
-        CheckConstraint("state IN ('open', 'resolved', 'superseded')", name="state_allowed"),
+        CheckConstraint(f"state IN ({_in_list(IssueState)})", name="state_allowed"),
         CheckConstraint("length(message) <= 240", name="message_bounded"),
         Index("ix_vi_document_state", "document_id", "state"),
         Index("ix_vi_run", "workflow_run_id"),
@@ -648,10 +676,16 @@ class VerificationIssue(Base):
     )
     issue_type: Mapped[str] = mapped_column(String(8), nullable=False)
     reason_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: JSON array of ``extracted_fact.id`` values this blocker refers to, so the
+    #: linkage survives across reads instead of being recomputed per request.
+    fact_ids: Mapped[str | None] = mapped_column(String(1200), nullable=True)
     blocking: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     message: Mapped[str] = mapped_column(String(240), nullable=False)
     state: Mapped[str] = mapped_column(
-        String(12), nullable=False, default="open", server_default="open"
+        String(12),
+        nullable=False,
+        default=IssueState.OPEN.value,
+        server_default=IssueState.OPEN.value,
     )
     created_at: Mapped[str] = mapped_column(String(20), nullable=False)
 
