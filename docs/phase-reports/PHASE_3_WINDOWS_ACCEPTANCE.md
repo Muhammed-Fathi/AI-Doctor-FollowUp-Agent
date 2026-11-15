@@ -226,9 +226,28 @@ Record the per-gate summary block **and** the exit code. `SKIPPED` is never a pa
 note which gate skipped and why (the Playwright smoke legitimately skips unless
 `-IncludeE2E` is given and browser binaries are installed).
 
-Expected backend figure at this commit: **522 passed** (P3: 139). The frontend
-gates were not exercised in the sandbox at all, so treat their result as new
-evidence, not as confirmation.
+Expected backend figure at this commit: **529 passed**, of which **146** are the P3
+suite (`backend/tests/p3`). Verified by collection on the reviewed commit, not
+estimated:
+
+| Suite | Tests |
+|---|---|
+| `backend/tests` (whole backend) | 529 passed |
+| `backend/tests/p3` (P3 suite) | 146 |
+| ├ `test_p3_verification.py` | 29 |
+| ├ `test_p3_extraction.py` | 26 |
+| ├ `test_p3_edge_cases.py` (R06–R09) | 24 |
+| ├ `test_p3_review_corrections.py` (R01–R05) | 21 |
+| ├ `test_windows_ocr_acceptance.py` (probe + handoff) | 17 |
+| ├ `test_p3_upload.py` | 12 |
+| ├ `test_p3_authorization.py` | 10 |
+| └ `test_p3_fixtures.py` | 7 |
+
+Those figures come from a **Linux sandbox on Python 3.11**, so treat them as the
+expected *count*, not as Windows evidence. A different count on your machine is a
+finding worth reporting, not a failure to explain away — in particular the Playwright
+smoke adds cases only with `-IncludeE2E`. The frontend gates were not exercised in
+the sandbox at all, so their result is new evidence, not confirmation.
 
 ---
 

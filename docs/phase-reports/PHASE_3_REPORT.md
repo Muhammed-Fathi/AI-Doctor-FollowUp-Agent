@@ -1421,12 +1421,18 @@ narrowing applies to exactly one category: a row that a correction replaced, whi
 is by construction never a live candidate.
 
 **Resolved — owner decision D-14 (2026-11-15).** The interpretation above was
-approved in writing and the scoped edit was explicitly authorized for
-`docs/clinical-safety/DEMO_REVIEW_RULES.md` (§4 trigger, §6.1 count, plus a short
-scope note). The decision and its verbatim text are recorded in
-`docs/roadmap/PHASE_PROGRESS.md`; only the `VI-002` trigger/count wording changed,
+approved in writing by the project owner in
+[PR #10 issue comment `6900700171`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6900700171)
+(*"Owner Decision — P3 D-14 and Windows Handoff Scope"*), and the scoped edit was
+explicitly authorized there for `docs/clinical-safety/DEMO_REVIEW_RULES.md`
+(§4 trigger, §6.1 count, plus a short scope note). The verbatim decision is recorded
+in `docs/roadmap/PHASE_PROGRESS.md`; only the `VI-002` trigger/count wording changed,
 and every threshold, policy and clinical-safety boundary in that document is
 untouched. See §V.8 for the applied diff summary.
+
+The independent technical review `5912501268` is **not** the authorization: it
+requested the written decision, and the owner then granted it in the comment above.
+Those are different acts and this report does not conflate them.
 
 **Under P0-R14 nothing moves:** `multi_measurement_document` still means "this
 document describes more than one measurement", and a genuine two-test document
@@ -1502,7 +1508,8 @@ non-zero in that case; and its executable lines must not reference
 
 ## V.8 Owner decision D-14 and handoff corrections
 
-Applied under explicit owner authorization (review `5912501268`):
+Applied under explicit owner authorization — [PR #10 issue comment `6900700171`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6900700171)
+(*"not P3 acceptance or merge authorization"*):
 
 | Change | Scope |
 |---|---|
@@ -1516,7 +1523,7 @@ Nothing else in the protected document moved: thresholds, `VI-001`/`VI-003`/
 `VI-004`/`VI-005`/`VI-006`, `DR-*` policies and the clinical-safety boundaries are
 byte-identical.
 
-**Probe corrections** (review items 6 and 7):
+**Probe corrections** (raised by technical review `5912501268` items 6 and 7; the review is a finding, not an approval):
 
 1. `gate_environment` no longer imports dependencies before recording: `ENV-01
    python` and `ENV-02 libraries` are separate rows, so a missing wheel is a
@@ -1531,7 +1538,8 @@ byte-identical.
    readability) by `GOLD-EX-06`. A `DERIVED` row never counts as a pass and never
    affects the exit code, and with no engine it is reported `NOT RUN` like the rest.
 
-`backend/tests/p3/test_windows_ocr_acceptance.py` grew from 7 to 15 tests, covering
+`backend/tests/p3/test_windows_ocr_acceptance.py` grew from 7 to 15 tests
+(P3 directory: 146 collected tests; full suite 529 passed), covering
 the missing-wheel path, the `_guarded` conversion, the 07/08 accounting, the owner's
 real `E:\DEPI` paths, the detached-worktree/SHA guard, the "do not skip the
 frontend" rule and the `app.db` read-only guarantee.

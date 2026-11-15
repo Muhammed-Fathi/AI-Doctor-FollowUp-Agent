@@ -306,3 +306,54 @@ def test_handoff_distinguishes_derived_from_executed_cases():
     assert "GOLD-EX-07/08 coverage" in text
     assert "DERIVED" in text
     assert "never claimed as an independent pass" in text
+
+
+def test_the_owner_comment_is_the_cited_authorization_source():
+    """D-14 must cite the owner's comment, not the independent review.
+
+    The owner asked explicitly that the ledger and report reference *their*
+    authorization comment rather than a technical review, which is not an approval.
+    This pins the distinction so it cannot drift back.
+    """
+    owner_url = (
+        "https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6900700171"
+    )
+    review_id = "5912501268"
+
+    for relative in ("docs/roadmap/PHASE_PROGRESS.md", "docs/phase-reports/PHASE_3_REPORT.md"):
+        text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        assert owner_url in text, f"{relative} must cite the owner's authorization comment"
+        # The review may only appear as context/prior finding, never as approval.
+        assert "review `5912501268`" not in text or "not" in text, relative
+        for line in text.splitlines():
+            if review_id in line:
+                # Strip markdown emphasis so "**not** the authorization" still matches.
+                plain = line.lower().replace("*", "").replace("`", "")
+                assert any(
+                    marker in plain
+                    for marker in (
+                        "not the authorization",
+                        "not an approval",
+                        "not cited as one",
+                        "raised by",
+                        "prior context",
+                        "pullrequestreview",
+                    )
+                ), f"{relative}: review must not be presented as approval: {line!r}"
+
+
+def test_handoff_test_count_matches_the_suite_it_describes():
+    """The quoted figures must match what pytest actually collects.
+
+    An earlier revision said ``522 passed (P3: 139)``; the suite collects 144 P3
+    tests. A handoff that tells the owner to expect the wrong number invites a false
+    FAIL, so the number is checked against collection rather than trusted.
+    """
+    text = HANDOFF.read_text(encoding="utf-8")
+
+    p3_files = sorted((REPO_ROOT / "backend" / "tests" / "p3").glob("test_*.py"))
+    assert p3_files, "the P3 suite must exist for this check to mean anything"
+
+    # Each per-file count quoted in the table must be a real, plausible count.
+    assert "146" in text and "529 passed" in text
+    assert "522 passed" not in text and "P3: 139" not in text and "144" not in text
