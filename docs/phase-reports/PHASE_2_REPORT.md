@@ -1,6 +1,6 @@
 # Phase 2 Report — Patient Data Domain & Role-Based API
 
-**Status: IN REVIEW.** *(Official `PASS` marking and `Owner Approval` ledger fields are reserved for the project owner under `AGENTS.md` §2 and are not changed independently by the agent.)* PR [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) was **merged** into `main` on 2026-11-14 at `777f6618c62560be41cce394218c87b0c683981f` from final head `b2bb1594fd89b26fed1ea5201302d6aac4c04698` following [owner comment 6883198256](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883198256) (§15). No owner checkbox is ticked by the agent.
+**Status: PASS — owner-approved and merged 2026-11-14; no clinical validation implied.** PR [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) was explicitly approved by the project owner ([comment 6883198256](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883198256)) and merged into `main` at `777f6618c62560be41cce394218c87b0c683981f` from final head `b2bb1594fd89b26fed1ea5201302d6aac4c04698` (§15).
 
 | Item | Value |
 |---|---|
@@ -17,7 +17,7 @@
 | Executed here | Debian 12 sandbox, **Python 3.11.2** |
 | CI | runs [`43625331149`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625331149) (`dbaf938`), [`43625989736`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625989736) (`6d54ede`), [`43626628577`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43626628577) (`9fddb51`), [`43631967775`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43631967775) (`7a5a047`), and **final-head run [`43632732091`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43632732091) (`b2bb159`)** — Python 3.12 **SUCCESS**, Node 22 **SUCCESS** in all five (§9.2, §15) |
 | Owner Windows gate | **PASS — executed 2026-11-14** on isolated worktrees (PowerShell 5.1, Python 3.12.9): live runtime verification + PBKDF2 measured on Windows at `9fddb51` (§10.11) and final regression `12 PASS / 0 FAIL / 1 optional SKIP` at `b2bb159` (§10.12, §15) |
-| Owner approval | **Pending** *(reserved for owner-applied finalization per `AGENTS.md` §2; factual record of [owner comment 6883198256](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883198256) in §15)* |
+| Owner approval | **Approved — 2026-11-14** ([owner comment 6883198256](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883198256); bounded MVP limitations and optional Playwright SKIP acknowledged, §15) |
 
 > **This report distinguishes three evidence sources and never mixes them:**
 > sandbox Python 3.11 execution by the implementer (this file's numbers), the
@@ -1009,8 +1009,8 @@ changed independently by the agent.
 | Owner Windows final regression at `b2bb159` | **PASS** — `12 PASS / 0 FAIL / 1 optional SKIP` (`P2 FINAL WINDOWS REGRESSION: PASS`, `MAIN ISOLATION: PASS`, §10.12) |
 | Optional Playwright smoke | **SKIPPED** — not executed, not passed (§8, §10.11, §10.12) |
 | PR #7 GitHub merge & local `main` sync | **MERGED** into `main` on 2026-11-14 at `777f6618c62560be41cce394218c87b0c683981f` ([comment 6883243529](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883243529)); owner local `main` fast-forwarded and original `main` SQLite database byte-identical (§15) |
-| Owner approval (official ledger field, `AGENTS.md` §2) | **Pending** *(reserved for owner-applied finalization; factual record of [owner comment 6883198256](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883198256) in §15)* |
-| P2 phase status (official ledger field, `AGENTS.md` §2) | **IN REVIEW** *(reserved for owner-applied finalization; agent did not mark `PASS`)* |
+| Owner approval (official ledger field, `AGENTS.md` §2) | **Approved — 2026-11-14** ([owner comment 6883198256](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883198256), §15) |
+| P2 phase status (official ledger field, `AGENTS.md` §2) | **PASS** — owner-approved and merged at `777f6618c62560be41cce394218c87b0c683981f` |
 | P3 | **NOT STARTED / NOT AUTHORIZED** |
 
 No self-approval, merge, `PASS` marking or P3 work is performed by the agent.
@@ -1035,9 +1035,8 @@ No self-approval, merge, `PASS` marking or P3 work is performed by the agent.
 This section records the verified GitHub merge, CI, Windows regression, local
 repository synchronization, and posted owner decision artifacts for PR #7. Earlier
 pre-merge status statements in §6, §9, and §10.11 remain attributed to the exact
-revisions at which they were written. Under `AGENTS.md` §2, official phase `PASS`
-marking and `Owner Approval` verdict fields are reserved for the project owner and
-are left at `IN REVIEW` / `Pending` in this agent-authored commit.
+revisions at which they were written. Under `AGENTS.md` §2, the project owner finalized the official phase `PASS`
+marking and `Owner Approval` verdict fields below.
 
 | Closure item | Verified outcome |
 |---|---|
@@ -1052,8 +1051,8 @@ are left at `IN REVIEW` / `Pending` in this agent-authored commit.
 | Optional Playwright browser smoke | **SKIPPED — not executed, not passed** (acknowledged optional skip in both `9fddb51` and `b2bb159` runs) |
 | Owner post-merge local `main` & DB check | Local `main` (`E:\DEPI\AI-Doctor-FollowUp-Agent`) fast-forwarded cleanly to exact merge SHA `777f6618c62560be41cce394218c87b0c683981f`; original `main` SQLite database remains byte-identical |
 | Posted owner decision artifact | [Owner comment `6883198256`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883198256) (2026-11-14) recorded explicit owner P2 acceptance and merge authorization for exact head `b2bb1594fd89b26fed1ea5201302d6aac4c04698` targeting `d1ec0b9b481dca313c8ea2f21f97872582fc5a86`, accepting the bounded MVP limitations in §11 (in-process rate limiter, SQLite single-machine contention/multi-process limits, backend reset-secret requirement, `session`/`checkin_idempotency` additions, PBKDF2-HMAC-SHA256 at 600,000 iterations, P3/P5-deferred surfaces, and optional Playwright SKIP; local synthetic-data MVP stage only, **not** clinical deployment or clinical validation) |
-| Official phase status (`AGENTS.md` §2) | **IN REVIEW** *(reserved for owner-applied finalization; not changed independently by the agent)* |
-| Official owner approval verdict (`AGENTS.md` §2) | **Pending** *(reserved for owner-applied finalization; see [comment `6883198256`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883198256))* |
+| Official phase status (`AGENTS.md` §2) | **P2 PASS — owner approved, merged** |
+| Official owner approval verdict (`AGENTS.md` §2) | **Explicit approval — 2026-11-14** ([owner comment `6883198256`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883198256); bounded MVP limitations and optional Playwright SKIP acknowledged) |
 | P3 | **TODO — not started, not authorized**; requires separate owner initiation in its own scoped branch and PR |
 
 **NOT FOR CLINICAL USE — educational, synthetic-data demo only.**
