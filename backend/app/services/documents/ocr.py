@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import re
 import shutil
+import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -72,6 +73,21 @@ def resolve_engine(tesseract_cmd: str | None) -> str:
     return discovered
 
 
+#: Serialises every operation that depends on pytesseract's process-global command.
+#:
+#: ``pytesseract.pytesseract.tesseract_cmd`` is a single mutable module attribute, and
+#: ``get_tesseract_version``, ``image_to_string`` and ``image_to_data`` all read it. Two
+#: overlapping OCR requests with *different* executables could therefore interleave: one
+#: thread would invoke another's binary, and out-of-order restores could leave the global
+#: at an arbitrary value — silently corrupting ``tool_version`` provenance. A re-entrant
+#: lock is used because ``run_ocr`` holds it while calling :func:`engine_version`, which
+#: takes it again.
+#:
+#: The lock is process-local. It does not protect against separate *processes* sharing one
+#: pytesseract module — each process has its own global, so none is shared.
+_ENGINE_LOCK = threading.RLock()
+
+
 @contextlib.contextmanager
 def _engine_selected(executable: str) -> Iterator[None]:
     """Point pytesseract at ``executable`` for the duration of the block.
@@ -84,16 +100,17 @@ def _engine_selected(executable: str) -> Iterator[None]:
     then ignored it, so an explicit ``TESSERACT_CMD`` with nothing on ``PATH`` could
     not actually run OCR.
 
-    The previous value is always restored, because leaking one document's engine into
-    the next request would make provenance report a version that did not produce the
-    text.
+    The whole save/select/call/restore span is held under :data:`_ENGINE_LOCK`, so a
+    concurrent request cannot swap the global mid-call. The previous value is always
+    restored, so one document's engine cannot leak into the next.
     """
-    previous = pytesseract.pytesseract.tesseract_cmd
-    pytesseract.pytesseract.tesseract_cmd = executable
-    try:
-        yield
-    finally:
-        pytesseract.pytesseract.tesseract_cmd = previous
+    with _ENGINE_LOCK:
+        previous = pytesseract.pytesseract.tesseract_cmd
+        pytesseract.pytesseract.tesseract_cmd = executable
+        try:
+            yield
+        finally:
+            pytesseract.pytesseract.tesseract_cmd = previous
 
 
 def engine_version(tesseract_cmd: str | None) -> str | None:

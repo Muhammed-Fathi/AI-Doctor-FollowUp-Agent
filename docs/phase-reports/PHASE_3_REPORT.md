@@ -1539,7 +1539,7 @@ byte-identical.
    affects the exit code, and with no engine it is reported `NOT RUN` like the rest.
 
 `backend/tests/p3/test_windows_ocr_acceptance.py` grew from 7 to 15 tests
-(P3 directory: 164 collected tests; full suite 547 passed), covering
+(P3 directory: 186 collected tests; full suite 569 passed), covering
 the missing-wheel path, the `_guarded` conversion, the 07/08 accounting, the owner's
 real `E:\DEPI` paths, the detached-worktree/SHA guard, the "do not skip the
 frontend" rule and the `app.db` read-only guarantee.
@@ -1611,6 +1611,70 @@ path (argv, output files, TSV parsing, `--version`). Both explicit-path and
 one document's engine cannot leak into the next request.
 
 Windows live OCR is still **NOT RUN**; the owner must repeat acceptance.
+
+## V.11 R12, R13 and R14 — real-engine Windows findings
+
+Owner evidence at `cf77be6`: the probe exited **2** with **8 PASS / 2 FAIL / 1 DERIVED**.
+Real Tesseract 5.4.0, `eng` data, PNG (158 chars, conf 0.6444), JPEG (159 chars,
+conf 0.5856), `OCR-LIVE-01` measurements and PDFium all **PASS**. `GOLD-EX-07/08` is
+DERIVED, not an independent pass.
+
+### R13 — GOLD-EX-11 (`value flags=[] normalized=[]`)
+
+**Diagnosis: the engine lost the line; the parser was never shown a token.**
+
+An empty `flags` list is not a missing flag on a value fact — it is the absence of any
+value fact. The gate renders the corruption sample with PIL's **tiny default bitmap
+font** (a `1O5` token is about 19x10 px in a 1000x300 image), so Tesseract does not
+recover the `Value:` label and `_TEST_VALUE` correctly refuses to attribute a value.
+
+Parser behaviour is sound and unchanged: given a genuine `1O5`, `_normalize_number`
+returns ``None`` and the fact carries ``unparseable_value``. It is never repaired to
+`105`. That is now pinned deterministically at the parser level for `1O5`, `l05`, `I05`,
+`1o5`, `12O` and `O.5`, with a clean `105` as the negative control.
+
+The gate itself was the weak part: it reported a bare FAIL for three distinct
+situations. It now names the case and records the raw engine text as evidence —
+``no_value_fact`` (engine lost the label: not proven), ``flagged`` (the documented
+behaviour: PASS), or ``repaired`` (engine read a clean ``105``: not proven).
+
+### R14 — ING-02 (`SecretStr` has no attribute `strip`)
+
+**Diagnosis: probe boundary defect, not a seed-service defect.** `seed.py` correctly
+calls `.get_secret_value()` for its own settings path; the probe passed
+`settings.demo_seed_password` — a `pydantic.SecretStr` — straight into `seed_demo_data`,
+so `password.strip()` raised `AttributeError` before any HTTP call.
+
+Fixed with a `_seed_password()` helper that unwraps through `.get_secret_value()` and
+falls back to an explicit synthetic local password. The secret is never logged or
+written to the JSON evidence. The seed service's own empty-password guard is untouched.
+
+**Two further probe defects surfaced behind it**, both previously unreachable:
+
+| Defect | Symptom |
+|---|---|
+| `issue_session()` called without its required keyword-only `now` | `TypeError` before upload |
+| Sessions issued at a **fixed** midnight with a 60-minute TTL | every token already expired → `401 E_UNAUTHENTICATED` |
+
+Sessions now use the live clock. Seeding keeps its deterministic timestamp, because
+seeding is not time-sensitive. With those fixed, the full HTTP path passes:
+`facts=3 evidence_extractors=['tesseract'] stored_extractors=['tesseract']` with a
+recorded attempt log.
+
+### R12 — process-global executable selection
+
+**Confirmed, and reproducible.** Two threads entering `_engine_selected` with different
+executables interleave: one thread observed the other's binary, and an out-of-order
+restore left the global at `/engine/1` instead of its original value.
+
+Fixed with a module-level **re-entrant** lock (`RLock`, because `run_ocr` holds it while
+calling `engine_version`, which re-enters). The entire save/select/call/restore span is
+held, so a concurrent request cannot swap the global mid-call and restoration is
+ordered. Tests force the contention explicitly — holder parked inside, contender
+asserted *blocked* — and both fail when the lock is neutralised.
+
+Limit recorded honestly: the lock is process-local. It cannot coordinate separate
+processes, which each have their own copy of the module global.
 
 ## V.7 Status
 

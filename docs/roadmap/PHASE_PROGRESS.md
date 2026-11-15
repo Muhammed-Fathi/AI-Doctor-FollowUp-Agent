@@ -35,7 +35,7 @@ The implementing agent never self-approves, marks phases `PASS` or merges pull r
 | P0 | Governance / specifications | **PASS** | [#2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) | `442256606fd2465439409cc9b4d42f1bec09a723` | Documentation consistency, traceability, OpenAPI validation and targeted contract checks completed. No runtime implementation tests applicable to P0. | **Approved — 2026-11-14** |
 | P1 | Foundation / reproducible startup | **PASS** | [#4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4) | `2c85db4d9fe9f17080146d12adfbd030a05cc75d` | **Owner Windows gate PASSED at `eec6642`:** `test_all.ps1` 12 PASS / 0 FAIL / 1 optional SKIP; `invoke_native.tests.ps1` 14 checks; `stop_identity.tests.ps1` 38 checks; live setup/start/stop PASS on both the normal path and the space-containing path (`E:\DEPI\AI Doctor FollowUp Agent Space Test`); ports 8000/5173 free and all three tracking files removed. GitHub Actions run [`43615782079`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43615782079) SUCCESS. Backend 121 tests, frontend 13, Ruff, Alembic, OpenAPI, scan, Vite build also pass locally. Optional Playwright smoke NOT EXECUTED. | **Approved — 2026-11-14; license and DEPENDENCIES sync deferred; Playwright SKIP acknowledged** |
 | P2 | Patient data + role-based API | **PASS** | [#7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) | `777f6618c62560be41cce394218c87b0c683981f` | Sandbox Python 3.11: `356 passed` (125 P1 + 231 P2), `ruff check`/`format` clean, OpenAPI gate `PASS (11 paths / 12 operations, 22 schemas)`, `check_alembic_smoke` PASS in states `head`/`p1`/`base`, secret scan PASS. **CI independently verified across PR heads:** runs [`43625331149`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625331149) (`dbaf938`), [`43625989736`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43625989736) (`6d54ede`), [`43626628577`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43626628577) (`9fddb51`), [`43631967775`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43631967775) (`7a5a047`), and **final merged head run [`43632732091`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/43632732091) (`b2bb1594fd89b26fed1ea5201302d6aac4c04698`)** — Backend Python 3.12 SUCCESS and Frontend Node 22 SUCCESS in all five (the Arena agent's own Actions/Checks read returned 403 *Resource not accessible by integration*, retained as an observer limitation, **not** a CI failure). **Owner live Windows verification: PASS (2026-11-14)** at unchanged implementation snapshot `9fddb51ba7672efd992c47325ab4883734da3c9a` — isolated worktree, PowerShell 5.1, Python 3.12.9: `test_all.ps1` 12 PASS / 0 FAIL / 1 optional SKIP (exit 0), Alembic P2→P1→P2, 11 paths / 12 operations / 22 schemas, synthetic bootstrap 6 users / 3 patients / 3 encounters / 17 observations, 9 RBAC checks, 8 idempotency checks, 7 demo-reset checks, identity-safe shutdown, `main` HEAD unchanged and DB SHA-256 byte-identical; PBKDF2 600 000 iterations measured hash 550.49 ms / verify 537.67 ms ([owner comment 6882774686](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6882774686)). **Owner final Windows regression at final head `b2bb1594fd89b26fed1ea5201302d6aac4c04698`: PASS** — `test_all.ps1` 12 PASS / 0 FAIL / 1 optional SKIP, 14 command-wrapper checks PASS, 38 stop-identity checks PASS, `P2 FINAL WINDOWS REGRESSION: PASS`, `MAIN ISOLATION: PASS`; post-merge owner local `main` fast-forwarded to `777f6618c62560be41cce394218c87b0c683981f` and original `main` SQLite database remains byte-identical ([comment 6883198256](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883198256), [comment 6883243529](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883243529)). Optional Playwright: **SKIPPED, not passed**. | **Approved — 2026-11-14 ([comment 6883198256](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7#issuecomment-6883198256)); bounded MVP limitations and Playwright SKIP acknowledged** |
-| P3 | Document ingestion + OCR verification | **IN_REVIEW** | — (draft PR #10) | — | Sandbox Python 3.11 (pinned venv, **not** the hash-locked 3.12 environment): `547 passed, 0 failed, 0 skipped` (164 P3: 21 review-correction R01–R05 + 24 edge-case R06–R09 + 13 OCR-integration R11 + 17 Windows-probe/handoff + 13 fixture-integrity + 76 contract tests across authorization, extraction, upload and verification), `ruff check`/`format` clean (99 files), OpenAPI gate `PASS (16 paths / 17 operations, 41 schemas)`, `check_alembic_smoke` PASS in states `head`/`p2`/`p1`/`base` plus a `head → base → head` round trip, secret scan PASS (188 files), P2 migration-vs-metadata drift check PASS. Three review rounds were reproduced as failing tests before correction (14/20, 8/21, 3/7), the fourth round's probe/handoff items as 4 new tests, the fifth (documentation-only) round's authorization-source and test-count guards as 2, and the sixth round's Windows CRLF failure as 5 fixtures/portability tests, and the seventh round's pytesseract integration failure as 13 OCR tests. **No real OCR executed — the sandbox has no Tesseract; the R01 provenance regression uses a mocked engine and the owner probe reports `NOT RUN` with exit 2 here.** Windows acceptance procedure: `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md`; executable probe: `scripts/python/windows_ocr_acceptance.py`. `pypdfium2` Windows behaviour and the 3.12 lockfile install remain **unverified**; CI on the final head is the owner's to confirm. | Pending |
+| P3 | Document ingestion + OCR verification | **IN_REVIEW** | — (draft PR #10) | — | Sandbox Python 3.11 (pinned venv, **not** the hash-locked 3.12 environment): `569 passed, 0 failed, 0 skipped` (186 P3: 21 review-correction R01–R05 + 24 edge-case R06–R09 + 16 OCR-integration R11/R12 + 19 Windows-findings R13/R14 + 17 Windows-probe/handoff + 13 fixture-integrity + 76 contract tests across authorization, extraction, upload and verification), `ruff check`/`format` clean (99 files), OpenAPI gate `PASS (16 paths / 17 operations, 41 schemas)`, `check_alembic_smoke` PASS in states `head`/`p2`/`p1`/`base` plus a `head → base → head` round trip, secret scan PASS (188 files), P2 migration-vs-metadata drift check PASS. Three review rounds were reproduced as failing tests before correction (14/20, 8/21, 3/7), the fourth round's probe/handoff items as 4 new tests, the fifth (documentation-only) round's authorization-source and test-count guards as 2, and the sixth round's Windows CRLF failure as 5 fixtures/portability tests, the seventh round's pytesseract integration failure as 13 OCR tests, and the eighth round's Windows findings as 3 concurrency + 19 R13/R14 tests. **No real OCR executed — the sandbox has no Tesseract; the R01 provenance regression uses a mocked engine and the owner probe reports `NOT RUN` with exit 2 here.** Windows acceptance procedure: `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md`; executable probe: `scripts/python/windows_ocr_acceptance.py`. `pypdfium2` Windows behaviour and the 3.12 lockfile install remain **unverified**; CI on the final head is the owner's to confirm. | Pending |
 | P4 | Monitoring + demo review rules | TODO | — | — | Not run | Pending |
 | P5 | LangGraph agents + Ollama + approval | TODO | — | — | Not run | Pending |
 | P6 | Doctor/patient UI + follow-up tasks | TODO | — | — | Not run | Pending |
@@ -666,6 +666,52 @@ additional authorization was needed because `ocr.py` is already a reviewed P3 pa
 
 **Not claimed:** Windows live OCR (`GOLD-EX-05..08/11`, `OCR-LIVE-01`) remains
 **NOT RUN** until the owner repeats acceptance on the corrected SHA.
+
+### R12 — process-global OCR executable selection (`CORRECTED`)
+
+Source: [PR #10 review `5913341864`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#pullrequestreview-5913341864).
+
+**Confirmed by reproduction**, not assumed: two threads inside `_engine_selected` with
+different executables cross-wired, and an out-of-order restore left the global at
+`/engine/1` rather than its original value.
+
+**Fixed** with a module-level `RLock` covering the whole save/select/call/restore span.
+Re-entrant because `run_ocr` holds the lock while calling `engine_version`, which takes it
+again. `tool_version`, exception behaviour and confidence semantics are unchanged.
+
+**Honest limit:** the lock is process-local and cannot coordinate separate processes;
+each has its own copy of the module global. That is not a defect of this fix, but it is
+not a claim of multi-process safety either.
+
+### R13 — GOLD-EX-11 `1O5` case (`DIAGNOSED; parser correct, gate improved`)
+
+Source: [PR #10 review `5913389560`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#pullrequestreview-5913389560).
+
+Owner result `value flags=[] normalized=[]` was **case (b)**: the engine lost the line,
+so no value fact existed. The probe rendered the sample with PIL's default bitmap font
+(~10 px), which Tesseract cannot reliably read.
+
+Parser is correct and unchanged: a genuine `1O5` yields `normalized_value=None` with
+`unparseable_value`, never `105`. Now pinned for six confusion tokens plus a clean control.
+
+Gate improved to distinguish and *name* the three outcomes (`no_value_fact`, `flagged`,
+`repaired`) and to record the raw engine text, instead of a bare FAIL. **The gate is
+honest about its own limitation:** it can only demonstrate the corruption case when the
+engine actually emits an ambiguous token.
+
+### R14 — ING-02 `SecretStr` boundary (`CORRECTED`, plus two hidden probe bugs)
+
+Source: [PR #10 review `5913389560`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#pullrequestreview-5913389560).
+
+Probe passed `settings.demo_seed_password` (`SecretStr`) into `seed_demo_data`, so
+`seed.py`'s `password.strip()` raised `AttributeError`. Fixed at the probe boundary with
+`.get_secret_value()`; the secret is never logged or written to evidence, and the seed
+service keeps its own empty-password guard.
+
+Fixing that exposed two further probe defects that had never been reachable: a missing
+keyword-only `now` on `issue_session()`, and sessions issued at a fixed midnight so every
+token was already expired (`401`). Both fixed; the HTTP path now passes end-to-end with
+`tesseract` provenance in both the response and the stored rows.
 
 ### File-scope exceptions for the P3 Windows handoff (`APPROVED`)
 

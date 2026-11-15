@@ -433,3 +433,148 @@ def test_a_failing_engine_is_reported_not_swallowed(monkeypatch, tmp_path):
             tesseract_cmd=str(engine),
             language="eng",
         )
+
+
+# ============================ P3-R12: process-global executable selection
+#
+# ``_engine_selected`` mutates ``pytesseract.pytesseract.tesseract_cmd``, a process
+# global. Without synchronisation two overlapping OCR calls with *different* executables
+# interleave: one thread invokes another's binary, and out-of-order restores leave the
+# global at an arbitrary value — silently corrupting ``tool_version`` provenance.
+#
+# These tests force the contention rather than hoping for it: a holder thread parks
+# inside the selection, and a contender then tries to enter. Deterministic, and fast.
+
+_R12_HOLD_TIMEOUT = 5.0
+
+
+def test_selection_is_mutually_exclusive(monkeypatch):
+    """A second selection cannot enter while one is active."""
+    import threading
+
+    import pytesseract
+
+    monkeypatch.setattr(pytesseract.pytesseract, "tesseract_cmd", "tesseract")
+
+    holder_inside = threading.Event()
+    release_holder = threading.Event()
+    contender_entered = threading.Event()
+    seen_by_holder: list[str] = []
+
+    def holder() -> None:
+        with ocr_module._engine_selected("/engine/A"):
+            holder_inside.set()
+            release_holder.wait(_R12_HOLD_TIMEOUT)
+            # Read *after* the contender has had time to interfere.
+            seen_by_holder.append(pytesseract.pytesseract.tesseract_cmd)
+
+    def contender() -> None:
+        holder_inside.wait(_R12_HOLD_TIMEOUT)
+        with ocr_module._engine_selected("/engine/B"):
+            contender_entered.set()
+
+    holder_thread = threading.Thread(target=holder)
+    contender_thread = threading.Thread(target=contender)
+    holder_thread.start()
+    assert holder_inside.wait(_R12_HOLD_TIMEOUT), "holder never entered the selection"
+    contender_thread.start()
+
+    # The contender must stay blocked while the holder owns the selection.
+    assert not contender_entered.wait(0.25), (
+        "a second engine selection entered concurrently — the global is unsynchronised"
+    )
+
+    release_holder.set()
+    holder_thread.join(_R12_HOLD_TIMEOUT)
+    contender_thread.join(_R12_HOLD_TIMEOUT)
+
+    assert seen_by_holder == ["/engine/A"], (
+        f"the holder observed a cross-wired engine: {seen_by_holder}"
+    )
+    assert contender_entered.is_set(), "the contender should proceed once released"
+
+
+def test_concurrent_selections_restore_the_original_value(monkeypatch):
+    """After overlapping selections, the global is back to its original value."""
+    import threading
+
+    import pytesseract
+
+    monkeypatch.setattr(pytesseract.pytesseract, "tesseract_cmd", "tesseract")
+    errors: list[BaseException] = []
+
+    def worker(path: str) -> None:
+        try:
+            for _ in range(20):
+                with ocr_module._engine_selected(path):
+                    if pytesseract.pytesseract.tesseract_cmd != path:
+                        raise AssertionError(f"{path} saw {pytesseract.pytesseract.tesseract_cmd}")
+        except BaseException as error:  # pragma: no cover - surfaced below
+            errors.append(error)
+
+    threads = [threading.Thread(target=worker, args=(f"/engine/{index}",)) for index in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(_R12_HOLD_TIMEOUT * 2)
+
+    assert not errors, errors
+    assert pytesseract.pytesseract.tesseract_cmd == "tesseract"
+
+
+def test_run_ocr_holds_the_selection_across_its_engine_calls(monkeypatch, tmp_path):
+    """A live ``run_ocr`` keeps the global stable for its whole engine interaction."""
+    import threading
+
+    from PIL import Image
+
+    engine = _FakeEngine(tmp_path / "explicit" / "tesseract")
+    _isolate_pytesseract_global(monkeypatch)
+
+    import pytesseract
+
+    seen: list[str] = []
+    inside = threading.Event()
+    release = threading.Event()
+
+    def _fake_image_to_string(image, **kwargs):
+        seen.append(pytesseract.pytesseract.tesseract_cmd)
+        inside.set()
+        release.wait(_R12_HOLD_TIMEOUT)
+        return "text"
+
+    monkeypatch.setattr(pytesseract, "image_to_string", _fake_image_to_string)
+    monkeypatch.setattr(pytesseract, "image_to_data", lambda image, **kw: {"conf": []})
+    monkeypatch.setattr(ocr_module, "engine_version", lambda cmd: None)
+
+    worker = threading.Thread(
+        target=lambda: ocr_module.run_ocr(
+            Image.new("RGB", (8, 8), "white"),
+            tesseract_cmd=str(engine.path),
+            language="eng",
+        )
+    )
+    worker.start()
+    assert inside.wait(_R12_HOLD_TIMEOUT), "run_ocr did not reach the engine call"
+
+    intruded = threading.Event()
+
+    def _intrude() -> None:
+        with ocr_module._engine_selected("/engine/OTHER"):
+            intruded.set()
+
+    other = threading.Thread(target=_intrude)
+    other.start()
+
+    # While run_ocr is inside, no other selection may take effect.
+    assert not intruded.wait(0.25), "another selection entered during a live run_ocr"
+    assert pytesseract.pytesseract.tesseract_cmd == str(engine.path), (
+        "the global was swapped while run_ocr was inside the selection"
+    )
+
+    release.set()
+    worker.join(_R12_HOLD_TIMEOUT)
+    other.join(_R12_HOLD_TIMEOUT)
+
+    assert seen == [str(engine.path)]
+    assert intruded.is_set(), "the intruder should proceed once run_ocr releases"

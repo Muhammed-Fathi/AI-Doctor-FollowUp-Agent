@@ -399,25 +399,57 @@ def gate_ocr_corruption(results: list[Result], *, engine_present: bool) -> None:
     )
     parsed = parse_pages([page])
 
-    flags = {
-        flag.value
-        for fact in parsed.facts
-        for flag in fact.quality_flags
-        if fact.field_name.value == "value"
-    }
-    repaired = [
-        fact.normalized_value
-        for fact in parsed.facts
-        if fact.field_name.value == "value" and fact.normalized_value
-    ]
-    ok = "low_confidence" in flags or "unparseable_value" in flags
+    value_facts = [fact for fact in parsed.facts if fact.field_name.value == "value"]
+    flags = {flag.value for fact in value_facts for flag in fact.quality_flags}
+    normalized = [fact.normalized_value for fact in value_facts if fact.normalized_value]
+    raw_tokens = [fact.raw_text for fact in value_facts]
+    ambiguous = "low_confidence" in flags or "unparseable_value" in flags
+
+    # Three outcomes are possible, and they mean different things. Reporting a bare
+    # FAIL for all of them is what made this gate hard to diagnose on Windows:
+    #
+    #  (a) no value fact at all -> the engine lost or mangled the label, so the parser
+    #      was never shown a token. The corruption case is NOT demonstrated.
+    #  (b) a value fact that is flagged -> the documented behaviour. PASS.
+    #  (c) a value fact read as clean "105" -> the engine (or renderer) repaired it, so
+    #      again the corruption case is not demonstrated.
+    if not value_facts:
+        status = FAIL
+        reason = (
+            "no value fact was parsed, so the OCR-produced-token case is not proven; "
+            "the engine most likely lost or mangled the 'Value:' label. See ocr_text"
+        )
+    elif ambiguous:
+        status = PASS
+        reason = "value token survived OCR and was flagged, not repaired"
+    else:
+        status = FAIL
+        reason = (
+            f"a value fact was parsed as {normalized} instead of an ambiguous token, so "
+            "the original 1O5 did not survive OCR; the corruption case is not proven"
+        )
+
     _record(
         results,
         Result(
             gate,
-            PASS if ok else FAIL,
-            f"value flags={sorted(flags)} normalized={repaired} (must not be silently 105)",
-            {"flags": sorted(flags), "normalized_values": repaired, "ocr_text": ocr.text},
+            status,
+            f"{reason}; value flags={sorted(flags)} normalized={normalized} raw={raw_tokens}",
+            {
+                "diagnosis": "no_value_fact"
+                if not value_facts
+                else ("flagged" if ambiguous else "repaired"),
+                "flags": sorted(flags),
+                "normalized_values": normalized,
+                "raw_tokens": raw_tokens,
+                "ocr_text": ocr.text,
+                "limitation": (
+                    "the gate proves the parser flags an OCR-produced ambiguous token only "
+                    "when the engine actually emits one; a low-resolution render may lose "
+                    "the line. Parser behaviour is proven deterministically in "
+                    "test_p3_windows_findings.py"
+                ),
+            },
         ),
     )
 
@@ -453,6 +485,28 @@ def gate_rasterizer(results: list[Result]) -> None:
 
 
 # --- end-to-end through the API ----------------------------------------------
+
+
+def _seed_password(settings) -> str:
+    """Extract the demo seed password as a **plain string**, never a ``SecretStr``.
+
+    ``Settings.demo_seed_password`` is typed ``SecretStr``, so passing it straight to
+    ``seed_demo_data`` crashed with
+    ``AttributeError: 'SecretStr' object has no attribute 'strip'`` — the probe boundary
+    was wrong, not the seed service (which correctly calls ``.get_secret_value()``).
+
+    The value is read through the supported accessor and never logged or written to the
+    evidence JSON. When nothing is configured, an explicit synthetic local password is
+    used: this probe builds a throwaway database, so a fixed demo credential is
+    appropriate and no real secret is needed.
+    """
+    configured = getattr(settings, "demo_seed_password", None)
+    if configured is None:
+        return "acceptance-only-password"
+    if hasattr(configured, "get_secret_value"):
+        secret = configured.get_secret_value()
+        return secret or "acceptance-only-password"
+    return str(configured) or "acceptance-only-password"
 
 
 def gate_api_ocr_upload(results: list[Result], *, engine_present: bool) -> None:
@@ -507,7 +561,7 @@ def gate_api_ocr_upload(results: list[Result], *, engine_present: bool) -> None:
             with Session(engine) as session:
                 seed_demo_data(
                     session,
-                    password=settings.demo_seed_password or "acceptance-only-password",
+                    password=_seed_password(settings),
                     now=__import__("datetime").datetime(
                         2026, 11, 15, tzinfo=__import__("datetime").timezone.utc
                     ),
@@ -520,8 +574,18 @@ def gate_api_ocr_upload(results: list[Result], *, engine_present: bool) -> None:
                 doctor = session.execute(
                     select(User).where(User.username == "demo_doctor")
                 ).scalar_one()
-                patient_token, _ = issue_session(session, user=patient, ttl_minutes=60)
-                doctor_token, _ = issue_session(session, user=doctor, ttl_minutes=60)
+                # ``issue_session`` is keyword-only and takes an explicit clock; the
+                # reviewed probe omitted it and raised TypeError before any upload.
+                #
+                # The clock must be *now*, not a fixed date: a session lives for 60
+                # minutes, so a hard-coded midnight expiry is already in the past and
+                # the upload answers 401. That is the probe borrowing the seed's
+                # deterministic timestamp for something time-sensitive.
+                issued_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+                patient_token, _ = issue_session(
+                    session, user=patient, now=issued_at, ttl_minutes=60
+                )
+                doctor_token, _ = issue_session(session, user=doctor, now=issued_at, ttl_minutes=60)
                 session.commit()
 
                 with TestClient(create_app(settings)) as client:
