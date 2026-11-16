@@ -36,6 +36,12 @@ def test_patient_can_read_own_document_metadata(api, patient_headers, glucose_pd
     assert response.status_code == 200
     body = response.json()
     # No clinical value and no extracted span may appear in the patient view.
+    #
+    # R21 §4.9 adds exactly three non-clinical fields: the terminal reason token,
+    # whether recovery is allowed, and the patient-declared source. They describe
+    # state and lineage, never a reading, so the redaction rule below is
+    # unchanged — this stays an exact-key assertion rather than becoming a
+    # superset check, which is what would let a clinical field slip in later.
     assert set(body) == {
         "id",
         "patient_id",
@@ -46,9 +52,20 @@ def test_patient_can_read_own_document_metadata(api, patient_headers, glucose_pd
         "page_count",
         "extraction_status",
         "uploaded_at",
+        "failure_code",
+        "recovery_eligible",
+        "recovered_from_document_id",
     }
+    # A freshly uploaded document has no terminal reason and no recovery link.
+    assert body["failure_code"] is None
+    assert body["recovery_eligible"] is False
+    assert body["recovered_from_document_id"] is None
     assert "facts" not in body
     assert "raw_text" not in body
+    assert "normalized_value" not in body
+    assert "unit" not in body
+    assert "confidence" not in body
+    assert "quality_flags" not in body
 
 
 def test_patient_can_download_own_file(api, patient_headers, glucose_pdf):
@@ -171,3 +188,57 @@ def test_unauthenticated_reads_are_rejected(api):
         response = api.get(path)
         assert response.status_code == 401, path
         assert response.json()["code"] == "E_UNAUTHENTICATED"
+
+
+# --- R21 §4.9 — recovery metadata does not widen scope ---------------------
+
+
+def test_recovery_metadata_is_patient_safe_and_authorized(
+    api, patient_headers, other_patient_headers, doctor_headers, glucose_pdf
+):
+    """The three R21 fields are visible to the owner, and only the owner.
+
+    The fields are deliberately non-clinical (a reason token, a boolean and a
+    document id), so exposing them to the owning patient changes nothing about
+    what the patient can learn about the *content* of their own report. This
+    test pins both halves: the owner sees them, and every other principal either
+    sees the same safe shape (the assigned doctor) or is refused.
+    """
+    document_id = _upload(api, patient_headers, glucose_pdf)
+
+    owner = api.get(f"/api/v1/documents/{document_id}", headers=patient_headers)
+    assert owner.status_code == 200
+    assert {"failure_code", "recovery_eligible", "recovered_from_document_id"} <= set(owner.json())
+
+    other = api.get(f"/api/v1/documents/{document_id}", headers=other_patient_headers)
+    assert other.status_code == 403
+    assert "recovery_eligible" not in other.text
+
+    anonymous = api.get(f"/api/v1/documents/{document_id}")
+    assert anonymous.status_code == 401
+
+    assigned = api.get(f"/api/v1/documents/{document_id}", headers=doctor_headers)
+    assert assigned.status_code == 200
+    assert "recovery_eligible" in assigned.json()
+
+
+def test_extraction_response_recovery_fields_are_doctor_only(
+    api, patient_headers, doctor_headers, glucose_pdf
+):
+    """``ExtractionResponse`` carries recovery ids, and stays doctor-only.
+
+    The doctor-only fields are ``failure_code`` and ``recovered_from_document_id``.
+    A patient must not reach this shape at all — the route, not the schema, is
+    the boundary, and this test asserts the boundary rather than assuming it.
+    """
+    document_id = _upload(api, patient_headers, glucose_pdf)
+
+    patient_read = api.get(f"/api/v1/documents/{document_id}/extraction", headers=patient_headers)
+    assert patient_read.status_code == 403
+    assert "recovered_from_document_id" not in patient_read.text
+
+    doctor_read = api.get(f"/api/v1/documents/{document_id}/extraction", headers=doctor_headers)
+    assert doctor_read.status_code == 200
+    body = doctor_read.json()
+    assert body["failure_code"] is None
+    assert body["recovered_from_document_id"] is None

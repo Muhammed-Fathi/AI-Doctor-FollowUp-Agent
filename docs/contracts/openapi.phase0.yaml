@@ -274,6 +274,16 @@ paths:
                 declared_type:
                   type: string
                   enum: [application/pdf, image/png, image/jpeg]
+                recovery_of:
+                  type: string
+                  format: uuid
+                  description: >-
+                    Optional id of one of the caller's own terminal documents
+                    that this upload is declared to replace. A patient-declared
+                    association, not validated clinical equivalence (R21 §4.3).
+                    Refused with 400 if malformed or not in a recoverable state,
+                    and with the same 404 as the read route if absent or owned by
+                    another patient.
       responses:
         '202':
           description: Accepted for extraction (not yet verified)
@@ -285,6 +295,8 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
         '413':
@@ -1185,6 +1197,25 @@ components:
         uploaded_at:
           type: string
           format: date-time
+        failure_code:
+          type: string
+          maxLength: 48
+          description: >-
+            Terminal reason token (enum/ID only, never document text). R21 §4.9.
+        recovery_eligible:
+          type: boolean
+          default: false
+          description: >-
+            Derived server-side: true only for a `failed` document whose
+            failure_code is a doctor rejection (all_facts_rejected,
+            measurement_rejected, fact_rejected). The patient is the recovery
+            actor. R21 §4.9.
+        recovered_from_document_id:
+          type: string
+          format: uuid
+          description: >-
+            The patient-declared source document this upload replaces. A
+            declaration of lineage, not of clinical equivalence. R21 §4.3.
     DocumentUploadResponse:
       type: object
       additionalProperties: false
@@ -1321,6 +1352,17 @@ components:
             $ref: '#/components/schemas/VerificationIssue'
         disclaimer:
           type: string
+        failure_code:
+          type: string
+          maxLength: 48
+          description: >-
+            Terminal reason token. Doctor-only recovery context; enum/ID only,
+            never document text. R21 §4.9.
+        recovered_from_document_id:
+          type: string
+          format: uuid
+          description: >-
+            The patient-declared source document this upload replaces. R21 §4.9.
     VerifyRequest:
       type: object
       additionalProperties: false

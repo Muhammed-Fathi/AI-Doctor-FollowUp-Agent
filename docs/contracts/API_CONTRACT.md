@@ -108,7 +108,7 @@ Login is rate-limited and constant-time-ish in failure messaging (details at P2)
 |---|---|---|---|---|---|
 | POST | `/api/v1/patient/check-ins` | patient (self scope) | `{measured_at, measure_type, value, unit, note?}` | `201 Observation` | `400 E_VALIDATION`, `400 E_UNIT_NOT_ALLOWED`, `403`, `409 E_DUPLICATE_CHECKIN` |
 | GET | `/api/v1/patient/check-ins` | patient (self) | – | `200 {items[]}` | `401` |
-| POST | `/api/v1/documents/upload` | patient (self) | `multipart/form-data`: `file`, `declared_type?` | `202 {document_id, status:"pending_extraction", sha256, page_count}` | `400 E_VALIDATION`, `413 E_FILE_TOO_LARGE`, `415 E_UNSUPPORTED_MEDIA`, `422 E_PAGE_LIMIT_EXCEEDED`, `409 E_DUPLICATE_DOCUMENT` |
+| POST | `/api/v1/documents/upload` | patient (self) | `multipart/form-data`: `file`, `declared_type?`, `recovery_of?` | `202 {document_id, status:"pending_extraction", sha256, page_count}` | `400 E_VALIDATION`, `413 E_FILE_TOO_LARGE`, `415 E_UNSUPPORTED_MEDIA`, `422 E_PAGE_LIMIT_EXCEEDED`, `409 E_DUPLICATE_DOCUMENT`, `404 E_NOT_FOUND` (`recovery_of` refusals) |
 | GET | `/api/v1/documents/{document_id}` | patient (self) / doctor (assigned) | – | `200 {document metadata, extraction_status}` | `403`, `404` |
 | GET | `/api/v1/documents/{document_id}/extraction` | doctor (assigned) | – | `200 {facts[], attempts[], verification_issues[], document_status}` | `403`, `404`, `409 E_EXTRACTION_PENDING` |
 | POST | `/api/v1/documents/{document_id}/verify` | doctor (assigned) | `{fact_id, decision:"verified"\|"rejected"\|"corrected", corrected_value?, corrected_unit?, reason?}` | `200 {fact, verification, document_status}` | `400 E_VALIDATION`, `403`, `404`, `409 E_FACT_ALREADY_DECIDED` |
@@ -116,7 +116,20 @@ Login is rate-limited and constant-time-ish in failure messaging (details at P2)
 
 Patient responses intentionally exclude extracted values, review items, drafts, and tasks (`US-05`, `US-11`). The patient view shows status strings only.
 
-Upload validation order (fixed): declared size → magic bytes → allowed MIME → page count (PDF) → image dimensions → store hash → reject on duplicate hash for the same patient.
+Upload validation order (fixed): declared size → magic bytes → allowed MIME → page count (PDF) → image dimensions → `recovery_of` (when present) → store hash → reject on duplicate hash for the same patient.
+
+**`recovery_of` (R21 §4.3, §4.9).** Optional UUID naming one of the caller's own documents that ended in a rejection, which this upload is declared to replace.
+
+* It is a **patient-declared association**, not validated clinical equivalence. The contract never describes a link as corrected, clearer, equivalent or validated, and no message or audit fragment may imply it.
+* The named document must belong to the same patient, be `extraction_status='failed'`, and carry `failure_code` in `{all_facts_rejected, measurement_rejected, fact_rejected}`.
+* Refusals: malformed id → `400 E_VALIDATION`; absent **or** owned by another patient → `404 E_NOT_FOUND` with the same wording in both cases (no existence disclosure); present but not recoverable → `400 E_VALIDATION`. A refusal writes no document row, no link and no `document.recovered` audit event.
+* Success persists `recovered_from_document_id` on the new row and appends one `document.recovered` audit event (`subject_type=document`, `subject_id=<new>`, detail `recovered_from=<old>; basis=patient_declared`).
+* The new document is extracted, `VI-004`/`VI-006`-evaluated and doctor-verified independently. The link substitutes for none of that, and does not resolve, supersede or clear the source document's open `VI-002`.
+* Identical bytes remain a duplicate with or without a link (`409 E_DUPLICATE_DOCUMENT`): re-uploading the same bytes cannot be a better source.
+
+**Recovery metadata on reads (R21 §4.9).** `GET /documents/{document_id}` (`DocumentMeta`) exposes three non-clinical fields to the owner and the assigned doctor: `failure_code` (nullable reason token), `recovery_eligible` (derived boolean — `failed` **and** a rejection code; false for every extraction failure and for a non-terminal document) and `recovered_from_document_id` (nullable). No clinical value, fact text, span, unit, `quality_flags` or `confidence` is added to the patient view. `GET /documents/{document_id}/extraction` (`ExtractionResponse`, doctor-only) carries `failure_code` and `recovered_from_document_id`; it does not carry `recovery_eligible`, so the patient-facing affordance has exactly one source.
+
+**Terminal rejection codes (R21 §4.1).** `measurement_rejected` (an active rejected `value` fact) and `fact_rejected` (an active rejected non-measurement fact) join the existing `all_facts_rejected`. Any active rejected fact makes the document terminally `failed` regardless of decision order, and no Observation may be promoted unless the document is `verified`.
 
 ### 2.5 Workflows
 

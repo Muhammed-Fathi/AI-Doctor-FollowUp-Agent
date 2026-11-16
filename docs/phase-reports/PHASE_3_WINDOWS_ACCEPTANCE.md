@@ -226,37 +226,48 @@ Record the per-gate summary block **and** the exit code. `SKIPPED` is never a pa
 note which gate skipped and why (the Playwright smoke legitimately skips unless
 `-IncludeE2E` is given and browser binaries are installed).
 
-Expected backend figure at this commit: **654 collected**, of which **271** are the
-P3 suite (`backend/tests/p3`). Verified by collection on the reviewed commit, not
-estimated:
+Expected backend figure at this commit: **663 passed**, of which **275** are the P3
+suite (`backend/tests/p3`). Verified by collection and by a full run on the
+reviewed commit, not estimated:
 
 | Suite | Tests |
 |---|---|
-| `backend/tests` (whole backend) | **654 collected** |
-| `backend/tests/p3` (P3 suite) | **271** |
+| `backend/tests` (whole backend) | **663 passed** |
+| `backend/tests/p3` (P3 suite) | **275** |
 | ├ `test_p3_verification.py` | 29 |
 | ├ `test_p3_extraction.py` | 26 |
 | ├ `test_p3_edge_cases.py` (R06–R09) | 24 |
 | ├ `test_p3_review_corrections.py` (R01–R05) | 21 |
-| ├ `test_p3_rejection_recovery.py` (R21; R1–R8 RED until Stage 3) | 19 |
+| ├ `test_p3_rejection_recovery.py` (R21 rejection/recovery) | 21 |
 | ├ `test_p3_ocr_integration.py` (R11/R12 pytesseract + lock) | 16 |
 | ├ `test_p3_r17_safety.py` (R17 OCR substitution + fail-closed) | 24 |
 | ├ `test_p3_r18_provenance.py` (R18 span exactness + bare label) | 14 |
 | ├ `test_p3_windows_findings.py` (R13–R16) | 47 |
 | ├ `test_windows_ocr_acceptance.py` (probe + handoff) | 17 |
 | ├ `test_p3_upload.py` | 12 |
-| ├ `test_p3_authorization.py` | 10 |
+| ├ `test_p3_authorization.py` | 12 |
 | └ `test_p3_fixtures.py` (incl. CRLF portability) | 12 |
 
-> **R21 note (superseded figures).** This table previously read **635 passed**
-> for the backend and **252** for P3. The difference is entirely the addition of
-> `test_p3_rejection_recovery.py` (19 cases) in R21 Stage 1; no pre-existing test
-> was removed, renamed or skipped. Because 6 of those 19 are deliberately RED
-> until R21 Stage 3 lands the recovery route, a full-suite run at Stage 2 reports
-> **648 passed, 6 failed** — the RED cases, not regressions. The pre-existing
-> suite run *without* that module still reports **635 passed**. The expected
-> figure is deliberately quoted as *collected* rather than *passed* so that a
-> RED-first module does not make this document state a false pass.
+> **R21 note (current figures).** This table previously read **635 passed** for
+> the backend and **252** for P3. The R21 rejection/recovery work added 19 cases
+> to `test_p3_rejection_recovery.py` (Stage 1), 2 authorization cases for the new
+> patient-safe metadata, and 5 `0004` migration tests in
+> `backend/tests/p2/test_p2_migration.py` (rebuild integrity, row preservation,
+> CHECK-constraint survival, downgrade refusal, downgrade round trip), for +26 in
+> total; no pre-existing test was removed, renamed or skipped, and the
+> pre-existing 635 remain among the 661.
+>
+> The R1-R8 R21 cases were written **RED first** and stayed RED until the
+> implementation landed. They are now all GREEN — R1/R1a/R1b/R2/R3 from the
+> Stage 2 rejection-state rule, R4–R7 from the Stage 3 recovery route and
+> metadata, and R8 from migration `0004_p3_rejection_recovery`. The suite is
+> therefore quoted as **passed**, which it is; there are no expected failures.
+>
+> **The R21 acceptance run is local and synthetic.** W1 (real-engine rejection)
+> and W2 (`GOLD-EX-11` preservation, expected **FAIL / NOT PROVEN**) remain
+> **Windows-only and unexecuted** — see §7 of
+> `docs/phase-reports/P3_R21_REJECTION_RECOVERY_DESIGN.md`. Nothing here is
+> Windows evidence, and no OCR configuration changed as part of R21.
 
 
 > **Windows CRLF note (P3-R10).** `git` may check these `.txt` fixtures out with CRLF,

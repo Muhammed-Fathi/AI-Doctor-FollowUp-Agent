@@ -49,8 +49,6 @@ from app.db.models import (
     ExtractedFact,
     FactVerification,
     Observation,
-    Patient,
-    User,
     VerificationIssue,
 )
 from app.db.session import create_db_engine
@@ -246,19 +244,44 @@ def _alembic_config(url: str) -> Config:
     return config
 
 
+#: ``PRAGMA`` result rows come back positionally through SQLAlchemy, so the
+#: helpers below index them explicitly. The column order is part of SQLite's
+#: documented ``PRAGMA`` contract, not an implementation detail.
+_TABLE_INFO = {"cid": 0, "name": 1, "type": 2, "notnull": 3, "dflt_value": 4, "pk": 5}
+_INDEX_LIST = {"seq": 0, "name": 1, "unique": 2, "origin": 3, "partial": 4}
+_FOREIGN_KEY_LIST = {
+    "id": 0,
+    "seq": 1,
+    "table": 2,
+    "from": 3,
+    "to": 4,
+    "on_update": 5,
+    "on_delete": 6,
+    "match": 7,
+}
+
+
 def _table_columns(conn, table: str) -> dict[str, dict]:
     """Return ``PRAGMA table_info`` keyed by column name."""
-    return {row["name"]: dict(row) for row in conn.execute(text(f"PRAGMA table_info({table})"))}
+    return {
+        row[_TABLE_INFO["name"]]: {
+            key: row[index] for key, index in _TABLE_INFO.items() if index < len(row)
+        }
+        for row in conn.execute(text(f"PRAGMA table_info({table})"))
+    }
 
 
 def _index_names(conn, table: str) -> set[str]:
     """Return ``PRAGMA index_list`` names for ``table``."""
-    return {row["name"] for row in conn.execute(text(f"PRAGMA index_list({table})"))}
+    return {row[_INDEX_LIST["name"]] for row in conn.execute(text(f"PRAGMA index_list({table})"))}
 
 
 def _foreign_keys(conn, table: str) -> list[dict]:
     """Return ``PRAGMA foreign_key_list`` rows for ``table``."""
-    return [dict(row) for row in conn.execute(text(f"PRAGMA foreign_key_list({table})"))]
+    return [
+        {key: row[index] for key, index in _FOREIGN_KEY_LIST.items() if index < len(row)}
+        for row in conn.execute(text(f"PRAGMA foreign_key_list({table})"))
+    ]
 
 
 # --- R1 / R1a / R1b — terminal timing ----------------------------------------
@@ -691,6 +714,123 @@ def test_r6_recovery_source_correctness(
     assert _audit_count(db, event_type=EVENT_DOCUMENT_RECOVERED) == 2
 
 
+# --- R4b — audit correctness and lineage integrity ---------------------------
+
+
+def test_r4b_recovery_audit_event_is_typed_and_patient_declared(
+    api, patient_headers, doctor_headers, glucose_pdf, fixtures, db: Session
+):
+    """The ``document.recovered`` event names ids only, and keeps its basis.
+
+    Two properties matter for auditability and for the clinical-safety boundary:
+
+    * the event must identify the *new* document as subject and name the old one
+      in a typed fragment, so lineage is reconstructable from the trail alone;
+    * it must **not** describe the link as a clinical finding. The detail carries
+      ``basis=patient_declared`` and no wording that could be read as validating
+      equivalence between the two documents.
+    """
+    old_id = _accepted(api, patient_headers, glucose_pdf)
+    _reject_value(api, doctor_headers, old_id)
+
+    response = _upload(
+        api,
+        patient_headers,
+        _glucose_pdf(fixtures, value="105", date="2026-11-03"),
+        filename="recovery.pdf",
+        data={"recovery_of": old_id},
+    )
+    assert response.status_code == 202, response.text
+    new_id = response.json()["document_id"]
+
+    events = [
+        row
+        for row in db.execute(select(AuditEvent)).scalars()
+        if row.event_type == EVENT_DOCUMENT_RECOVERED
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event.subject_type == "document"
+    assert event.subject_id == new_id
+    assert (
+        event.patient_id
+        == db.execute(select(Document.patient_id).where(Document.id == old_id)).scalar_one()
+    )
+
+    detail = event.safe_detail or ""
+    assert old_id in detail, "the source document id must be reconstructable"
+    assert "basis=patient_declared" in detail
+    # No clinical-equivalence wording may appear in the audit trail.
+    for forbidden in ("corrected", "validated", "equivalent", "clearer"):
+        assert forbidden not in detail.lower()
+
+
+def test_r4b_source_document_decisions_stay_immutable(
+    api, patient_headers, doctor_headers, glucose_pdf, fixtures, db: Session
+):
+    """A recovery must not rewrite the source document's history.
+
+    The source keeps its terminal status, its rejection code and its rejected
+    fact, its ``VI-002`` stays open (D-14), and its ``fact_verification`` rows are
+    untouched. A recovery is a *new* document, never an edit of the old one.
+    """
+    old_id = _accepted(api, patient_headers, glucose_pdf)
+    _reject_value(api, doctor_headers, old_id)
+
+    before_verifications = list(
+        db.execute(
+            select(FactVerification)
+            .join(ExtractedFact, FactVerification.fact_id == ExtractedFact.id)
+            .where(ExtractedFact.document_id == old_id)
+        ).scalars()
+    )
+    assert len(before_verifications) == 1
+
+    response = _upload(
+        api,
+        patient_headers,
+        _glucose_pdf(fixtures, value="105", date="2026-11-03"),
+        filename="recovery.pdf",
+        data={"recovery_of": old_id},
+    )
+    assert response.status_code == 202, response.text
+
+    db.expire_all()
+    old_row = _document_row(db, old_id)
+    assert old_row.extraction_status == "failed"
+    assert old_row.failure_code == MEASUREMENT_REJECTED
+
+    after_verifications = list(
+        db.execute(
+            select(FactVerification)
+            .join(ExtractedFact, FactVerification.fact_id == ExtractedFact.id)
+            .where(ExtractedFact.document_id == old_id)
+        ).scalars()
+    )
+    assert [row.id for row in after_verifications] == [row.id for row in before_verifications]
+
+    rejected = list(
+        db.execute(
+            select(ExtractedFact).where(
+                ExtractedFact.document_id == old_id,
+                ExtractedFact.verification_status == "rejected",
+            )
+        ).scalars()
+    )
+    assert len(rejected) == 1
+
+    # D-14 unchanged: the source's VI-002 stays open and historical.
+    assert "VI-002" in _open_issue_types(db, old_id)
+    assert _document_observations(db, old_id) == []
+
+    # A further decision on the source is still refused (append-only).
+    facts = _facts(api, doctor_headers, old_id)
+    value = _fact_by_field(facts, "value")
+    again = _verify(api, doctor_headers, old_id, value["fact_id"])
+    assert again.status_code == 409
+    assert again.json()["code"] == "E_FACT_ALREADY_DECIDED"
+
+
 # --- R7 — patient-safe recovery metadata -------------------------------------
 
 
@@ -763,11 +903,16 @@ def test_r7_patient_view_redaction_and_authorization_unchanged(
 def test_r8_sqlite_migration_integrity(tmp_path):
     """R8: the additive self-FK migration is real, enforced and safely reversible.
 
-    This test is a specification for Stage 3. It fails today because the
-    ``0004_p3_rejection_recovery`` revision does not exist. When it lands, the
-    test drives a real SQLite database through Alembic and asserts the schema,
-    ``PRAGMA foreign_keys=ON`` enforcement, row preservation, ``RESTRICT`` and
-    the downgrade refusal.
+    The test drives a real SQLite database through Alembic and asserts the
+    schema, ``PRAGMA foreign_keys=ON`` enforcement, row preservation,
+    ``RESTRICT`` and the downgrade refusal.
+
+    The baseline is seeded with explicit SQL rather than the ORM on purpose: the
+    ORM models the schema at ``head``, so using it to write rows into a database
+    still at ``0003`` would fail on the very column this migration adds — and it
+    would mean the test could only ever run after the upgrade, which would make
+    "existing rows are preserved" untestable. Explicit SQL against ``0003`` is
+    what a real pre-existing database looks like.
     """
     url = f"sqlite:///{(tmp_path / 'r21_migration.db').as_posix()}"
     config = _alembic_config(url)
@@ -785,32 +930,26 @@ def test_r8_sqlite_migration_integrity(tmp_path):
                 iterations=TEST_HASH_ITERATIONS,
             )
             session.commit()
-            patient_id = session.execute(select(Patient.id)).scalars().first()
-            user_id = session.execute(select(User.id)).scalars().first()
-            document = Document(
-                patient_id=patient_id,
-                uploaded_by_user_id=user_id,
-                original_filename="baseline.pdf",
-                stored_path="baseline.pdf",
-                mime_type="application/pdf",
-                sha256="a" * 64,
-                size_bytes=10,
-                page_count=1,
-                extraction_status="needs_verification",
-                uploaded_at="2026-11-14T12:00:00Z",
+
+        document_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        with engine.begin() as conn:
+            patient_id = conn.execute(text("SELECT id FROM patient LIMIT 1")).scalar_one()
+            user_id = conn.execute(text("SELECT id FROM user LIMIT 1")).scalar_one()
+            conn.execute(
+                text(
+                    "INSERT INTO document (id, patient_id, uploaded_by_user_id, "
+                    "original_filename, stored_path, mime_type, sha256, size_bytes, "
+                    "page_count, extraction_status, failure_code, document_patient_ref, "
+                    "document_patient_refs, uploaded_at) "
+                    "VALUES (:id, :pid, :uid, 'baseline.pdf', 'baseline.pdf', "
+                    "'application/pdf', :sha, 10, 1, 'needs_verification', NULL, "
+                    "'DEMO-A-001', NULL, '2026-11-14T12:00:00Z')"
+                ),
+                {"id": document_id, "pid": patient_id, "uid": user_id, "sha": "a" * 64},
             )
-            session.add(document)
-            session.commit()
-            document_id = document.id
             baseline = {
-                "patient": session.execute(select(func.count()).select_from(Patient)).scalar_one(),
-                "user": session.execute(select(func.count()).select_from(User)).scalar_one(),
-                "observation": session.execute(
-                    select(func.count()).select_from(Observation)
-                ).scalar_one(),
-                "document": session.execute(
-                    select(func.count()).select_from(Document)
-                ).scalar_one(),
+                table: conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+                for table in ("patient", "user", "observation", "document")
             }
     finally:
         engine.dispose()

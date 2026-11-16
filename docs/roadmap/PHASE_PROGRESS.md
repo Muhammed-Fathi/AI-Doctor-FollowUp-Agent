@@ -548,6 +548,65 @@ Recorded after GitHub merged PR [#7](https://github.com/Muhammed-Fathi/AI-Doctor
 
 ---
 
+## P3-R21 Owner Authorizations — rejection recovery (2026-11-16)
+
+Recorded because `AGENTS.md` §1/§2 require every owner decision and authorization to
+reach this ledger, and because P3 remains `IN_REVIEW`.
+
+**Authorization source:** owner review
+[`5918885024`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#pullrequestreview-5918885024)
+(Stage 1), review
+[`5920025835`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#pullrequestreview-5920025835)
+(Stage 2 acceptance), and the subsequent owner message authorizing Stages 3–5. The
+design that these authorize is `docs/phase-reports/P3_R21_REJECTION_RECOVERY_DESIGN.md`
+at `e1d76a6`.
+
+**Approved engineering direction ("Approach A"), owner's wording:**
+
+> Reuse `failed` with typed rejection failure codes. Apply the rejection-first
+> terminal-state rule to any active rejected fact. Preserve D-11 append-only
+> decisions and D-14 issue counting. Require a `verified` document status before
+> Observation promotion. Use a new patient-uploaded document with `recovery_of`
+> and durable lineage. Expose patient-safe recovery metadata. Preserve existing
+> identity, authorization and duplicate-upload protections.
+
+**What this authorizes, bounded:**
+
+* **Stage 2 (landed, accepted at `0bd8e36`):** rejection-first document-state
+  derivation; `measurement_rejected` / `fact_rejected`; preserved
+  `all_facts_rejected` precedence; superseded originals excluded so a valid
+  correction still reaches `verified`; and a promotion gate requiring
+  `extraction_status == 'verified'`.
+* **Stages 3–5 (this increment):** migration `0004_p3_rejection_recovery`
+  (nullable `recovered_from_document_id`, index, self-FK `ON DELETE RESTRICT`,
+  downgrade refusal when links exist); the optional `recovery_of` form field on
+  the existing upload route with malformed/absent/cross-patient/wrong-state
+  refusals; patient-safe `DocumentMeta` fields and doctor-only
+  `ExtractionResponse` fields; the `document.recovered` audit event on success
+  only; and contract/doc synchronization.
+* **Explicitly deferred:** Stage 6 (owner Windows verification), any
+  P4/P5 work, merging or approving PR #10, and any change to OCR configuration,
+  parser grammar, `preserve_interword_spaces`, or the `GOLD-EX-11` expectations.
+
+**New error-surface facts (no new codes invented):** `recovery_of` refusals reuse
+`400 E_VALIDATION` and `404 E_NOT_FOUND`. The absent and cross-patient cases
+return the *same* 404 wording as the document read route, so the endpoint cannot
+be used to test whether another patient's document id exists.
+
+**Clinical-safety boundary:** the recovery link is a **patient-declared
+association**, never validated clinical equivalence. No schema object, message or
+audit fragment describes it as corrected, clearer, equivalent or validated. The
+recovered document is extracted, `VI-004`/`VI-006`-evaluated and doctor-verified
+on its own, and the source document's open `VI-002` stays open and historical
+(D-14 unchanged).
+
+**Status:** P3 remains `IN_REVIEW`, PR #10 remains **DRAFT**, P4/P5 remain blocked,
+and no PASS claim is made. W1 and W2 remain **Windows-only and unexecuted**; W2's
+expected result is **FAIL / NOT PROVEN** and is a preservation check, not an
+acceptance gate.
+
+---
+
 ## P3 Owner Decisions and Scope Authorizations (2026-11-15)
 
 Recorded because `AGENTS.md` §1/§2 require every owner decision and path exception

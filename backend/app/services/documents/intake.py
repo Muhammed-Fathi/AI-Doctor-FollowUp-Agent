@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -35,6 +36,7 @@ from app.core.enums import (
 )
 from app.core.errors import (
     DUPLICATE_DOCUMENT_DETAIL,
+    ApiError,
     ErrorCode,
     document_error,
 )
@@ -68,6 +70,28 @@ from app.services.documents.text_extraction import (
 #: ``200 ExtractionResponse`` with ``document_status='failed'`` (D-10).
 TIMEOUT_FAILURE_CODE = "E_TIMEOUT"
 
+#: The terminal failure codes a document must carry to be a recovery **source**
+#: (R21 §4.3). These are exactly the rejection codes: a recovery answers a doctor
+#: rejection, not an unreadable file. An extraction failure such as
+#: ``E_PARSE_FAILED`` or ``no_facts_extracted`` is terminal too, but there is
+#: nothing a better copy of the same report could recover — the pipeline never
+#: produced a reading to disagree with — so those are deliberately excluded.
+RECOVERABLE_FAILURE_CODES: frozenset[str] = frozenset(
+    {"all_facts_rejected", "measurement_rejected", "fact_rejected"}
+)
+
+#: Neutral wording for a ``recovery_of`` that names no document in the caller's
+#: scope. Deliberately identical for "absent" and "belongs to another patient",
+#: matching the read route's rule: a different answer would confirm existence.
+RECOVERY_SOURCE_NOT_FOUND_DETAIL: str = "This document is not available."
+
+#: Neutral refusal for a ``recovery_of`` that is not a recoverable source.
+#: Says what is required without confirming whether some other id exists.
+_RECOVERY_SOURCE_NOT_TERMINAL = (
+    "recovery_of must name one of your own documents that ended in a rejection "
+    "(status 'failed' with a rejection reason)."
+)
+
 
 @dataclass(frozen=True, slots=True)
 class UploadOutcome:
@@ -98,6 +122,59 @@ def _existing_by_hash(db: Session, *, patient_id: str, sha256: str) -> Document 
     ).scalar_one_or_none()
 
 
+def resolve_recovery_source(db: Session, *, patient_id: str, recovery_of: str) -> Document:
+    """Return the validated terminal document that ``recovery_of`` names.
+
+    R21 §4.3. The link is a **patient-declared association**: this function only
+    proves that the uploader owns a document that ended in a rejection. It does
+    not — and must not — assert that the new bytes are clearer, related or
+    clinically equivalent to it.
+
+    Three refusals, each chosen so the response cannot be used to probe for other
+    patients' documents:
+
+    * malformed (not a UUID) → ``400 E_VALIDATION``: a client-side mistake that
+      reveals nothing;
+    * absent, or owned by someone else → ``404 E_NOT_FOUND``, with the *same*
+      wording as the read route. Both cases are indistinguishable on purpose: a
+      distinct "belongs to another patient" answer would confirm that the id
+      exists, which is a cross-patient disclosure.
+    * present and owned, but not in a recoverable terminal state →
+      ``400 E_VALIDATION``. Here the caller has already proven ownership of the
+      document, so explaining the state is not a leak.
+
+    The identity check is done in SQL (``patient_id`` in the ``WHERE``) rather
+    than by loading and comparing in Python, so there is no window in which an
+    out-of-scope row is materialized.
+    """
+    try:
+        parsed = uuid.UUID(recovery_of)
+    except (ValueError, AttributeError, TypeError):
+        raise ApiError(
+            400,
+            ErrorCode.VALIDATION,
+            "recovery_of must be a document id (UUID).",
+        ) from None
+
+    source = db.execute(
+        select(Document).where(
+            Document.id == str(parsed),
+            Document.patient_id == patient_id,
+        )
+    ).scalar_one_or_none()
+    if source is None:
+        # Identical wording for "no such document" and "not yours".
+        raise ApiError(404, ErrorCode.NOT_FOUND, RECOVERY_SOURCE_NOT_FOUND_DETAIL)
+
+    if (
+        source.extraction_status != DocumentStatus.FAILED.value
+        or source.failure_code not in RECOVERABLE_FAILURE_CODES
+    ):
+        raise ApiError(400, ErrorCode.VALIDATION, _RECOVERY_SOURCE_NOT_TERMINAL)
+
+    return source
+
+
 def accept_upload(
     db: Session,
     *,
@@ -107,11 +184,18 @@ def accept_upload(
     original_filename: str | None,
     declared_type: str | None,
     settings: Settings,
+    recovery_of: str | None = None,
 ) -> UploadOutcome:
     """Validate and persist one upload.
 
     Raises the contract ``ApiError`` for every rejection. **No row is created**
     for a validation failure (D-10): the exception propagates before any insert.
+
+    ``recovery_of`` names a terminal document this upload replaces (R21 §4.3).
+    It is validated **before** the duplicate check so a refused link can never
+    leave a row behind, and the duplicate check still runs first-class: identical
+    bytes are refused with or without a link (§4.6), because re-uploading the
+    same bytes cannot be a better source.
     """
     validated: ValidatedUpload = validate_upload(
         payload,
@@ -120,6 +204,12 @@ def accept_upload(
         max_pages=settings.max_pdf_pages,
         max_pixels=settings.max_image_pixels,
     )
+
+    # Validate the declared link before anything is written, so a bad link is a
+    # pure refusal: no row, no stored file, no audit event (R21 §4.3).
+    source: Document | None = None
+    if recovery_of is not None:
+        source = resolve_recovery_source(db, patient_id=patient_id, recovery_of=recovery_of)
 
     # Duplicate check happens before storage so a repeat upload does not create a
     # second file on disk. The unique index is the race-safe backstop.
@@ -141,6 +231,7 @@ def accept_upload(
         page_count=validated.page_count,
         extraction_status=DocumentStatus.PENDING_EXTRACTION.value,
         uploaded_at=format_utc(utc_now()),
+        recovered_from_document_id=(source.id if source is not None else None),
     )
     db.add(document)
 

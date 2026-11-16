@@ -447,6 +447,10 @@ class Document(Base):
         # Duplicate-upload detection is per patient, so an identical report
         # belonging to another patient is not blocked (NEG-18).
         Index("ux_document_sha_patient", "patient_id", "sha256", unique=True),
+        # Recovery lineage is a self-reference, so it needs its own index:
+        # SQLite does not index a foreign key automatically, and the downgrade
+        # guard in migration ``0004`` scans this column before dropping it.
+        Index("ix_document_recovered_from", "recovered_from_document_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
@@ -490,6 +494,23 @@ class Document(Base):
     #: ``VI-004`` instead of being silently reduced to its first reference.
     document_patient_refs: Mapped[str | None] = mapped_column(String(240), nullable=True)
     uploaded_at: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    #: **R21 §4.3 — patient-declared recovery lineage.** The terminal document
+    #: this upload replaces, or ``NULL`` for an ordinary upload.
+    #:
+    #: This is a *declaration by the uploader*, not a claim of clinical
+    #: equivalence: nothing here asserts the new bytes are clearer, related or
+    #: safer. The new document is extracted, scope-checked, identity-checked
+    #: (``VI-004``), conflict-checked (``VI-006``) and doctor-verified on its own,
+    #: and a link never substitutes for any of those.
+    #:
+    #: ``ON DELETE RESTRICT`` on a *self*-reference keeps provenance intact: a
+    #: source document cannot be deleted out from under a recovery that names it.
+    recovered_from_document_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("document.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return f"Document(id={self.id!r}, status={self.extraction_status!r})"

@@ -109,10 +109,26 @@ Index: `ix_encounter_patient_date (patient_id, encounter_date DESC)`.
 | `size_bytes` | INTEGER | NOT NULL, CHECK `0 < size_bytes <= 10485760` | 10 MiB cap |
 | `page_count` | INTEGER | NULL, CHECK `page_count <= 20` | Parsed at intake |
 | `extraction_status` | TEXT(24) | NOT NULL, CHECK in (`pending_extraction`,`extracted`,`needs_verification`,`verified`,`failed`) | |
-| `failure_code` | TEXT(48) | NULL | Mirrors tool error codes |
+| `failure_code` | TEXT(48) | NULL | Mirrors tool error codes, plus the rejection codes below |
 | `uploaded_at` | TEXT(20) | NOT NULL | |
+| `recovered_from_document_id` | TEXT(36) | NULL, FK `document.id` `ON DELETE RESTRICT` | Patient-declared recovery source (R21 §4.3); `NULL` for an ordinary upload |
 
-Indexes: `ix_document_patient (patient_id)`; `ux_document_sha_patient (patient_id, sha256)` (duplicate-upload detection).
+Indexes: `ix_document_patient (patient_id)`; `ux_document_sha_patient (patient_id, sha256)` (duplicate-upload detection); `ix_document_recovered_from (recovered_from_document_id)` (R21 §4.10).
+
+**Terminal rejection semantics (R21 §4.1).** `extraction_status = 'failed'` is reached by four routes, distinguished by `failure_code`:
+
+| `failure_code` | Meaning | Recovery source? |
+|---|---|---|
+| `parse_failed` / `E_PARSE_FAILED` | the bytes could not be read | no |
+| `no_facts_extracted` | the page yielded no candidate fact | no |
+| `E_DEPENDENCY_MISSING` / `E_TIMEOUT` | extraction tooling failed | no |
+| `all_facts_rejected` | every candidate fact was rejected | **yes** |
+| `measurement_rejected` | an active rejected `value` fact exists | **yes** |
+| `fact_rejected` | an active rejected non-measurement fact exists | **yes** |
+
+`measurement_rejected` and `fact_rejected` are assigned by the rejection-first rule: *any* active rejected fact — one that no correction superseded — makes the document terminally `failed`, even while sibling facts remain `pending`. The status therefore does not depend on decision order. `all_facts_rejected` keeps its original meaning and is evaluated first, so a fully rejected document still reports that code.
+
+**Recovery lineage (R21 §4.3).** `recovered_from_document_id` is a **patient-declared association**: the uploader asserts that this upload replaces that terminal document. It is not validated clinical equivalence, and no schema object, message or audit fragment may describe it as corrected, clearer, equivalent or validated. The referenced document must (a) belong to the same patient, (b) be `failed`, and (c) carry one of the three rejection codes above. `ON DELETE RESTRICT` keeps the source row from being deleted while a recovery names it.
 
 ### 2.5 `extraction_attempt`
 

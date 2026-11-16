@@ -45,6 +45,7 @@ from app.schemas.document import DocumentUploadResponse
 from app.services.audit import append_audit_event
 from app.services.documents import (
     EVENT_DOCUMENT_DUPLICATE,
+    EVENT_DOCUMENT_RECOVERED,
     EVENT_DOCUMENT_UPLOADED,
     EVENT_UNTRUSTED_CONTENT,
 )
@@ -59,9 +60,15 @@ router = APIRouter(
 ROUTE_UPLOAD = "POST /api/v1/documents/upload"
 
 _RESPONSES: dict[int | str, dict[str, object]] = {
-    400: {"description": "Malformed multipart request (validation error)"},
+    400: {
+        "description": (
+            "Malformed multipart request, or a recovery_of that is not a "
+            "recoverable document of the caller's own"
+        )
+    },
     401: {"description": "Not authenticated (uniform body)"},
     403: {"description": "Caller is not a patient"},
+    404: {"description": "recovery_of names no document in the caller's scope"},
     409: {"description": "Identical bytes already uploaded for this patient"},
     413: {"description": "Payload exceeds 10 MiB"},
     415: {"description": "Media type is not PDF, PNG or JPEG"},
@@ -115,6 +122,7 @@ def upload_document(
     response: Response,
     file: Annotated[UploadFile, File(description="PDF, PNG or JPEG; max 10 MiB")],
     declared_type: Annotated[str | None, Form()] = None,
+    recovery_of: Annotated[str | None, Form()] = None,
 ) -> DocumentUploadResponse:
     """Validate, store and extract one patient upload."""
     patient_id = self_patient_id(principal)
@@ -137,6 +145,7 @@ def upload_document(
         original_filename=file.filename,
         declared_type=declared_type,
         settings=settings,
+        recovery_of=recovery_of,
     )
 
     if outcome.duplicate:
@@ -180,6 +189,33 @@ def upload_document(
             "untrusted_content_detected" if extraction.untrusted_content_detected else "none",
         ),
     )
+
+    if document.recovered_from_document_id is not None:
+        # R21 §4.3: the link is recorded only now, after the document row exists
+        # and extraction has run. A refused ``recovery_of`` raised above and
+        # appended nothing, so this event's presence is proof of acceptance.
+        #
+        # The detail deliberately says "recovered_from" and never "corrected" or
+        # "validated": the link is a patient's declaration about which document
+        # this replaces, not a clinical finding. Ids and route only — never
+        # document text (REQ-AUDIT-02).
+        append_audit_event(
+            db,
+            event_type=EVENT_DOCUMENT_RECOVERED,
+            actor_type=principal.actor_type,
+            actor_id=principal.user_id,
+            outcome=AuditOutcome.OK,
+            request_id=request_id,
+            now=now,
+            patient_id=patient_id,
+            subject_type="document",
+            subject_id=document.id,
+            detail_fragments=(
+                ROUTE_UPLOAD,
+                f"recovered_from={document.recovered_from_document_id}",
+                "basis=patient_declared",
+            ),
+        )
 
     if extraction.untrusted_content_detected:
         # Separate event type so a security reviewer can filter for it without

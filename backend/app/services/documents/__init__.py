@@ -47,9 +47,16 @@ EVENT_EXTRACTION_READ = "document.extraction_read"
 #: (``CTR-EXTRACT-001`` §7.4). Recorded, never acted on.
 EVENT_UNTRUSTED_CONTENT = "document.untrusted_content"
 
+#: A recovery upload was accepted and linked to its patient-declared source
+#: (R21 §4.3). Written **only** after the document row exists; a refused
+#: ``recovery_of`` appends nothing. The detail names ids, never document text,
+#: and never calls the link "corrected" or "validated" — it is a declaration.
+EVENT_DOCUMENT_RECOVERED = "document.recovered"
+
 __all__ = [
     "EVENT_DOCUMENT_DUPLICATE",
     "EVENT_DOCUMENT_EXTRACTED",
+    "EVENT_DOCUMENT_RECOVERED",
     "EVENT_DOCUMENT_UPLOADED",
     "EVENT_EXTRACTION_READ",
     "EVENT_FACT_VERIFIED",

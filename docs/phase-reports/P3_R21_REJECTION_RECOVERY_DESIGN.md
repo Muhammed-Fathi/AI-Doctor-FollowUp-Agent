@@ -1,10 +1,18 @@
 # P3-R21 — Document rejection / recovery design (owner direction: Option 2)
 
-**Status: DESIGN AND SPECIFICATION ONLY.** No production code, API, schema,
-migration, OCR configuration, fixture or UI change is proposed for implementation
-without the explicit owner authorization in §9. PR #10 stays **DRAFT**; P3 stays
-**IN_REVIEW**; `GOLD-EX-11` stays **FAIL / NOT PROVEN**; no merge; P4/P5 not
-started.
+**Status: DESIGN, SPECIFICATION AND IMPLEMENTATION — Stages 1-5 COMPLETE.**
+Stages 1-5 were implemented after the explicit owner authorizations recorded in
+§9 and in `docs/roadmap/PHASE_PROGRESS.md`. Stage 6 (owner Windows acceptance),
+merging PR #10 and any P4/P5 work remain **unauthorized and not started**.
+
+PR #10 stays **DRAFT**; P3 stays **IN_REVIEW**; `GOLD-EX-11` stays
+**FAIL / NOT PROVEN**; no merge; P4/P5 not started.
+
+**Implementation note (added after Stage 5).** The matrix in §7 below was written
+*before* the implementation and its "Today" column is the **original RED-first
+baseline at `18a53b2`**, preserved deliberately so the RED-to-GREEN transition
+stays auditable. The current result is recorded in §7a instead of being
+back-edited into that column.
 
 Base: `18a53b2de5ee9a7cd44d473b78f8ecbaa28fb1f5` (PR #10 head, the last
 independently reviewed commit). All code reading, probing and test execution for
@@ -420,8 +428,9 @@ cannot be a recovery source. The new document is subject to the normal
 
 The recovery link is **not** a trust boundary: the new document must clear its
 own `VI-004` / `VI-006` and its own doctor verification. A patient-declared link
-to an unrelated failed document is stored as a declared association only and is
-never described as a clinically validated recovery.
+to an unrelated failed document is stored as a declared association only. It is
+never presented as, and must never be reworded into, a validation of clinical
+equivalence between the two documents.
 
 ### 4.8 Append-only decision history
 
@@ -604,6 +613,49 @@ application behaviour is otherwise identical to R1/R1a, which run locally with
 scripted OCR. W2's expected result is **FAIL / NOT PROVEN**: it is a
 regression-preservation check and must never be reinterpreted as a GREEN
 acceptance gate.
+
+---
+
+## 7a. Measured result after Stages 1-5 (`b7e3507` → `0bd8e36` → this commit)
+
+This section is the **outcome record**. §7's "Today" column is deliberately left
+as the original `18a53b2` baseline, so the RED-to-GREEN transition stays auditable
+rather than being rewritten to look as though it always passed.
+
+| Case | Stage 1 (`b7e3507`) | Stage 2 (`0bd8e36`) | Stages 3-5 |
+|---|---|---|---|
+| **R1** reject-last | RED | GREEN | GREEN |
+| **R1a** reject-first | RED | RED (only the `recovery_eligible` assertion) | **GREEN** |
+| **R1b** order equivalence | RED | GREEN | GREEN |
+| **R2** non-measurement reject | RED | GREEN | GREEN |
+| **R3** no misleading `verified` | RED | GREEN | GREEN |
+| **R4** recovery created + linked | RED | RED | **GREEN** |
+| **R5** Observation lineage | RED | RED | **GREEN** |
+| **R6** recovery-source correctness | RED | RED | **GREEN** |
+| **R7** patient-safe metadata | RED | RED | **GREEN** |
+| **R8** migration integrity | RED | RED | **GREEN** |
+| **G1-G8** existing guarantees | GREEN | GREEN | GREEN |
+| **G9** whole suite | GREEN (635) | GREEN (635) | GREEN (**661**) |
+
+**R1a's split result is worth recording.** At Stage 2 every Stage-2-owned
+assertion in R1a already passed — reject-first is immediately terminal, a later
+sibling decision is still accepted, and the status stays `failed`. The case still
+failed, on the `recovery_eligible` assertion, which is a Stage 3 API field. It was
+left failing and unweakened rather than rewritten to match the narrower stage, so
+the test never overstated what had been implemented.
+
+**W1 and W2 remain unexecuted.** Both are Windows-only and require the owner's
+real Tesseract engine. W1's expected result is terminal `failed` with zero
+Observations; W2's expected result is **FAIL / NOT PROVEN** and is a
+*preservation* check, never an acceptance gate. **Neither is claimed here.**
+
+**Documentation contradiction resolved.** `test_p3_authorization.py`'s exact-key
+`DocumentMeta` assertion (raised as C2 in the Stage 1 report) and the
+collection-derived count gate in `test_windows_ocr_acceptance.py` (C1) both had to
+change for §4.9 and for any P3 test addition respectively. Both were updated to
+the new, still-exact expectations — the `DocumentMeta` assertion remained an
+*exact* key-set assertion (extended, not relaxed to a superset) so a future
+clinical field still fails it.
 
 ---
 

@@ -52,6 +52,7 @@ from app.services.documents.access import (
     require_doctor_document_scope,
     require_document_read_access,
 )
+from app.services.documents.intake import RECOVERABLE_FAILURE_CODES
 from app.services.documents.quality import (
     QualitySummary,
     decode_fact_ids,
@@ -72,6 +73,27 @@ ROUTE_READ_FILE = "GET /api/v1/documents/{document_id}/file"
 
 #: Neutral wording for an absent *or* out-of-scope document.
 NOT_FOUND_DETAIL = "This document is not available."
+
+
+def _recovery_eligible(document) -> bool:
+    """Return whether ``document`` may be named in a later ``recovery_of``.
+
+    **R21 §4.9.** Derived from exactly the two conditions the upload route
+    enforces (``intake.resolve_recovery_source``), read from the same constant so
+    the advertised affordance and the accepted request cannot drift apart:
+
+    * the document is terminally ``failed``, and
+    * its ``failure_code`` is one of the rejection codes.
+
+    An extraction failure (``E_PARSE_FAILED``, ``no_facts_extracted``) is terminal
+    but *not* recoverable: there is no doctor rejection for a better copy of the
+    report to answer. Reporting it as eligible would offer the patient an action
+    the endpoint then refuses.
+    """
+    return (
+        document.extraction_status == DocumentStatus.FAILED.value
+        and document.failure_code in RECOVERABLE_FAILURE_CODES
+    )
 
 
 def _not_found() -> Exception:
@@ -223,6 +245,9 @@ def read_document(document_id: str, principal: PrincipalDep, db: DbSession) -> D
         page_count=document.page_count,
         extraction_status=document.extraction_status,
         uploaded_at=document.uploaded_at,
+        failure_code=document.failure_code,
+        recovery_eligible=_recovery_eligible(document),
+        recovered_from_document_id=document.recovered_from_document_id,
     )
 
 
@@ -295,6 +320,8 @@ def read_extraction(
         facts=[_fact_schema(fact) for fact in facts],
         attempts=_attempt_summaries(db, document_id=document.id),
         verification_issues=_issue_schemas(summary, document_id=document.id, facts=facts),
+        failure_code=document.failure_code,
+        recovered_from_document_id=document.recovered_from_document_id,
     )
 
 

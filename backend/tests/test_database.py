@@ -19,7 +19,7 @@ from app.db.models import SchemaMeta
 from app.db.session import create_db_engine, ensure_sqlite_directory
 
 BASELINE_REVISION = "0001_p1_baseline"
-HEAD_REVISION = "0003_p3_documents"
+HEAD_REVISION = "0004_p3_rejection_recovery"
 
 #: The seven tables the P2 revision owns. Equality is asserted below, so a P4+
 #: table created early fails just as loudly as a missing one.

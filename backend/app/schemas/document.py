@@ -68,6 +68,23 @@ class DocumentMeta(ApiModel):
     Deliberately contains **no** clinical value, no fact text and no extracted
     span, so a patient can read their own document row without seeing
     pre-verification content (``P0-R13``).
+
+    **R21 §4.9 — the patient is the recovery actor.** A patient whose report was
+    rejected needs three non-clinical facts to act on it, so exactly three
+    optional fields are added and nothing else:
+
+    ``failure_code``
+        The terminal reason, an enum-like token such as ``measurement_rejected``.
+        Never document text.
+    ``recovery_eligible``
+        Whether this document may be named in a later ``recovery_of``. Derived
+        server-side; a client cannot assert it.
+    ``recovered_from_document_id``
+        The patient-declared source this row was uploaded to replace, if any.
+
+    All three are non-clinical: they describe *state and lineage*, never a
+    reading. Adding them does not widen what a patient can learn about the
+    content of their own unverified document.
     """
 
     id: str
@@ -79,6 +96,12 @@ class DocumentMeta(ApiModel):
     page_count: int | None = Field(default=None, ge=0, le=20)
     extraction_status: DocumentStatus
     uploaded_at: UtcDatetime
+    #: Terminal reason token (enum/ID only, never document text).
+    failure_code: str | None = Field(default=None, max_length=48)
+    #: True only for a `failed` document whose reason is a doctor rejection.
+    recovery_eligible: bool = False
+    #: The source this document was declared a recovery of, if any.
+    recovered_from_document_id: str | None = None
 
 
 class EvidenceRef(ApiModel):
@@ -190,6 +213,13 @@ class ExtractionResponse(ApiModel):
     attempts: list[ExtractionAttemptSummary] = Field(max_length=10)
     verification_issues: list[VerificationIssue] = Field(max_length=20)
     disclaimer: str = Field(default=EXTRACTION_DISCLAIMER)
+    #: **R21 §4.9** — doctor-only recovery context. The doctor needs to know why
+    #: a document is terminal and where it came from; both are enum/ids, so this
+    #: adds no clinical claim. ``recovery_eligible`` is deliberately *not* here:
+    #: it is a patient-facing affordance, and duplicating it invites the two
+    #: views to disagree.
+    failure_code: str | None = Field(default=None, max_length=48)
+    recovered_from_document_id: str | None = None
 
 
 class VerifyRequest(ApiModel):

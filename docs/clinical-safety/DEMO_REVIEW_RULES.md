@@ -95,6 +95,18 @@ permanent blocker that no doctor action can clear, so the trigger and the count 
 - **still counted** — plain rejected facts, pending facts, and every fact of a genuine
   multi-measurement document.
 
+**`VI-002` on a terminal rejected document (R21 §4.4).** Because a plain rejection is still counted
+(D-14), a document whose facts were rejected ends `failed` while `VI-002` remains **open**. That is
+deliberate and is *not* a stale-issue bug: the open row is the immutable record that a doctor refused
+a reading, and `sync_issues` re-derives it on every read, so resolving it would only re-open it.
+
+The terminal signal is therefore `extraction_status='failed'` plus `failure_code`
+(`all_facts_rejected`, `measurement_rejected` or `fact_rejected`), **not** the absence of open issues.
+No issue row is deleted, re-typed or auto-resolved, and a recovery upload elsewhere does not resolve,
+supersede or clear the source document's `VI-002`. Whether any downstream consumer may treat a
+recovered document as closing the old blocker is a **deferred** governance decision (P4/P5 or later);
+nothing in P3 performs or implies it.
+
 The decision authorizes nothing else: no automatic verification, no removal of historical facts, no
 weakening of source evidence, no change to the closed mapping (see `PHASE_3_REPORT.md` §V.3).
 

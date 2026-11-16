@@ -13,11 +13,18 @@ Usage::
 ``--state`` (default ``head``):
 
 ``head``
-    revision ``0003_p3_documents``; tables = P1 + the seven P2 tables + the five
-    P3 tables; ``user.patient_id`` foreign key present;
+    revision ``0004_p3_rejection_recovery``; tables = P1 + the seven P2 tables +
+    the five P3 tables; ``user.patient_id`` foreign key present;
     ``observation.source_fact_id`` + ``ux_obs_source_fact`` present; the
     ``trg_fact_verification_doctor_only`` trigger present;
-    ``PRAGMA foreign_key_check`` empty.
+    ``document.recovered_from_document_id`` + ``ix_document_recovered_from`` +
+    the ``ON DELETE RESTRICT`` self-FK present; ``PRAGMA foreign_key_check``
+    empty.
+``p3``
+    revision ``0003_p3_documents``; everything ``head`` asserts **except** the
+    three recovery objects, which must be **absent**. This is what
+    ``0004 -> 0003`` must leave behind, and the only way to prove the recovery
+    revision is additive and cleanly reversible.
 ``p2``
     revision ``0002_p2_patient_domain``; tables = P1 + the seven P2 tables and
     **no** P3 table and **no** ``observation.source_fact_id``. This is what
@@ -51,7 +58,12 @@ P1_REVISION = "0001_p1_baseline"
 
 #: Doctor-only guard installed by ``0003`` (``DATA_DICTIONARY.md`` §2.7).
 DOCTOR_TRIGGER_NAME = "trg_fact_verification_doctor_only"
-HEAD_REVISION = "0003_p3_documents"
+
+#: Recovery objects owned by ``0004`` (``DATA_DICTIONARY.md`` §2.4, R21 §4.10).
+RECOVERY_COLUMN = "recovered_from_document_id"
+RECOVERY_INDEX = "ix_document_recovered_from"
+HEAD_REVISION = "0004_p3_rejection_recovery"
+P3_REVISION = "0003_p3_documents"
 P2_REVISION = "0002_p2_patient_domain"
 
 P1_TABLES = {"schema_meta", "alembic_version"}
@@ -119,8 +131,10 @@ def _expected_tables(state: str) -> set[str]:
 
 
 def _expected_revisions(state: str) -> list[str]:
-    if state in {"head", "p3"}:
+    if state == "head":
         return [HEAD_REVISION]
+    if state == "p3":
+        return [P3_REVISION]
     if state == "p2":
         return [P2_REVISION]
     if state == "p1":
@@ -180,6 +194,26 @@ def main(argv: list[str]) -> int:
             if tables
             else []
         )
+        document_columns = (
+            [row[1] for row in connection.execute("PRAGMA table_info('document')")]
+            if "document" in tables
+            else []
+        )
+        document_indexes = (
+            [
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='document'"
+                )
+            ]
+            if "document" in tables
+            else []
+        )
+        document_foreign_keys = (
+            list(connection.execute("PRAGMA foreign_key_list('document')"))
+            if "document" in tables
+            else []
+        )
         foreign_key_violations = (
             connection.execute("PRAGMA foreign_key_check").fetchall() if tables else []
         )
@@ -209,6 +243,33 @@ def main(argv: list[str]) -> int:
             problems.append("observation must carry the unique index ux_obs_source_fact")
         if DOCTOR_TRIGGER_NAME not in triggers:
             problems.append(f"migration 0003 must install the trigger {DOCTOR_TRIGGER_NAME}")
+
+    # --- 0004 recovery self-reference (R21 §4.10) ---------------------------
+    # At ``head`` the column, its index and its RESTRICT self-FK must all exist.
+    # At ``p3`` the same three must be absent, so ``0004 -> 0003`` is proven to
+    # leave no residue — and, because the table is rebuilt in batch mode, that
+    # the rebuild did not add something extra either.
+    recovery_fk = [
+        row
+        for row in document_foreign_keys
+        if row[3] == RECOVERY_COLUMN and row[2] == "document" and row[6] == "RESTRICT"
+    ]
+    if state == "head":
+        if RECOVERY_COLUMN not in document_columns:
+            problems.append(f"document.{RECOVERY_COLUMN} must exist after 0004")
+        if RECOVERY_INDEX not in document_indexes:
+            problems.append(f"document must carry the index {RECOVERY_INDEX} after 0004")
+        if not recovery_fk:
+            problems.append(
+                f"document must carry the ON DELETE RESTRICT self-FK on {RECOVERY_COLUMN}"
+            )
+    if state in {"p3", "p2", "p1", "base"}:
+        if RECOVERY_COLUMN in document_columns:
+            problems.append(f"document.{RECOVERY_COLUMN} must not exist below 0004")
+        if RECOVERY_INDEX in document_indexes:
+            problems.append(f"index {RECOVERY_INDEX} must not exist below 0004")
+        if recovery_fk:
+            problems.append(f"the {RECOVERY_COLUMN} self-FK must not exist below 0004")
 
     # At ``p2`` the exact P2 schema must be intact: the P3 column and trigger
     # must be gone, which is what ``0003 -> 0002`` has to leave behind.
