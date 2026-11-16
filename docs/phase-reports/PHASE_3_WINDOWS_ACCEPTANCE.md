@@ -226,18 +226,19 @@ Record the per-gate summary block **and** the exit code. `SKIPPED` is never a pa
 note which gate skipped and why (the Playwright smoke legitimately skips unless
 `-IncludeE2E` is given and browser binaries are installed).
 
-Expected backend figure at this commit: **635 passed**, of which **252** are the P3
-suite (`backend/tests/p3`). Verified by collection on the reviewed commit, not
+Expected backend figure at this commit: **654 collected**, of which **271** are the
+P3 suite (`backend/tests/p3`). Verified by collection on the reviewed commit, not
 estimated:
 
 | Suite | Tests |
 |---|---|
-| `backend/tests` (whole backend) | **635 passed** |
-| `backend/tests/p3` (P3 suite) | **252** |
+| `backend/tests` (whole backend) | **654 collected** |
+| `backend/tests/p3` (P3 suite) | **271** |
 | ├ `test_p3_verification.py` | 29 |
 | ├ `test_p3_extraction.py` | 26 |
 | ├ `test_p3_edge_cases.py` (R06–R09) | 24 |
 | ├ `test_p3_review_corrections.py` (R01–R05) | 21 |
+| ├ `test_p3_rejection_recovery.py` (R21; R1–R8 RED until Stage 3) | 19 |
 | ├ `test_p3_ocr_integration.py` (R11/R12 pytesseract + lock) | 16 |
 | ├ `test_p3_r17_safety.py` (R17 OCR substitution + fail-closed) | 24 |
 | ├ `test_p3_r18_provenance.py` (R18 span exactness + bare label) | 14 |
@@ -246,6 +247,16 @@ estimated:
 | ├ `test_p3_upload.py` | 12 |
 | ├ `test_p3_authorization.py` | 10 |
 | └ `test_p3_fixtures.py` (incl. CRLF portability) | 12 |
+
+> **R21 note (superseded figures).** This table previously read **635 passed**
+> for the backend and **252** for P3. The difference is entirely the addition of
+> `test_p3_rejection_recovery.py` (19 cases) in R21 Stage 1; no pre-existing test
+> was removed, renamed or skipped. Because 6 of those 19 are deliberately RED
+> until R21 Stage 3 lands the recovery route, a full-suite run at Stage 2 reports
+> **648 passed, 6 failed** — the RED cases, not regressions. The pre-existing
+> suite run *without* that module still reports **635 passed**. The expected
+> figure is deliberately quoted as *collected* rather than *passed* so that a
+> RED-first module does not make this document state a false pass.
 
 
 > **Windows CRLF note (P3-R10).** `git` may check these `.txt` fixtures out with CRLF,

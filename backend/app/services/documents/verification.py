@@ -55,6 +55,19 @@ from app.services.documents.mapping import (
 #: Neutral detail reused for every "already decided" case (D-11).
 _ALREADY_DECIDED = FACT_ALREADY_DECIDED_DETAIL
 
+#: Terminal failure codes for a document whose facts a doctor rejected
+#: (R21 §4.1). ``all_facts_rejected`` keeps its existing meaning and precedence;
+#: the two new codes describe the *partial* rejection that used to be silent.
+#:
+#: These are enum-like tokens stored in ``document.failure_code``, never document
+#: text, so they are safe to expose to the owning patient in Stage 3 (§4.9).
+FAILURE_ALL_FACTS_REJECTED = "all_facts_rejected"
+FAILURE_MEASUREMENT_REJECTED = "measurement_rejected"
+FAILURE_FACT_REJECTED = "fact_rejected"
+
+#: Promotion reason returned when the document is not ``verified`` (R21 §4.2).
+_REASON_NOT_VERIFIED = "document_not_verified"
+
 #: Neutral detail for a correction that is not admissible for its own field.
 #: Says what is wrong without quoting the document or the rejected input.
 _INADMISSIBLE_CORRECTION = (
@@ -177,12 +190,57 @@ def _unread_measurement_blocks_verification(db: Session, document_id: str) -> bo
     )
 
 
+def _active_rejected_facts(facts: list[ExtractedFact], superseded: set[str]) -> list[ExtractedFact]:
+    """Return the rejected facts that still describe the document's state.
+
+    A **plain** rejection is active: it is a doctor's verdict about a current
+    reading, and it must never be able to coexist with ``verified`` (R21 §4.1).
+    A rejection that a correction superseded is *history* — the corrected row is
+    the document's current value — so it is excluded, which is what keeps a valid
+    first-decision correction able to reach ``verified`` (``R09``).
+    """
+    return [
+        fact
+        for fact in facts
+        if fact.verification_status == FactVerificationStatus.REJECTED.value
+        and fact.id not in superseded
+    ]
+
+
+def _rejection_failure_code(active_rejected: list[ExtractedFact]) -> str:
+    """Return the terminal code for a document with active rejections.
+
+    Rejecting the ``value`` is the case the patient needs to understand: the
+    reading itself was refused, so no measurement can come from this document.
+    Any other field is a narrower, non-measurement rejection.
+    """
+    if any(fact.field_name == FactField.VALUE.value for fact in active_rejected):
+        return FAILURE_MEASUREMENT_REJECTED
+    return FAILURE_FACT_REJECTED
+
+
 def _recompute_document_status(db: Session, document: Document) -> str:
     """Derive and store the document status from its facts.
 
     ``verified`` requires every blocking fact decided, at least one fact verified,
-    **and** no declared-but-unread measurement (R17). A document whose facts are
-    all rejected becomes ``failed``.
+    **and** no declared-but-unread measurement (R17).
+
+    **Rejection-first terminal rule (R21 §4.1).** Any *active* rejected fact — one
+    that no correction superseded — makes the document terminally ``failed``,
+    **even while sibling facts are still pending**. Two properties depend on this:
+
+    * a document can never be ``verified`` while an active rejection exists, so the
+      patient is never shown a clean status for a reading a doctor refused;
+    * the terminal state does not depend on the *order* decisions are recorded in,
+      which is what makes reject-first and reject-last equivalent (R1b).
+
+    The all-rejected case is checked first so ``all_facts_rejected`` keeps its
+    existing meaning and precedence; the new codes only describe the partial
+    rejection that used to be silently reported as ``verified`` or
+    ``needs_verification``.
+
+    Deciding a still-pending sibling afterwards is allowed and simply recomputes
+    the same ``failed`` state — a later decision cannot resurrect the document.
     """
     facts = list(
         db.execute(select(ExtractedFact).where(ExtractedFact.document_id == document.id)).scalars()
@@ -192,13 +250,22 @@ def _recompute_document_status(db: Session, document: Document) -> str:
         return document.extraction_status
 
     statuses = [fact.verification_status for fact in facts]
-    if any(status == FactVerificationStatus.PENDING.value for status in statuses):
-        document.extraction_status = DocumentStatus.NEEDS_VERIFICATION.value
-        return document.extraction_status
-
     if all(status == FactVerificationStatus.REJECTED.value for status in statuses):
         document.extraction_status = DocumentStatus.FAILED.value
-        document.failure_code = "all_facts_rejected"
+        document.failure_code = FAILURE_ALL_FACTS_REJECTED
+        return document.extraction_status
+
+    # Rejection-first: evaluated before the pending check, so a first rejection is
+    # terminal immediately rather than waiting for the siblings (R1a). Superseded
+    # originals are excluded, so a correction still reaches ``verified`` (R09).
+    active_rejected = _active_rejected_facts(facts, quality.superseded_fact_ids(facts))
+    if active_rejected:
+        document.extraction_status = DocumentStatus.FAILED.value
+        document.failure_code = _rejection_failure_code(active_rejected)
+        return document.extraction_status
+
+    if any(status == FactVerificationStatus.PENDING.value for status in statuses):
+        document.extraction_status = DocumentStatus.NEEDS_VERIFICATION.value
         return document.extraction_status
 
     if _unread_measurement_blocks_verification(db, document.id):
@@ -280,6 +347,18 @@ def _maybe_promote_document(
             db, document=document, conflict_tolerance=conflict_tolerance
         )
     }
+
+    # **R21 §4.2.** A clinical record may only be promoted from a document the
+    # system considers ``verified``. Checked *after* ``sync_issues`` on purpose:
+    # that call is the only writer of ``verification_issue`` rows, so returning
+    # early would silently stop ``VI-002``/``VI-005``/``VI-006`` from being
+    # recorded — and D-14 requires a rejection to keep counting toward ``VI-002``
+    # whether or not promotion is possible. Gating here keeps the issue ledger a
+    # pure consequence of the facts and makes ``failed`` unbeatable by any
+    # mapping shortcut.
+    if document.extraction_status != DocumentStatus.VERIFIED.value:
+        return False, _REASON_NOT_VERIFIED
+
     if quality.ISSUE_SOURCE_CONFLICT in open_issue_types:
         return False, "source_conflict_at_intake"
     if quality.IDENTITY_ISSUE_TYPE.value in open_issue_types:  # pragma: no cover - defensive
