@@ -817,10 +817,12 @@ def test_the_gate_owns_and_disposes_its_standalone_engine():
     source = PROBE.read_text(encoding="utf-8")
     body = source[source.index("def gate_api_ocr_upload") : source.index("def main(")]
 
-    # The engine handle is bound to a name declared before the ``try`` so ``finally``
-    # can reach it even when the body fails early.
+    # The seam (built by ``_isolated_app``, which both ING-02 and W1 share) is bound
+    # after the engine handle is declared before the ``try``, so ``finally`` can
+    # reach it even when the body fails early.
     assert "engine = None" in body, "the engine handle must exist before the try block"
-    assert "engine = create_db_engine(" in body
+    assert "seam = _isolated_app(" in body, "the gate must use the shared isolated seam"
+    assert 'engine = seam["engine"]' in body
     assert "engine.dispose()" in body, "the standalone engine must be disposed"
 
     finally_at = body.index("finally:")
@@ -836,8 +838,12 @@ def test_the_gate_restores_environment_overrides_on_every_path():
     source = PROBE.read_text(encoding="utf-8")
     body = source[source.index("def gate_api_ocr_upload") : source.index("def main(")]
 
+    # The overrides themselves are applied in the shared seam. It is the single
+    # place that sets them, so asserting there is stronger than asserting in each
+    # gate: a second gate cannot quietly invent its own database.
+    seam = source[source.index("def _isolated_app") : source.index("def gate_api_ocr_upload")]
     for name in ("DATABASE_URL", "APP_ENV", "UPLOAD_DIR", "DEMO_SEED_PASSWORD"):
-        assert f'"{name}"' in body, f"{name} override is missing"
+        assert f'"{name}"' in seam, f"{name} override is missing from the shared seam"
 
     # A saved-snapshot + restore pattern, not a bare delete: the owner may legitimately
     # have these set in their shell.
@@ -845,6 +851,13 @@ def test_the_gate_restores_environment_overrides_on_every_path():
     finally_at = body.index("finally:")
     restore_at = body.index("os.environ", finally_at)
     assert finally_at < restore_at, "restoration must happen in the finally block"
+
+    # W1 builds the same seam, so it must snapshot and restore too — otherwise it
+    # would leak a different temporary database into the owner's shell.
+    w1 = source[source.index("def _w1_run(") : source.index("def main(")]
+    assert "_PROBE_ENV_KEYS" in w1, "W1 must snapshot the same overrides"
+    assert "finally:" in w1
+    assert "_w1_teardown(" in w1, "W1 must tear its seam down on every path"
 
 
 # ====================================== R13a: the gate must not pass on a substituted 105

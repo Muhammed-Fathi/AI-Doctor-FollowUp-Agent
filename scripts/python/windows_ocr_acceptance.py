@@ -599,11 +599,93 @@ def _seed_password(settings) -> str:
     return str(configured) or "acceptance-only-password"
 
 
+def _isolated_app(tmp: str) -> dict:
+    """Build a throwaway settings/app/session seam over a temporary SQLite file.
+
+    Extracted from ``gate_api_ocr_upload`` so the R21 rejection gate (``W1``) drives
+    exactly the same isolated infrastructure instead of duplicating it: the
+    overrides, the migrated database, the seeded demo users, the minted sessions and
+    the disabled session cache are all established once, here.
+
+    Callers must restore the environment and dispose ``engine`` themselves; the
+    owning gate's ``finally`` does both.
+    """
+    from sqlalchemy.orm import Session
+
+    from app.core.config import get_settings, reset_settings_cache
+    from app.db.models import User
+    from app.db.session import create_db_engine
+    from app.main import create_app
+    from app.services.accounts import issue_session
+    from app.services.seed import seed_demo_data
+
+    db_path = Path(tmp) / "accept.db"
+    database_url = f"sqlite:///{db_path.as_posix()}"
+    os.environ["DATABASE_URL"] = database_url
+    os.environ["APP_ENV"] = "test"
+    os.environ["UPLOAD_DIR"] = str(Path(tmp) / "uploads")
+    os.environ["DEMO_SEED_PASSWORD"] = os.environ.get(
+        "DEMO_SEED_PASSWORD", "acceptance-only-password"
+    )
+
+    reset_settings_cache()
+    settings = get_settings()
+
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import select
+
+    config = Config(str(REPO_ROOT / "backend" / "migrations" / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", settings.database_url)
+    config.attributes["configure_logger"] = False
+    command.upgrade(config, "head")
+
+    engine = create_db_engine(settings.database_url)
+
+    with Session(engine) as session:
+        seed_demo_data(
+            session,
+            password=_seed_password(settings),
+            now=datetime(2026, 11, 15, tzinfo=UTC),
+            iterations=1000,
+        )
+        session.commit()
+        patient = session.execute(
+            select(User).where(User.username == "demo_patient_a")
+        ).scalar_one()
+        doctor = session.execute(select(User).where(User.username == "demo_doctor")).scalar_one()
+        # ``issue_session`` is keyword-only and takes an explicit clock; the
+        # reviewed probe omitted it and raised TypeError before any upload.
+        #
+        # The clock must be *now*, not a fixed date: a session lives for 60
+        # minutes, so a hard-coded midnight expiry is already in the past and
+        # the upload answers 401. That is the probe borrowing the seed's
+        # deterministic timestamp for something time-sensitive.
+        issued_at = datetime.now(UTC)
+        patient_token, _ = issue_session(session, user=patient, now=issued_at, ttl_minutes=60)
+        doctor_token, _ = issue_session(session, user=doctor, now=issued_at, ttl_minutes=60)
+        session.commit()
+
+    import generate_p3_fixtures as fixtures
+
+    return {
+        "engine": engine,
+        "database_url": database_url,
+        "settings": settings,
+        "app": create_app(settings),
+        "session_factory": lambda: Session(engine),
+        "patient_token": patient_token,
+        "doctor_token": doctor_token,
+        "image_bytes": fixtures.image_bytes(W1_SOURCE_NAME, fmt="PNG"),
+    }
+
+
 def gate_api_ocr_upload(results: list[Result], *, engine_present: bool) -> None:
     """GOLD-EX-05 through the real HTTP path: PNG upload ends with tesseract facts.
 
     Uses an isolated application instance over a temporary SQLite database and a
     temporary upload directory, so the owner's ``data/runtime`` is never touched.
+    The seam is shared with the R21 rejection gate via ``_isolated_app``.
     """
     gate = "ING-02 OCR upload end-to-end"
     if not engine_present:
@@ -622,140 +704,89 @@ def gate_api_ocr_upload(results: list[Result], *, engine_present: bool) -> None:
     saved_env = {name: os.environ.get(name) for name in _PROBE_ENV_KEYS}
     try:
         from fastapi.testclient import TestClient
-
-        from app.db.session import create_db_engine
-        from app.services.accounts import issue_session
-        from app.services.seed import seed_demo_data
-
-        db_path = Path(tmp) / "accept.db"
-        database_url = f"sqlite:///{db_path.as_posix()}"
-        os.environ["DATABASE_URL"] = database_url
-        os.environ["APP_ENV"] = "test"
-        os.environ["UPLOAD_DIR"] = str(Path(tmp) / "uploads")
-        os.environ["DEMO_SEED_PASSWORD"] = os.environ.get(
-            "DEMO_SEED_PASSWORD", "acceptance-only-password"
-        )
-
-        from app.core.config import get_settings, reset_settings_cache
-
-        reset_settings_cache()
-        settings = get_settings()
-
-        from alembic import command
-        from alembic.config import Config
-
-        config = Config(str(REPO_ROOT / "backend" / "migrations" / "alembic.ini"))
-        config.set_main_option("sqlalchemy.url", settings.database_url)
-        config.attributes["configure_logger"] = False
-        command.upgrade(config, "head")
-
-        engine = create_db_engine(settings.database_url)
         from sqlalchemy import select
-        from sqlalchemy.orm import Session
 
-        from app.db.models import ExtractedFact, User
-        from app.main import create_app
+        from app.db.models import ExtractedFact
 
-        with Session(engine) as session:
-            seed_demo_data(
-                session,
-                password=_seed_password(settings),
-                now=__import__("datetime").datetime(
-                    2026, 11, 15, tzinfo=__import__("datetime").timezone.utc
-                ),
-                iterations=1000,
+        seam = _isolated_app(tmp)
+        engine = seam["engine"]
+        database_url = seam["database_url"]
+
+        with TestClient(seam["app"]) as client:
+            upload = client.post(
+                "/api/v1/documents/upload",
+                headers={"Authorization": f"Bearer {seam['patient_token']}"},
+                files={
+                    "file": (
+                        "scan.png",
+                        fixtures.image_bytes("report_a_clean.txt", fmt="PNG"),
+                        "image/png",
+                    )
+                },
             )
-            session.commit()
-            patient = session.execute(
-                select(User).where(User.username == "demo_patient_a")
-            ).scalar_one()
-            doctor = session.execute(
-                select(User).where(User.username == "demo_doctor")
-            ).scalar_one()
-            # ``issue_session`` is keyword-only and takes an explicit clock; the
-            # reviewed probe omitted it and raised TypeError before any upload.
-            #
-            # The clock must be *now*, not a fixed date: a session lives for 60
-            # minutes, so a hard-coded midnight expiry is already in the past and
-            # the upload answers 401. That is the probe borrowing the seed's
-            # deterministic timestamp for something time-sensitive.
-            issued_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
-            patient_token, _ = issue_session(session, user=patient, now=issued_at, ttl_minutes=60)
-            doctor_token, _ = issue_session(session, user=doctor, now=issued_at, ttl_minutes=60)
-            session.commit()
-
-            with TestClient(create_app(settings)) as client:
-                upload = client.post(
-                    "/api/v1/documents/upload",
-                    headers={"Authorization": f"Bearer {patient_token}"},
-                    files={
-                        "file": (
-                            "scan.png",
-                            fixtures.image_bytes("report_a_clean.txt", fmt="PNG"),
-                            "image/png",
-                        )
-                    },
+            if upload.status_code != 202:
+                _record(
+                    results,
+                    Result(gate, FAIL, f"upload answered {upload.status_code}: {upload.text}"),
                 )
-                if upload.status_code != 202:
-                    _record(
-                        results,
-                        Result(gate, FAIL, f"upload answered {upload.status_code}: {upload.text}"),
-                    )
-                    return
-                document_id = upload.json()["document_id"]
+                return
+            document_id = upload.json()["document_id"]
 
-                extraction = client.get(
-                    f"/api/v1/documents/{document_id}/extraction",
-                    headers={"Authorization": f"Bearer {doctor_token}"},
-                )
-                if extraction.status_code != 200:
-                    _record(
-                        results,
-                        Result(
-                            gate,
-                            FAIL,
-                            f"extraction answered {extraction.status_code}: {extraction.text}",
-                        ),
-                    )
-                    return
-
-                body = extraction.json()
-                facts = body["facts"]
-                extractors = {fact["evidence"]["extractor"] for fact in facts}
-                attempts = [
-                    {
-                        "path": attempt["path"],
-                        "succeeded": attempt["succeeded"],
-                        "confidence": attempt.get("engine_confidence"),
-                    }
-                    for attempt in body["attempts"]
-                ]
-                stored = session.execute(
-                    select(ExtractedFact).where(ExtractedFact.document_id == document_id)
-                ).scalars()
-                stored_extractors = {row.extractor for row in stored}
-
-                ok = facts and extractors == {"tesseract"} and stored_extractors == {"tesseract"}
+            extraction = client.get(
+                f"/api/v1/documents/{document_id}/extraction",
+                headers={"Authorization": f"Bearer {seam['doctor_token']}"},
+            )
+            if extraction.status_code != 200:
                 _record(
                     results,
                     Result(
                         gate,
-                        PASS if ok else FAIL,
-                        (
-                            f"facts={len(facts)} evidence_extractors={sorted(extractors)} "
-                            f"stored_extractors={sorted(stored_extractors)} attempts={attempts}"
-                        ),
-                        {
-                            "fact_count": len(facts),
-                            "evidence_extractors": sorted(extractors),
-                            "stored_extractors": sorted(stored_extractors),
-                            "attempts": attempts,
-                            "ocr_issues": sorted(
-                                issue["issue_type"] for issue in body["verification_issues"]
-                            ),
-                        },
+                        FAIL,
+                        f"extraction answered {extraction.status_code}: {extraction.text}",
                     ),
                 )
+                return
+
+            body = extraction.json()
+            facts = body["facts"]
+            extractors = {fact["evidence"]["extractor"] for fact in facts}
+            attempts = [
+                {
+                    "path": attempt["path"],
+                    "succeeded": attempt["succeeded"],
+                    "confidence": attempt.get("engine_confidence"),
+                }
+                for attempt in body["attempts"]
+            ]
+            with seam["session_factory"]() as session:
+                stored_extractors = {
+                    row.extractor
+                    for row in session.execute(
+                        select(ExtractedFact).where(ExtractedFact.document_id == document_id)
+                    ).scalars()
+                }
+
+            ok = facts and extractors == {"tesseract"} and stored_extractors == {"tesseract"}
+            _record(
+                results,
+                Result(
+                    gate,
+                    PASS if ok else FAIL,
+                    (
+                        f"facts={len(facts)} evidence_extractors={sorted(extractors)} "
+                        f"stored_extractors={sorted(stored_extractors)} attempts={attempts}"
+                    ),
+                    {
+                        "fact_count": len(facts),
+                        "evidence_extractors": sorted(extractors),
+                        "stored_extractors": sorted(stored_extractors),
+                        "attempts": attempts,
+                        "ocr_issues": sorted(
+                            issue["issue_type"] for issue in body["verification_issues"]
+                        ),
+                    },
+                ),
+            )
     except Exception:
         # A gate that has already concluded keeps its verdict; a failure before that
         # point is the verdict. Either way cleanup below still runs.
@@ -821,6 +852,539 @@ def gate_api_ocr_upload(results: list[Result], *, engine_present: bool) -> None:
             )
 
 
+# --- W1: owner real-engine rejection gate (R21) -------------------------------
+
+#: The synthetic source W1 renders. Deliberately the *mappable* glucose report —
+#: Patient A, `104 mg/dL`, and `mg/dL` is a supported unit — so "no Observation was
+#: promoted" is a real assertion. A hemoglobin fixture would create no Observation
+#: even if the gate wrongly passed, which is why the design report rules it out.
+W1_SOURCE_NAME = "report_a_glucose.txt"
+
+#: The single terminal failure a rejected measurement must produce.
+W1_FAILURE_CODE = "measurement_rejected"
+
+#: Requirements W1 reports individually. One combined row would give one verdict
+#: for seven distinct contract cases, which is the evidence shape that lets a
+#: handoff overstate what was shown.
+W1_CASES = (
+    "OCR value fact",
+    "doctor rejection",
+    "terminal failure",
+    "no Observation",
+    "fact immutable",
+    "VI-002 stays open",
+    "re-decision refused",
+)
+
+
+@dataclass
+class W1Evidence:
+    """Everything W1 measured, as plain values.
+
+    Kept separate from the gate that collects it so the verdict logic is a pure
+    function of the evidence. That is what makes PASS/FAIL/NOT RUN testable without
+    a Tesseract install — and without a mocked engine pretending to be Windows
+    evidence: the tests drive *this* structure, not the engine.
+    """
+
+    #: The OCR-produced ``value`` fact, or ``None`` when the engine produced none.
+    candidate: dict | None = None
+    #: Why there is no candidate, for the NOT RUN detail.
+    candidate_absence: str = ""
+    #: How many non-``value`` facts the engine produced. ``measurement_rejected`` is
+    #: only reachable when at least one sibling exists: with a value-only document
+    #: the service's own rule classifies the outcome as ``all_facts_rejected``, so
+    #: asserting ``measurement_rejected`` there would be a false FAIL.
+    non_value_fact_count: int = 0
+    extracted_fields: tuple[str, ...] = ()
+    attempts: tuple[dict, ...] = ()
+    #: Stored document state after the rejection.
+    document_status: str | None = None
+    failure_code: str | None = None
+    #: Ids of Observations promoted from this document's own facts.
+    promoted_observations: tuple[str, ...] = ()
+    #: Fact fields a decision must never rewrite, before and after.
+    before: dict = field(default_factory=dict)
+    after: dict = field(default_factory=dict)
+    issues: tuple[dict, ...] = ()
+    #: The refused second decision.
+    redecision_status: int | None = None
+    redecision_code: str | None = None
+    #: Decision rows on the fact after the refused attempt.
+    decision_count_after_refusal: int = 0
+
+
+def _w1_open_vi002(issues) -> list[dict]:
+    """Return the ``VI-002`` issues still ``open`` (D-14 keeps them open)."""
+    return [
+        dict(issue)
+        for issue in issues
+        if issue.get("issue_type") == "VI-002" and issue.get("state") == "open"
+    ]
+
+
+def assess_w1(evidence: W1Evidence) -> list[Result]:
+    """Turn measured W1 evidence into one verdict per requirement.
+
+    Pure: no I/O, no database, no engine. A missing candidate short-circuits to
+    ``NOT RUN`` for every requirement — an honest non-result, never a PASS and
+    never a manufactured fact.
+    """
+    gate = "W1 R21 rejection"
+
+    def rows(status: str, detail: str) -> list[Result]:
+        return [Result(f"{gate}: {name}", status, detail) for name in W1_CASES]
+
+    if evidence.candidate is None:
+        return rows(NOT_RUN, evidence.candidate_absence or "no usable OCR value fact")
+
+    if evidence.non_value_fact_count == 0:
+        # The document holds only a ``value`` fact, so rejecting it makes *every*
+        # fact rejected and the service correctly reports ``all_facts_rejected``.
+        # ``measurement_rejected`` is unreachable in that shape, so neither PASS nor
+        # FAIL would be a fair verdict: report the untestable precondition.
+        return rows(
+            NOT_RUN,
+            "the engine produced only a `value` fact, so the contract-correct code is "
+            "`all_facts_rejected`, not `measurement_rejected`; W1 cannot assert the "
+            "required code on this shape",
+        )
+
+    candidate = evidence.candidate
+    results: list[Result] = []
+
+    results.append(
+        Result(
+            f"{gate}: OCR value fact",
+            PASS,
+            f"tesseract value={candidate.get('raw_text')!r} "
+            f"unit={candidate.get('unit')!r} confidence={candidate.get('confidence')} "
+            f"attempts={list(evidence.attempts)}",
+            {"candidate": candidate, "attempts": list(evidence.attempts)},
+        )
+    )
+
+    decided = evidence.after.get("decision") == "rejected"
+    results.append(
+        Result(
+            f"{gate}: doctor rejection",
+            PASS if decided else FAIL,
+            f"stored decision={evidence.after.get('decision')!r} "
+            f"status={evidence.after.get('verification_status')!r}",
+        )
+    )
+
+    terminal = evidence.document_status == "failed" and evidence.failure_code == W1_FAILURE_CODE
+    results.append(
+        Result(
+            f"{gate}: terminal failure",
+            PASS if terminal else FAIL,
+            f"extraction_status={evidence.document_status!r} "
+            f"failure_code={evidence.failure_code!r}",
+        )
+    )
+
+    no_observation = not evidence.promoted_observations
+    results.append(
+        Result(
+            f"{gate}: no Observation",
+            PASS if no_observation else FAIL,
+            (
+                "no Observation references this document's facts"
+                if no_observation
+                else f"{len(evidence.promoted_observations)} Observation(s) promoted from a "
+                f"rejected document: {list(evidence.promoted_observations)}"
+            ),
+            {"promoted": list(evidence.promoted_observations)},
+        )
+    )
+
+    # Immutability: the decision sets the status once and rewrites no source text,
+    # and exactly one decision row exists.
+    before, after = evidence.before, evidence.after
+    immutable = (
+        after.get("verification_status") == "rejected"
+        and after.get("raw_text") == before.get("raw_text")
+        and after.get("normalized_value") == before.get("normalized_value")
+        and after.get("quality_flags") == before.get("quality_flags")
+        and after.get("decision_count") == 1
+    )
+    results.append(
+        Result(
+            f"{gate}: fact immutable",
+            PASS if immutable else FAIL,
+            f"status={after.get('verification_status')!r} "
+            f"decisions={after.get('decision_count')} "
+            f"raw_text={after.get('raw_text')!r} "
+            f"raw_text_before={before.get('raw_text')!r} "
+            f"flags_same={after.get('quality_flags') == before.get('quality_flags')}",
+            {"before": dict(before), "after": dict(after)},
+        )
+    )
+
+    open_vi002 = _w1_open_vi002(evidence.issues)
+    results.append(
+        Result(
+            f"{gate}: VI-002 stays open",
+            PASS if open_vi002 else FAIL,
+            f"open VI-002={[i.get('reason_code') for i in open_vi002]} "
+            f"all_issues={[(i.get('issue_type'), i.get('state')) for i in evidence.issues]}",
+            {"open_vi002": open_vi002, "issues": [dict(i) for i in evidence.issues]},
+        )
+    )
+
+    refused = (
+        evidence.redecision_status == 409
+        and evidence.redecision_code == "E_FACT_ALREADY_DECIDED"
+        and evidence.decision_count_after_refusal == 1
+    )
+    results.append(
+        Result(
+            f"{gate}: re-decision refused",
+            PASS if refused else FAIL,
+            f"status={evidence.redecision_status} code={evidence.redecision_code!r} "
+            f"stored_decisions={evidence.decision_count_after_refusal}",
+        )
+    )
+
+    return results
+
+
+def _w1_read(session_factory, models, document_id: str, fact_id: str) -> dict:
+    """Read the refusal-relevant state straight from the database.
+
+    The gate asserts on *stored* values, not on the response body: a response that
+    merely claims ``failed`` would prove the API's wording, not the row.
+    """
+    from sqlalchemy import select
+
+    with session_factory() as session:
+        document = session.execute(
+            select(models.Document).where(models.Document.id == document_id)
+        ).scalar_one()
+        fact = session.execute(
+            select(models.ExtractedFact).where(models.ExtractedFact.id == fact_id)
+        ).scalar_one()
+        decisions = list(
+            session.execute(
+                select(models.FactVerification).where(models.FactVerification.fact_id == fact_id)
+            ).scalars()
+        )
+        fact_ids = {
+            row.id
+            for row in session.execute(
+                select(models.ExtractedFact).where(models.ExtractedFact.document_id == document_id)
+            ).scalars()
+        }
+        promoted = [
+            row.id
+            for row in session.execute(select(models.Observation)).scalars()
+            if row.source_fact_id in fact_ids
+        ]
+        issues = [
+            {
+                "issue_type": row.issue_type,
+                "reason_code": row.reason_code,
+                "state": row.state,
+                "blocking": row.blocking,
+            }
+            for row in session.execute(
+                select(models.VerificationIssue).where(
+                    models.VerificationIssue.document_id == document_id
+                )
+            ).scalars()
+        ]
+        snapshot = {
+            "verification_status": fact.verification_status,
+            "raw_text": fact.raw_text,
+            "normalized_value": fact.normalized_value,
+            "quality_flags": fact.quality_flags,
+            "decision_count": len(decisions),
+            "decision": decisions[0].decision if decisions else None,
+        }
+        return {
+            "document_status": document.extraction_status,
+            "failure_code": document.failure_code,
+            "promoted_observations": tuple(promoted),
+            "issues": tuple(issues),
+            "snapshot": snapshot,
+        }
+
+
+def _w1_candidate(facts: list[dict]) -> dict | None:
+    """Return the OCR-produced ``value`` fact, or ``None``.
+
+    A ``value`` fact whose extractor is not ``tesseract`` would not prove the real
+    engine produced it, so it is not accepted.
+    """
+    for fact in facts:
+        if fact.get("field_name") != "value":
+            continue
+        if (fact.get("evidence") or {}).get("extractor") != "tesseract":
+            continue
+        if (fact.get("raw_text") or "").strip():
+            return fact
+    return None
+
+
+def gate_r21_rejection(results: list[Result], objects: dict | None) -> None:
+    """W1: the assigned doctor rejects the real engine's ``value`` fact.
+
+    Reuses the isolated temporary database, seeded app, authorization and cleanup
+    that ``gate_api_ocr_upload`` established, so this adds no new infrastructure.
+    Every requirement is reported as its own row by ``assess_w1``.
+    """
+    if objects is None:
+        for name in W1_CASES:
+            _record(
+                results,
+                Result(f"W1 R21 rejection: {name}", NOT_RUN, "no Tesseract engine available"),
+            )
+        return
+
+    evidence = W1Evidence()
+    client = objects["test_client"]
+    doctor_headers = {"Authorization": f"Bearer {objects['doctor_token']}"}
+    patient_headers = {"Authorization": f"Bearer {objects['patient_token']}"}
+    models = objects["models"]
+    session_factory = objects["session_factory"]
+
+    with client as http:
+        upload = http.post(
+            "/api/v1/documents/upload",
+            headers=patient_headers,
+            files={"file": ("glucose.png", objects["image_bytes"], "image/png")},
+        )
+        if upload.status_code != 202:
+            for name in W1_CASES:
+                _record(
+                    results,
+                    Result(
+                        f"W1 R21 rejection: {name}",
+                        FAIL,
+                        f"upload answered {upload.status_code}: {upload.text[:300]}",
+                    ),
+                )
+            return
+        document_id = upload.json()["document_id"]
+
+        extraction = http.get(f"/api/v1/documents/{document_id}/extraction", headers=doctor_headers)
+        if extraction.status_code != 200:
+            for name in W1_CASES:
+                _record(
+                    results,
+                    Result(
+                        f"W1 R21 rejection: {name}",
+                        FAIL,
+                        f"extraction answered {extraction.status_code}: {extraction.text[:300]}",
+                    ),
+                )
+            return
+
+        body = extraction.json()
+        evidence.attempts = tuple(
+            {"path": a["path"], "succeeded": a["succeeded"]} for a in body["attempts"]
+        )
+        evidence.extracted_fields = tuple(sorted(f["field_name"] for f in body["facts"]))
+        evidence.non_value_fact_count = sum(
+            1 for f in body["facts"] if f.get("field_name") != "value"
+        )
+        candidate = _w1_candidate(body["facts"])
+
+        if candidate is None:
+            # Honest NOT RUN. The engine ran and produced nothing this gate can
+            # reject; inventing a fact to reach a decision would be fabrication.
+            evidence.candidate_absence = (
+                "the real engine produced no mappable `value` fact; "
+                f"fields={list(evidence.extracted_fields)} "
+                f"attempts={list(evidence.attempts)}"
+            )
+            for row in assess_w1(evidence):
+                _record(results, row)
+            return
+
+        evidence.candidate = {
+            "fact_id": candidate["fact_id"],
+            "raw_text": candidate["raw_text"],
+            "unit": candidate.get("unit"),
+            "confidence": candidate.get("confidence"),
+            "verification_status": candidate["verification_status"],
+            "extractor": (candidate.get("evidence") or {}).get("extractor"),
+            "non_value_fact_count": evidence.non_value_fact_count,
+        }
+
+        before = _w1_read(session_factory, models, document_id, candidate["fact_id"])
+        evidence.before = before["snapshot"]
+
+        rejection = http.post(
+            f"/api/v1/documents/{document_id}/verify",
+            headers=doctor_headers,
+            json={
+                "fact_id": candidate["fact_id"],
+                "decision": "rejected",
+                "reason": "OCR reading is not a usable measurement",
+            },
+        )
+        if rejection.status_code != 200:
+            # One verdict per requirement. ``after`` stays at its pre-decision
+            # snapshot, so ``assess_w1`` reports the rejection as FAIL and every
+            # downstream requirement fails with it — no contradicting second row.
+            evidence.after = dict(before["snapshot"])
+            for row in assess_w1(evidence):
+                _record(results, row)
+            _record(
+                results,
+                Result(
+                    "W1 R21 rejection detail",
+                    FAIL,
+                    f"verify answered {rejection.status_code}: {rejection.text[:300]}",
+                ),
+            )
+            return
+
+        stored = _w1_read(session_factory, models, document_id, candidate["fact_id"])
+        evidence.after = stored["snapshot"]
+        evidence.document_status = stored["document_status"]
+        evidence.failure_code = stored["failure_code"]
+        evidence.promoted_observations = stored["promoted_observations"]
+        evidence.issues = stored["issues"]
+
+        again = http.post(
+            f"/api/v1/documents/{document_id}/verify",
+            headers=doctor_headers,
+            json={
+                "fact_id": candidate["fact_id"],
+                "decision": "verified",
+                "reason": "a second decision must be refused",
+            },
+        )
+        evidence.redecision_status = again.status_code
+        try:
+            evidence.redecision_code = again.json().get("code")
+        except ValueError:
+            evidence.redecision_code = None
+
+        settled = _w1_read(session_factory, models, document_id, candidate["fact_id"])
+        evidence.decision_count_after_refusal = settled["snapshot"]["decision_count"]
+
+        for row in assess_w1(evidence):
+            _record(results, row)
+
+
+def gate_r21_rejection_is_mappable(results: list[Result]) -> None:
+    """Fail early if W1's fixture is not the mappable glucose report.
+
+    W1 asserts that *no* Observation was promoted. That only means something when
+    the rejected value would otherwise have mapped, so the fixture is checked
+    rather than assumed — an unsupported measurement would make the assertion
+    vacuous while still reading as a PASS.
+    """
+    gate = "W1 R21 rejection: OCR value fact"
+    source = SOURCES / W1_SOURCE_NAME
+    if not source.is_file():
+        _record(results, Result(gate, FAIL, f"missing committed fixture {W1_SOURCE_NAME}"))
+        return
+    text = source.read_text(encoding="utf-8", errors="replace")
+    if "mg/dL" not in text or "glucose" not in text.lower():
+        _record(
+            results,
+            Result(
+                gate,
+                FAIL,
+                f"{W1_SOURCE_NAME} is not the mappable glucose report: W1's "
+                "'no Observation' assertion would be vacuous",
+            ),
+        )
+
+
+def _w1_teardown(seam: dict) -> list[str]:
+    """Release W1's seam, returning any teardown problems for the caller to record."""
+    errors: list[str] = []
+    try:
+        seam["engine"].dispose()
+    except Exception as error:  # pragma: no cover - defensive
+        errors.append(f"engine: {type(error).__name__}: {error}")
+    try:
+        from app.db.session import dispose_engines
+
+        dispose_engines(seam["database_url"])
+    except Exception as error:  # pragma: no cover - defensive
+        errors.append(f"cached engine: {type(error).__name__}: {error}")
+    try:
+        for name, previous in seam["saved_env"].items():
+            if previous is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = previous
+    except Exception as error:  # pragma: no cover - defensive
+        errors.append(f"environment restore: {type(error).__name__}: {error}")
+    try:
+        from app.core.config import reset_settings_cache
+
+        reset_settings_cache()
+    except Exception as error:  # pragma: no cover - defensive
+        errors.append(f"settings cache: {type(error).__name__}: {error}")
+    try:
+        shutil.rmtree(seam["tmp"])
+    except OSError as error:
+        # On Windows a retained SQLite handle makes this raise WinError 32.
+        errors.append(f"temporary directory: {type(error).__name__}: {error}")
+    return errors
+
+
+def _w1_run(results: list[Result], *, engine_present: bool) -> None:
+    """Own W1 end to end: build the isolated seam, judge, then always tear down.
+
+    Cleanup lives here rather than in the gate so the temporary database and the
+    restored environment are released on every path — including the honest
+    ``NOT RUN`` when the engine produced no candidate.
+    """
+    if not engine_present:
+        gate_r21_rejection(results, None)
+        return
+
+    tmp = tempfile.mkdtemp(prefix="p3-w1-")
+    saved_env = {name: os.environ.get(name) for name in _PROBE_ENV_KEYS}
+    seam = None
+    try:
+        seam = _isolated_app(tmp)
+        gate_r21_rejection(results, seam)
+    except Exception as error:
+        if not _verdicts_for(results, "W1 R21 rejection: OCR value fact"):
+            _record(
+                results,
+                Result(
+                    "W1 R21 rejection: OCR value fact",
+                    FAIL,
+                    f"unexpected {type(error).__name__}: {error}\n{traceback.format_exc(limit=3)}",
+                ),
+            )
+    finally:
+        if seam is not None:
+            seam["saved_env"] = saved_env
+        else:
+            # The seam failed to build; still restore what we changed.
+            for name, previous in saved_env.items():
+                if previous is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = previous
+            shutil.rmtree(tmp, ignore_errors=True)
+            return
+        seam["tmp"] = tmp
+        problems = _w1_teardown(seam)
+        if problems:
+            _record(
+                results,
+                Result(
+                    "W1 R21 rejection cleanup",
+                    FAIL,
+                    "; ".join(problems),
+                    {"cleanup_errors": problems},
+                ),
+            )
+
+
 def main(argv: list[str]) -> int:
     """Run every Windows-only gate and return 0 only if none is NOT RUN/FAIL."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -855,6 +1419,19 @@ def main(argv: list[str]) -> int:
         results,
         "ING-02 OCR upload end-to-end",
         lambda: gate_api_ocr_upload(results, engine_present=engine_present),
+    )
+    # W1 is the R21 rejection gate. The fixture guard runs first: if the source is
+    # not the mappable glucose report, W1's "no Observation" assertion would be
+    # vacuous, so it fails loudly instead of passing hollowly.
+    _guarded(
+        results,
+        "W1 R21 rejection: OCR value fact",
+        lambda: gate_r21_rejection_is_mappable(results),
+    )
+    _guarded(
+        results,
+        "W1 R21 rejection",
+        lambda: _w1_run(results, engine_present=engine_present),
     )
 
     print()

@@ -246,6 +246,261 @@ def test_status_vocabulary_is_exactly_three_words(status):
 
 # --- the handoff document must stay executable and path-correct ---------------
 
+# --- W1: the R21 real-engine rejection gate -----------------------------------
+#
+# These tests drive ``assess_w1``, the gate's pure verdict function, and
+# ``gate_r21_rejection``'s evidence collection. They deliberately do **not** mock a
+# Tesseract engine and call the result Windows evidence: a mocked engine proves the
+# plumbing, never the real engine. The evidence that counts is the owner's Windows
+# run, and the handoff says so.
+
+
+def _w1_pass_evidence():
+    """Evidence describing a fully successful real-engine rejection."""
+    module = _module()
+    candidate = {
+        "fact_id": "fact-value",
+        "raw_text": "104",
+        "unit": "mg/dL",
+        "confidence": 0.88,
+        "verification_status": "pending",
+        "extractor": "tesseract",
+    }
+    source = {
+        "verification_status": "pending",
+        "raw_text": "104",
+        "normalized_value": "104",
+        "quality_flags": '["clean"]',
+        "decision_count": 0,
+        "decision": None,
+    }
+    decided = {
+        "verification_status": "rejected",
+        "raw_text": "104",
+        "normalized_value": "104",
+        "quality_flags": '["clean"]',
+        "decision_count": 1,
+        "decision": "rejected",
+    }
+    return module, module.W1Evidence(
+        candidate=candidate,
+        # The real scan yields report_date/test_name/unit/reference_text beside the
+        # value, so the siblings are still pending when the value is rejected —
+        # which is what makes `measurement_rejected` the correct terminal code.
+        non_value_fact_count=4,
+        extracted_fields=("reference_text", "test_name", "unit", "value"),
+        attempts=({"path": "tesseract", "succeeded": True},),
+        document_status="failed",
+        failure_code="measurement_rejected",
+        promoted_observations=(),
+        before=source,
+        after=decided,
+        issues=(
+            {
+                "issue_type": "VI-002",
+                "reason_code": "fact_unverified",
+                "state": "open",
+                "blocking": 1,
+            },
+        ),
+        redecision_status=409,
+        redecision_code="E_FACT_ALREADY_DECIDED",
+        decision_count_after_refusal=1,
+    )
+
+
+def test_w1_passes_only_when_every_requirement_holds():
+    """The all-green path: seven requirements, seven PASS rows, nothing else."""
+    module, evidence = _w1_pass_evidence()
+    rows = module.assess_w1(evidence)
+
+    assert len(rows) == len(module.W1_CASES)
+    assert [row.gate for row in rows] == [
+        f"{'W1 R21 rejection'}: {name}" for name in module.W1_CASES
+    ]
+    assert [row.status for row in rows] == [module.PASS] * len(module.W1_CASES)
+
+
+def test_w1_reports_not_run_when_the_engine_produced_no_candidate():
+    """No OCR ``value`` fact ⇒ every requirement NOT RUN, never a PASS.
+
+    This is the honest non-result the review required: nothing is invented to
+    manufacture a candidate, and the absence is recorded with what was extracted.
+    """
+    module = _module()
+    rows = module.assess_w1(
+        module.W1Evidence(
+            candidate=None,
+            candidate_absence="the real engine produced no mappable `value` fact",
+            extracted_fields=("reference_text", "test_name"),
+        )
+    )
+
+    assert [row.status for row in rows] == [module.NOT_RUN] * len(module.W1_CASES)
+    assert module.PASS not in {row.status for row in rows}
+    assert "no mappable" in rows[0].detail
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("document_status", "needs_verification"),
+        ("failure_code", "all_facts_rejected"),
+        ("failure_code", None),
+        ("promoted_observations", ("obs-1",)),
+        ("redecision_status", 200),
+        ("redecision_code", None),
+        ("decision_count_after_refusal", 2),
+        ("issues", ()),
+    ],
+)
+def test_w1_fails_when_any_single_requirement_breaks(field, value):
+    """Each requirement fails on its own, so a partial result cannot read as green."""
+    module, evidence = _w1_pass_evidence()
+    setattr(evidence, field, value)
+    rows = module.assess_w1(evidence)
+
+    statuses = {row.gate: row.status for row in rows}
+    failing = [gate for gate, status in statuses.items() if status != module.PASS]
+
+    assert failing, f"changing {field} must break at least one requirement"
+    assert len(failing) <= 2, f"changing {field} broke {failing}, expected a targeted failure"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        # The decision rewrote the source text it decided on.
+        lambda after: after.update(raw_text="105"),
+        # The decision silently dropped provenance flags.
+        lambda after: after.update(quality_flags='["repaired"]'),
+        # The decision duplicated the append-only decision row.
+        lambda after: after.update(decision_count=2),
+        # The fact never reached the rejected state.
+        lambda after: after.update(verification_status="verified"),
+    ],
+)
+def test_w1_fact_immutability_is_pinned(mutate):
+    """Immutability is asserted on stored values, not on a "we did not touch it" claim."""
+    module, evidence = _w1_pass_evidence()
+    mutate(evidence.after)
+    rows = module.assess_w1(evidence)
+
+    immutable = next(row for row in rows if row.gate.endswith("fact immutable"))
+    assert immutable.status == module.FAIL
+
+
+def test_w1_vi002_failure_distinguishes_resolved_from_open():
+    """A *resolved* VI-002 is not the same as an open one under D-14."""
+    module, evidence = _w1_pass_evidence()
+    evidence.issues = (
+        {
+            "issue_type": "VI-002",
+            "reason_code": "fact_unverified",
+            "state": "resolved",
+            "blocking": 1,
+        },
+    )
+    rows = module.assess_w1(evidence)
+    vi002 = next(row for row in rows if row.gate.endswith("VI-002 stays open"))
+    assert vi002.status == module.FAIL
+
+
+def test_w1_uses_the_mappable_glucose_fixture():
+    """W1 must not rely on a measurement whose Observation could never be created.
+
+    A hemoglobin fixture creates no Observation even if the gate wrongly passed, so
+    the "no Observation" assertion would be vacuous. The gate therefore names the
+    glucose report explicitly.
+    """
+    module = _module()
+    assert module.W1_SOURCE_NAME == "report_a_glucose.txt"
+    source = REPO_ROOT / "data" / "synthetic" / "documents" / "sources" / module.W1_SOURCE_NAME
+    text = source.read_text(encoding="utf-8")
+    assert "mg/dL" in text and "glucose" in text.lower()
+
+
+def test_w1_mappability_guard_fails_a_non_mappable_fixture(monkeypatch, capsys, tmp_path):
+    """A substituted non-mappable fixture is a FAIL, not a hollow PASS."""
+    module = _module()
+    fake_sources = tmp_path / "sources"
+    fake_sources.mkdir()
+    (fake_sources / module.W1_SOURCE_NAME).write_text(
+        "SYNTHETIC\nTest: Hemoglobin   Value: 13.4 g/dL\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(module, "SOURCES", fake_sources)
+
+    results: list = []
+    module.gate_r21_rejection_is_mappable(results)
+    capsys.readouterr()
+
+    assert [row.status for row in results] == [module.FAIL]
+    assert "vacuous" in results[0].detail
+
+
+def test_w1_reports_not_run_when_the_document_has_only_a_value_fact():
+    """A value-only document cannot yield ``measurement_rejected``.
+
+    Rejecting the sole fact makes *every* fact rejected, and the service's own rule
+    classifies that as ``all_facts_rejected``. Asserting ``measurement_rejected``
+    there would be a false FAIL against correct behaviour, so W1 reports the
+    untestable precondition instead.
+    """
+    module, evidence = _w1_pass_evidence()
+    evidence.non_value_fact_count = 0
+    rows = module.assess_w1(evidence)
+
+    assert [row.status for row in rows] == [module.NOT_RUN] * len(module.W1_CASES)
+    assert "all_facts_rejected" in rows[0].detail
+    assert module.FAIL not in {row.status for row in rows}
+
+
+def test_w1_passes_when_siblings_are_still_pending():
+    """The shape the real scan produces: one value plus pending siblings."""
+    module, evidence = _w1_pass_evidence()
+    assert evidence.non_value_fact_count > 0
+    rows = module.assess_w1(evidence)
+    assert [row.status for row in rows] == [module.PASS] * len(module.W1_CASES)
+
+
+def test_w1_reports_not_run_without_an_engine(capsys):
+    """No engine ⇒ seven NOT RUN rows naming the reason, and no PASS."""
+    module = _module()
+    results: list = []
+    module.gate_r21_rejection(results, None)
+    capsys.readouterr()
+
+    assert len(results) == len(module.W1_CASES)
+    assert {row.status for row in results} == {module.NOT_RUN}
+    assert all("Tesseract" in row.detail for row in results)
+
+
+def test_w1_rejects_an_unusable_candidate_that_is_not_tesseract():
+    """A ``value`` fact from any other extractor is not a real-engine candidate."""
+    module = _module()
+    facts = [
+        {"field_name": "value", "raw_text": "104", "evidence": {"extractor": "pypdf"}},
+        {"field_name": "value", "raw_text": "   ", "evidence": {"extractor": "tesseract"}},
+    ]
+    assert module._w1_candidate(facts) is None
+
+    good = {"field_name": "value", "raw_text": "104", "evidence": {"extractor": "tesseract"}}
+    assert module._w1_candidate([*facts, good]) is good
+
+
+def test_the_probe_registers_w1_as_a_gate():
+    """W1 must be wired into the probe, not merely defined beside it."""
+    module = _module()
+    for name in ("gate_r21_rejection", "gate_r21_rejection_is_mappable", "_w1_run", "assess_w1"):
+        assert hasattr(module, name), name
+
+    # The gate names must appear in main's harness so a run cannot silently omit them.
+    source = SCRIPT.read_text(encoding="utf-8")
+    main_body = source[source.index("def main(argv") :]
+    assert "W1 R21 rejection" in main_body
+    assert "_w1_run" in main_body
+
+
 HANDOFF = REPO_ROOT / "docs" / "phase-reports" / "PHASE_3_WINDOWS_ACCEPTANCE.md"
 
 

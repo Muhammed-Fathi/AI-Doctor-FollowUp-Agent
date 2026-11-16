@@ -93,11 +93,13 @@ Do **not** paste `18a53b2` (PR #10) or `867ab12` (`main`); neither contains R21.
 
 #### Verify the document and the code are the same commit
 
-The expected test count travels with the commit. `e7d73b5` — the implementation
-commit that was reviewed — carries the **pre**-Stage-5.1 handoff, which expects
-**663** passed (P3: 275). This revision expects **666** (P3: 275, unchanged). So
-pinning the older SHA while reading this table would report a false FAIL on a run
-that actually succeeded.
+The expected test count travels with the commit. The count has moved twice:
+`e7d73b5` (Stages 3-5) expects **663** (P3: 275); the Stage 5.1 revision expects
+**666** (P3: 275); and this Stage 5.2 revision expects **688** (P3: **297**), after
+the R21 W1 gate added 22 cases. Pinning an older SHA while reading a newer table —
+or the reverse — reports a false FAIL on a run that actually succeeded, which is
+why the check below reads the figure from the pinned checkout rather than from
+whatever copy of this file you happen to be holding.
 
 Let the checkout settle it, before recording any number:
 
@@ -107,7 +109,14 @@ Select-String -Path (Join-Path $env:P3_ACCEPT 'docs\phase-reports\PHASE_3_WINDOW
                -Pattern 'passed\*\*, of which'
 
 # And what does that checkout actually collect?
+# NOTE: this needs the 3.12 runtime built in §3/§4, so it runs *after* those steps.
+# $Py is defined here explicitly rather than assumed, because this block appears
+# before §3 and would otherwise fail with "Cannot bind argument to parameter 'Path'".
 Set-Location $env:P3_ACCEPT
+$Py = Join-Path $env:APP_VENV_DIR "Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $Py)) {
+    throw "Run §3/§4 first: no interpreter at $Py. The count check below needs it."
+}
 & $Py -m pytest backend/tests --collect-only -q 2>&1 | Select-Object -Last 2
 ```
 
@@ -314,10 +323,21 @@ New-Item -ItemType Directory -Force -Path $Evidence | Out-Null
 $DbFile = Join-Path $Evidence 'roundtrip.db'
 $Db = 'sqlite:///' + ((Resolve-Path $Evidence).Path -replace '\\', '/') + '/roundtrip.db'
 
-function Invoke-Alembic { param([string[]]$Action)
+# Two positional parameters rather than array splatting: splatting a param-typed
+# array into a native executable behaves differently between PowerShell 5.1 and 7,
+# and this procedure must be reproducible on the Windows PowerShell 5.1 that ships
+# with Windows 11. The URL is quoted because it contains ':' and '/'.
+function Invoke-Alembic {
+    param([string]$Action, [string]$Revision = '')
     Set-Location (Join-Path $env:P3_ACCEPT "backend\migrations")
-    & $Py -m alembic -x database_url=$Db @Action
-    if ($LASTEXITCODE -ne 0) { throw "alembic $Action failed (exit $LASTEXITCODE)" }
+    if ($Revision) {
+        & $Py -m alembic -x "database_url=$Db" $Action $Revision
+    } else {
+        & $Py -m alembic -x "database_url=$Db" $Action
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "alembic $Action $Revision failed (exit $LASTEXITCODE)"
+    }
     Set-Location $env:P3_ACCEPT
 }
 function Assert-Smoke { param([string]$State)
@@ -331,25 +351,25 @@ final check at `head` would not prove the intermediate downgrades left anything
 correct:
 
 ```powershell
-Invoke-Alembic @('upgrade', 'head')                       # -> 0004
+Invoke-Alembic 'upgrade' 'head'                           # -> 0004
 Assert-Smoke 'head'
 # expect: PASS (state head, revision ['0004_p3_rejection_recovery'], …)
 
-Invoke-Alembic @('downgrade', '0003_p3_documents')        # -> 0003
+Invoke-Alembic 'downgrade' '0003_p3_documents'            # -> 0003
 Assert-Smoke 'p3'
 # expect: PASS (state p3, revision ['0003_p3_documents'], …)
 # At 0003 the recovery column/index/self-FK must be ABSENT; the checker asserts it.
 
-Invoke-Alembic @('upgrade', 'head')                       # -> 0004 again
+Invoke-Alembic 'upgrade' 'head'                           # -> 0004 again
 Assert-Smoke 'head'
 
-Invoke-Alembic @('downgrade', '0002_p2_patient_domain')   # D-05: P2 schema intact
+Invoke-Alembic 'downgrade' '0002_p2_patient_domain'       # D-05: P2 schema intact
 Assert-Smoke 'p2'
 
-Invoke-Alembic @('downgrade', 'base')
+Invoke-Alembic 'downgrade' 'base'
 Assert-Smoke 'base'
 
-Invoke-Alembic @('upgrade', 'head')                       # -> 0004 from scratch
+Invoke-Alembic 'upgrade' 'head'                           # -> 0004 from scratch
 Assert-Smoke 'head'
 ```
 
@@ -396,14 +416,14 @@ Record the per-gate summary block **and** the exit code. `SKIPPED` is never a pa
 note which gate skipped and why (the Playwright smoke legitimately skips unless
 `-IncludeE2E` is given and browser binaries are installed).
 
-Expected backend figure at this commit: **666 passed**, of which **275** are the P3
+Expected backend figure at this commit: **688 passed**, of which **297** are the P3
 suite (`backend/tests/p3`). Verified by collection and by a full run on the
 reviewed commit, not estimated:
 
 | Suite | Tests |
 |---|---|
-| `backend/tests` (whole backend) | **666 passed** |
-| `backend/tests/p3` (P3 suite) | **275** |
+| `backend/tests` (whole backend) | **688 passed** |
+| `backend/tests/p3` (P3 suite) | **297** |
 | ├ `test_p3_verification.py` | 29 |
 | ├ `test_p3_extraction.py` | 26 |
 | ├ `test_p3_edge_cases.py` (R06–R09) | 24 |
@@ -413,7 +433,7 @@ reviewed commit, not estimated:
 | ├ `test_p3_r17_safety.py` (R17 OCR substitution + fail-closed) | 24 |
 | ├ `test_p3_r18_provenance.py` (R18 span exactness + bare label) | 14 |
 | ├ `test_p3_windows_findings.py` (R13–R16) | 47 |
-| ├ `test_windows_ocr_acceptance.py` (probe + handoff) | 17 |
+| ├ `test_windows_ocr_acceptance.py` (probe, W1 gate + handoff) | 39 |
 | ├ `test_p3_upload.py` | 12 |
 | ├ `test_p3_authorization.py` | 12 |
 | └ `test_p3_fixtures.py` (incl. CRLF portability) | 12 |
@@ -425,12 +445,16 @@ reviewed commit, not estimated:
 > `backend/tests/p2/test_p2_migration.py` (rebuild integrity, row preservation,
 > CHECK-constraint survival, downgrade refusal, downgrade round trip, plus the
 > populated P3 dependency graph and its downgrade/link cases), for +31 in
-> total; no pre-existing test was removed, renamed or skipped, and the
-> pre-existing 635 remain among the 666.
+> total as of Stage 5.1; no pre-existing test was removed, renamed or skipped, and
+> the pre-existing 635 remain among the 666 measured then. Stage 5.2 adds the 20
+> W1 cases above on top of that (see the Stage 5.2 note below).
 >
-> The P3 suite is unchanged at **275**: the three populated-graph cases live in
-> `backend/tests/p2/`, beside the other migration tests they extend, so only the
-> whole-backend figure moved in Stage 5.1 (663 -> 666).
+> **Stage 5.2 (current figures).** The R21 W1 gate added 22 cases to
+> `test_windows_ocr_acceptance.py` (17 -> 39), so the backend total moved
+> 666 -> **688** and the P3 suite 275 -> **297**. No pre-existing test was removed,
+> renamed or skipped, and the pre-existing 666 remain among the 688. Stage 5.1's
+> populated-graph cases stay in `backend/tests/p2/`, beside the migration tests
+> they extend.
 >
 > The R1-R8 R21 cases were written **RED first** and stayed RED until the
 > implementation landed. They are now all GREEN — R1/R1a/R1b/R2/R3 from the
@@ -493,6 +517,26 @@ evidence is bound to the exact commit it was produced from.
 | `GOLD-EX-11 OCR-produced 1O5` | an OCR'd `1O5` is flagged, never repaired to `105` | `GOLD-EX-11` |
 | `PDFIUM-01 rasterize` | `pypdfium2` renders page 0 (D-01) | D-01 |
 | `ING-02 OCR upload end-to-end` | a PNG uploaded over HTTP yields `extractor='tesseract'` in the **response**, the **stored fact** and the attempt log | `REQ-ING-02`, `REQ-VERIFY-01` |
+| `W1 R21 rejection: OCR value fact` | a real Tesseract scan of `report_a_glucose.txt` produces a `value` fact whose evidence extractor is `tesseract` | R21 W1 |
+| `W1 R21 rejection: doctor rejection` | the **assigned doctor** rejects that exact fact; one decision row is stored | R21 W1 |
+| `W1 R21 rejection: terminal failure` | stored `extraction_status='failed'` **and** `failure_code='measurement_rejected'` | R21 W1 |
+| `W1 R21 rejection: no Observation` | **no** Observation references the rejected document's facts — a real assertion here, because this fixture's 104 mg/dL glucose would otherwise map | R21 W1 |
+| `W1 R21 rejection: fact immutable` | the rejected fact keeps its `raw_text`, `normalized_value`, `quality_flags` and exactly **one** decision row | R21 W1 |
+| `W1 R21 rejection: VI-002 stays open` | `VI-002` is still `state='open'` after the rejection (D-14) | R21 W1 |
+| `W1 R21 rejection: re-decision refused` | a second decision answers `409 E_FACT_ALREADY_DECIDED` and appends **no** row | R21 W1 |
+
+`W1` is the only gate in this file that proves R21's rejection behaviour on the
+**real engine**. It is deliberately the mappable glucose fixture: with a hemoglobin
+source, "no Observation was promoted" would be true even if the gate were broken,
+so the assertion would be vacuous. The gate therefore checks its own fixture first
+and reports `FAIL` rather than a hollow `PASS` if it is swapped for an unsupported
+measurement.
+
+Every W1 requirement is its own row. One combined verdict would hide which of the
+seven requirements failed, which is how a partial result can be mistaken for a
+green one. If Tesseract produces no usable `value` fact, W1 reports **`NOT RUN`**
+with the extracted field list as evidence — it never fabricates a candidate, and no
+`NOT RUN` is ever recorded as a pass.
 
 `OCR-LIVE-01` is deliberately not a threshold: `GOLD_FIXTURES.md` §6.2 makes those
 numbers **measured observations**. Write them into
@@ -531,13 +575,30 @@ Copy this table into PR #10 (or attach the JSON) and fill it from the run above.
 | 13 | `GOLD-EX-11` OCR `1O5` | step 7 | | JSON gate entry |
 | 14 | `pypdfium2` rasterization | step 7 | | JSON gate entry |
 | 15 | OCR upload end-to-end provenance | step 7 | | JSON gate entry |
-| 16 | CI on the tested head | GitHub Actions | | run URL |
+| 16 | **W1** real-engine rejection: OCR `value` fact produced | step 7 | | JSON gate entry |
+| 17 | **W1** doctor rejection recorded | step 7 | | JSON gate entry |
+| 18 | **W1** terminal `failed` / `measurement_rejected` | step 7 | | JSON gate entry |
+| 19 | **W1** no Observation promoted from the rejected document | step 7 | | JSON gate entry |
+| 20 | **W1** rejected fact immutable, one decision row | step 7 | | JSON gate entry |
+| 21 | **W1** `VI-002` remains `open` (D-14) | step 7 | | JSON gate entry |
+| 22 | **W1** re-decision → `409 E_FACT_ALREADY_DECIDED`, no new row | step 7 | | JSON gate entry |
+| 23 | **`GOLD-EX-11`** | step 7 | **`FAIL` / NOT PROVEN — see §9** | JSON gate entry + raw OCR text |
+| 24 | CI on the tested head | GitHub Actions | | run URL |
+
+Row 23 is filled in **as a failure** unless the real engine genuinely stops
+producing the `1O5` reading. See §9: a preserved `GOLD-EX-11` failure is a
+**release blocker**, not a successful acceptance result.
 
 ---
 
 ## 9. Release blockers (any one blocks P3 acceptance)
 
-1. `FETCH_HEAD` ≠ the reviewed SHA, or the worktree is not clean/detached.
+1. The `origin` ref reported by `ls-remote` does not resolve to the reviewed SHA
+   (or that SHA is not an ancestor of the branch tip), the detached `HEAD` in the
+   acceptance worktree is not exactly the reviewed SHA, or the worktree is not
+   clean. §2.2 and §2.3 verify this as `ls-remote` → ancestry → `rev-parse`, then
+   a detached `HEAD` assertion; `FETCH_HEAD` is deliberately not trusted, because
+   it records whatever was fetched last rather than what was reviewed.
 2. A hash mismatch or a package that cannot be installed from the lockfiles on 3.12.
 3. `check_alembic_smoke` not `PASS` at `--state head` **or** at `--state p2`, or a
    downgrade that changes the P2 schema.
@@ -548,6 +609,38 @@ Copy this table into PR #10 (or attach the JSON) and fill it from the run above.
 7. `PDFIUM-01` not `PASS` (D-01 unproven on the target OS).
 8. `E:\DEPI\AI-Doctor-FollowUp-Agent\data\runtime\app.db` changed.
 9. CI not green on the exact tested head.
+10. Any **W1** row not `PASS` — including `NOT RUN`. R21's Windows requirement is
+    that the real engine's OCR `value` fact is rejected end to end; a `NOT RUN`
+    means that was not demonstrated, which blocks acceptance exactly like a `FAIL`
+    (only its cause differs: no usable candidate versus a wrong result).
+11. **`GOLD-EX-11` is not `PASS`.** This is a **release blocker**, not a known
+    deviation to be noted and accepted.
+
+### On `GOLD-EX-11` specifically
+
+`GOLD-EX-11` currently stands at **`FAIL / NOT PROVEN`**. The OCR reading of the
+committed `report_ocr_o_confusion.txt` source still yields `1O5`, and P3's
+acceptance criterion is that the pipeline flags it rather than repairing it to
+`105`. Until a real-engine run shows the flagged behaviour, this gate **blocks
+final P3 acceptance**.
+
+Three things this document deliberately does *not* do:
+
+- It does not treat "the failure is unchanged" as success. Preserving a known
+  failure across a release is evidence of **no regression**, not evidence of
+  acceptance. Those are different claims, and reporting the second from the first
+  would overstate the result.
+- It does not weaken the expectation, the source fixture, the OCR settings
+  (`preserve_interword_spaces` stays as configured) or the parser grammar to make
+  the gate green. A green result reached that way would not describe the pipeline
+  that ships.
+- It does not substitute the `GOLD-EX-05/06` passes, `ING-02` or `W1` for it. They
+  prove different properties: those show the engine reads a page and that a
+  rejection is terminal; `GOLD-EX-11` shows a corrupted reading is never silently
+  repaired into a plausible one.
+
+So a run where every other gate is green and `GOLD-EX-11` is `FAIL` is a run with
+**one release blocker**, and it must be reported that way.
 
 `OCR-LIVE-01` is a blocker only in the sense that it must be **recorded** — a low
 confidence number is data, not a defect.
@@ -568,6 +661,13 @@ Get-Item 'E:\DEPI\AI-Doctor-FollowUp-Agent\data\runtime\app.db' |
 
 ## 11. What is still open after a green run
 
+A run in which every gate is green still leaves these open — a green run is
+evidence, not acceptance:
+
+- **`GOLD-EX-11` remains a P3 acceptance blocker** unless it genuinely turns
+  `PASS` (see §9). If it is still `FAIL / NOT PROVEN` after your run, the run has
+  not established P3 acceptance, however many other rows are green. Report it as a
+  blocker; do not carry it forward as a known deviation.
 - Owner decision **D-14** (recorded in `docs/roadmap/PHASE_PROGRESS.md`) is applied
   to `DEMO_REVIEW_RULES.md` §4/§6.1: `VI-002` counts **active** candidates only,
   excluding a superseded original with valid `corrected_from_fact_id` lineage.
