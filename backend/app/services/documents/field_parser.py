@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from app.core.enums import DocumentUnit, ExtractionPath, FactField, QualityFlag
 from app.services.documents.text_extraction import PageText
@@ -42,6 +43,10 @@ _TEST_VALUE = re.compile(
 _REFERENCE = re.compile(
     r"reference\s*range\s*:\s*(?P<reference>[^\n]+?)\s*$", re.IGNORECASE | re.MULTILINE
 )
+
+#: A bare ``Value:`` label, used only to detect a measurement the lab-line
+#: grammar above could not attribute (P3-R17).
+_VALUE_LABEL = re.compile(r"value\s*:", re.IGNORECASE)
 
 #: ``Ref: DEMO-A-001`` — the synthetic patient reference printed in the report
 #: header. Matched strictly to the demo reference shape so a stray ``Ref:`` in
@@ -326,6 +331,66 @@ def _reference_fact(page: PageText) -> list[CandidateFact]:
     ]
 
 
+def _unattributed_value_facts(
+    page: PageText, matched_spans: list[tuple[int, int]]
+) -> list[CandidateFact]:
+    """Return a ``page_missing``-flagged value candidate for an unread measurement.
+
+    **P3-R17.** The lab-line grammar (``_TEST_VALUE``) requires a two-space column
+    gap, because that is what distinguishes a lab row from prose. When OCR
+    collapses the gap — or damages the ``Value:`` label — the line does not match
+    and *nothing at all* is produced for it. The engine's plausible value was then
+    invisible to every downstream blocker, because each of those is derived from a
+    fact, and a dropped line leaves no fact. Measured consequence on the owner's
+    real Windows OCR at ``1b17a9a``: a document whose image printed a measurement
+    could reach ``verified`` after only its date and reference range were
+    approved.
+
+    This function keeps the line as evidence instead of discarding it. The
+    candidate carries:
+
+    * ``field_name=value`` and ``normalized_value=None`` — no number is invented;
+    * ``raw_text`` = the literal token after the label (bounded), so the doctor
+      sees exactly what the page produced;
+    * ``QualityFlag.PAGE_MISSING`` — the closed-enum flag documented as *"OCR
+      yielded nothing usable for the page / blocking if the field was expected
+      there"*. That documentation is exactly this situation, and the flag was
+      previously unreachable dead code.
+
+    It is emitted only when the page carries a ``Value:`` label that the lab-line
+    grammar did not already attribute, so a report that never declared a
+    measurement (title and reference range only) is left genuinely document-only.
+    Every golden fixture has zero such lines, so this changes no existing parse.
+    """
+    facts: list[CandidateFact] = []
+    for label in _VALUE_LABEL.finditer(page.text):
+        if any(start <= label.start() < end for start, end in matched_spans):
+            continue
+        line_end = page.text.find("\n", label.end())
+        line_end = len(page.text) if line_end < 0 else line_end
+        token = page.text[label.end() : line_end].strip()
+        if not token:
+            # A bare label with nothing after it carries no value to preserve.
+            continue
+        facts.append(
+            CandidateFact(
+                field_name=FactField.VALUE,
+                raw_text=token[:120],
+                # Never repaired, never guessed: the page's own characters remain
+                # the only evidence and no numeric meaning is asserted.
+                normalized_value=None,
+                unit=None,
+                page_index=page.page_index,
+                char_start=label.end(),
+                char_end=min(label.end() + len(token), line_end),
+                quality_flags=(QualityFlag.PAGE_MISSING,),
+                confidence=page.confidence,
+                extractor=page.extractor,
+            )
+        )
+    return facts
+
+
 def parse_pages(pages: list[PageText]) -> ParseResult:
     """Parse every page and return the full candidate set.
 
@@ -352,9 +417,11 @@ def parse_pages(pages: list[PageText]) -> ParseResult:
             if seen not in result.patient_refs_seen:
                 result.patient_refs_seen = (*result.patient_refs_seen, seen)
 
+        matched_spans = [(m.start(), m.end()) for m in _TEST_VALUE.finditer(page.text)]
         for candidate in (
             *_date_fact(page),
             *_test_value_facts(page),
+            *_unattributed_value_facts(page, matched_spans),
             *_reference_fact(page),
         ):
             if len(result.facts) >= MAX_FACTS:
@@ -380,6 +447,58 @@ def _finalize_identity(result: ParseResult) -> None:
         result.document_patient_ref = None
 
 
+#: ``YYYY-MM-DD`` shape, shared by the parser and by correction validation so the
+#: two cannot drift apart into different date grammars.
+_ISO_DATE_SHAPE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def normalize_corrected_value(field_name: str, value: str) -> str | None:
+    """Return the admissible canonical form of a doctor-supplied correction.
+
+    **P3-R17 (P1).** ``VerifyRequest.corrected_value`` is a bounded string and the
+    route only refused an empty one, so ``'   '``, ``'abc'`` and ``'nan'`` were all
+    accepted as verified measurements. Validation is deliberately **per field**
+    rather than one global numeric rule, because a date and a reference range are
+    not numbers:
+
+    * ``value`` -> must survive the parser's own :func:`_normalize_number`, which
+      only unifies the decimal separator and refuses everything else. The doctor's
+      correction goes through the same gate as the extractor's reading, so a
+      correction cannot assert a value the parser itself would reject.
+    * ``unit`` -> must be in the closed :class:`DocumentUnit` list.
+    * ``report_date`` -> ``YYYY-MM-DD``; the calendar validity is checked here
+      because ``2026-13-45`` is well shaped and still not a date.
+    * ``test_name`` / ``reference_text`` -> free text, but must not be blank and
+      must not contain control characters.
+
+    Returns ``None`` when the input is inadmissible. It never repairs: repairing
+    is exactly what ``_normalize_number`` refuses to do for ``1O5``.
+    """
+    if field_name == FactField.VALUE.value:
+        return _normalize_number(value)
+    if field_name == FactField.UNIT.value:
+        try:
+            return DocumentUnit(value.strip()).value
+        except ValueError:
+            return None
+    if field_name == FactField.REPORT_DATE.value:
+        candidate = value.strip()
+        if not _ISO_DATE_SHAPE.match(candidate):
+            return None
+        try:
+            datetime.strptime(candidate, "%Y-%m-%d")
+        except ValueError:
+            return None
+        return candidate
+    # ``test_name`` / ``reference_text``: human text, still bounded and printable.
+    candidate = value.strip()
+    if not candidate:
+        return None
+    if any(ord(character) < 32 or ord(character) == 127 for character in candidate):
+        return None
+    return candidate
+
+
 def page_text_for_span(pages: list[PageText], page_index: int) -> str:
     """Return the extracted text a span addresses, for re-resolution."""
     for page in pages:
@@ -401,6 +520,7 @@ __all__ = [
     "MAX_FACTS",
     "CandidateFact",
     "ParseResult",
+    "normalize_corrected_value",
     "page_text_for_span",
     "parse_pages",
     "span_is_resolvable",

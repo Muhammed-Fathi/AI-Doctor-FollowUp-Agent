@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.enums import ExtractionPath
+from app.core.enums import ExtractionPath, QualityFlag
 from app.services.documents.field_parser import parse_pages
 from app.services.documents.text_extraction import PageText
 
@@ -609,16 +609,28 @@ def test_source_image_and_ocr_output_disagree_and_that_is_recorded():
     assert "1O5" not in OWNER_OCR_LINE, "the engine transcribed the O as a zero"
 
 
-def test_owner_ocr_text_yields_no_value_fact():
-    """The owner's damaged line must not produce an accepted value fact.
+def test_owner_ocr_text_yields_no_accepted_value_fact():
+    """The owner's damaged line must not produce an *accepted* value fact.
 
     ``Gluccse`` and ``mgldl.`` are mangled, and the conservative pattern requires
-    ``test``/``value`` labels it can trust. The safe outcome is *no* fact, not a guessed
-    one — the document then routes to human review rather than silently using 105.
+    ``test``/``value`` labels it can trust. The safe outcome is no accepted value,
+    not a guessed one — the document routes to human review rather than silently
+    using 105.
+
+    **R17 amendment.** This test previously asserted ``facts == []``. That was
+    the defect, not the protection: dropping the line entirely meant the
+    printed measurement left no evidence behind, so no blocker could be raised
+    against it and the document could reach ``verified`` on its date alone. The
+    parser now keeps the line as an unread candidate (``page_missing``,
+    ``normalized_value=None``). The property that protects the patient is
+    unchanged and is asserted below: **no number is ever accepted from it.**
     """
     facts = _value_facts(OWNER_OCR_LINE)
 
-    assert facts == [], "a damaged line must not be attributed as a verified value"
+    assert len(facts) == 1, "the damaged line is retained as evidence, not discarded"
+    assert facts[0].normalized_value is None, "no number may be inferred from a damaged line"
+    assert facts[0].quality_flags == (QualityFlag.PAGE_MISSING,)
+
     # And nothing anywhere claimed 105 from this text.
     page = PageText(
         page_index=0, text=OWNER_OCR_LINE, extractor=ExtractionPath.TESSERACT, confidence=0.6

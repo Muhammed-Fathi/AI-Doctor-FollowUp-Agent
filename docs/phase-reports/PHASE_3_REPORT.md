@@ -1819,8 +1819,75 @@ another:
   `engine_substituted_plausible_value`
 * **Parser output** — `flags`, `normalized_values`, `raw_tokens`, `parser_refused_token`,
   `application_substituted_value: false`
-* **Review status** — `human_review_required: true`, `human_review_reason`,
+* **Review status** — `human_review_required`, `human_review_reason`,
   `clinical_accuracy_claimed: false`
+
+**R17 correction:** `human_review_required` was a hard-coded `true` in this payload. It
+is now *derived* from `collect_flag_issues()`, the same function the HTTP path uses, and
+is accompanied by `human_review_required_basis` and
+`human_review_blocking_issues` — see §V.15.
+
+## V.15 R17 — OCR substitution and fail-closed verification
+
+Owner ruling [`5915830616`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#pullrequestreview-5915830616)
+ordered safety hardening before OCR tuning. Implemented P0 and P1; P2 is design-only;
+P3 is blocked on the absent engine.
+
+### The defect that justified the ruling
+
+On the owner's real Windows OCR, a document whose image printed a measurement could be
+pushed to **`verified`** by approving only its date and reference range, because
+`_recompute_document_status` required "every existing fact decided and one verified" and
+never required a measurement to exist. The `Value:` line had been dropped by the parser
+(one space where it required two), so there was no fact to flag and no blocker to raise.
+
+### The fix, and why it needed no new schema
+
+`QualityFlag.PAGE_MISSING` was already documented in `EXTRACTION_PROVENANCE.md` §4 as
+*"OCR yielded nothing usable for the page / blocking if the field was expected there"*,
+already in `mapping.BLOCKING_FLAGS`, and **produced by nothing** — dead code. That is
+exactly the R17 situation, so the fix revives it rather than adding a flag, column,
+migration or reason code:
+
+| Layer | Change |
+|---|---|
+| `field_parser._unattributed_value_facts()` | keeps a `Value:` line the lab-line grammar could not attribute as a `value` candidate: `normalized_value=None`, `raw_text` = literal token, flag `page_missing` |
+| `issues.collect_flag_issues()` | maps `page_missing` on a `value` fact → `VI-005` / `value_unreadable` (the documented consequence) |
+| `verification._unread_measurement_blocks_verification()` | `verified` is refused while a declared measurement has never been read; clears only when a verified value fact with a number exists |
+
+No existing parse changes: all 12 committed fixtures have zero unmatched `Value:` lines.
+
+### P1 — correction and lifecycle
+
+| Defect | Fix |
+|---|---|
+| `'   '`, `'abc'`, `'nan'`, `'inf'`, `'10\n5'` accepted as verified measurements | `normalize_corrected_value()` — per field: number / closed unit list / calendar-valid ISO date / non-blank text |
+| Unsupported corrected unit accepted | same |
+| `VI-005` stayed open forever after a valid correction | flag issues no longer derived from superseded originals (the D-14 defect one layer over) |
+| `human_review_required` was a literal | derived from `collect_flag_issues()` |
+
+Validation runs **after** the identity guard, deliberately: validating in the route made a
+wrong-patient document answer `400 malformed date` instead of `409 E_VI_004_UNRESOLVED`,
+hiding the real refusal reason. The existing R02 test caught that in my first attempt.
+
+### Evidence
+
+* `backend/tests/p3/test_p3_r17_safety.py` — **24 tests**, 14 red against `1b17a9a`.
+* Full suite **621 passed**; P3 **238**. `ruff` clean; 102 files formatted.
+* Gate re-run with a **scripted** engine on the owner's exact bytes: **FAIL** /
+  `diagnosis=substituted`, `human_review_required=True` from `['VI-005']`. Preserved-token
+  variant: **PASS** / `preserved_and_refused`.
+* `GOLD-EX-11` **unchanged and still FAIL/NOT PROVEN**.
+
+### Not done, and why
+
+* **Real Tesseract: NOT RUN.** No binary in the sandbox. Recognition fidelity is
+  unmeasured; `preserve_interword_spaces` is untested.
+* **P2 (durable OCR text): design only** — needs a schema + endpoint approval.
+  `docs/phase-reports/P3_R17_P2_OCR_PROVENANCE_DESIGN.md`.
+* A document with **zero** extracted facts still reports an empty issue list (no `Value:`
+  label, so `page_missing` cannot fire). Needs a governance decision.
+* A destroyed `Value:` label remains undetectable. Stated, not hidden.
 
 ## V.7 Status
 

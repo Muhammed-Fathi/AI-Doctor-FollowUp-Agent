@@ -31,17 +31,20 @@ from app.core.enums import (
     DocumentStatus,
     FactField,
     FactVerificationStatus,
+    QualityFlag,
     ValidationState,
     VerificationDecision,
 )
 from app.core.errors import (
     FACT_ALREADY_DECIDED_DETAIL,
     VI_004_UNRESOLVED_DETAIL,
+    ApiError,
     ErrorCode,
     document_error,
 )
 from app.db.models import Document, ExtractedFact, FactVerification, Observation
 from app.services.documents import quality
+from app.services.documents.field_parser import normalize_corrected_value
 from app.services.documents.mapping import (
     MappingDecision,
     VerifiedFactView,
@@ -51,6 +54,14 @@ from app.services.documents.mapping import (
 
 #: Neutral detail reused for every "already decided" case (D-11).
 _ALREADY_DECIDED = FACT_ALREADY_DECIDED_DETAIL
+
+#: Neutral detail for a correction that is not admissible for its own field.
+#: Says what is wrong without quoting the document or the rejected input.
+_INADMISSIBLE_CORRECTION = (
+    "A corrected value must be admissible for the field being corrected "
+    "(a number for a measurement, an ISO date for a report date, "
+    "a documented unit for a unit)."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,11 +134,55 @@ def _blocking_facts_remaining(db: Session, document_id: str) -> int:
     return len(list(rows))
 
 
+def _unread_measurement_blocks_verification(db: Session, document_id: str) -> bool:
+    """Return ``True`` when a measurement was declared but never successfully read.
+
+    **P3-R17.** ``verified`` used to be reachable from "every fact row is decided
+    and at least one is verified". That is wrong for a document whose ``Value:``
+    line the parser could not attribute: the date and reference range could be
+    approved and the document became ``verified`` carrying no measurement at all.
+    Measured on the owner's real Windows OCR at ``1b17a9a``.
+
+    The parser now preserves such a line as a ``value`` fact flagged
+    ``page_missing`` (``field_parser._unattributed_value_facts``), so the
+    declaration survives in the database and this rule can be evaluated on every
+    later read without storing page text.
+
+    The document stops being blocked once a **verified value fact carrying a
+    normalized number** exists — which is exactly what a doctor correction
+    produces. Rejecting or acknowledging the unread line is not enough, because
+    the measurement itself is still unknown.
+
+    A superseded original is ignored: after a correction the history row keeps
+    its flag for audit, but it no longer describes the document's current state.
+    """
+    facts = list(
+        db.execute(select(ExtractedFact).where(ExtractedFact.document_id == document_id)).scalars()
+    )
+    superseded = quality.superseded_fact_ids(facts)
+    declared = [
+        fact
+        for fact in facts
+        if fact.field_name == FactField.VALUE.value
+        and fact.id not in superseded
+        and QualityFlag.PAGE_MISSING.value in quality.decode_flags(fact.quality_flags)
+    ]
+    if not declared:
+        return False
+    return not any(
+        fact.field_name == FactField.VALUE.value
+        and fact.verification_status == FactVerificationStatus.VERIFIED.value
+        and fact.normalized_value is not None
+        for fact in facts
+    )
+
+
 def _recompute_document_status(db: Session, document: Document) -> str:
     """Derive and store the document status from its facts.
 
-    ``verified`` requires every blocking fact decided **and** at least one fact
-    verified. A document whose facts are all rejected becomes ``failed``.
+    ``verified`` requires every blocking fact decided, at least one fact verified,
+    **and** no declared-but-unread measurement (R17). A document whose facts are
+    all rejected becomes ``failed``.
     """
     facts = list(
         db.execute(select(ExtractedFact).where(ExtractedFact.document_id == document.id)).scalars()
@@ -144,6 +199,12 @@ def _recompute_document_status(db: Session, document: Document) -> str:
     if all(status == FactVerificationStatus.REJECTED.value for status in statuses):
         document.extraction_status = DocumentStatus.FAILED.value
         document.failure_code = "all_facts_rejected"
+        return document.extraction_status
+
+    if _unread_measurement_blocks_verification(db, document.id):
+        # Fail closed: the document declares a measurement nobody has read.
+        # ``VI-005`` stays open, so the doctor still has an actionable blocker.
+        document.extraction_status = DocumentStatus.NEEDS_VERIFICATION.value
         return document.extraction_status
 
     document.extraction_status = DocumentStatus.VERIFIED.value
@@ -331,6 +392,34 @@ def record_decision(
     if fact.verification_status != FactVerificationStatus.PENDING.value:
         # Defensive: status and log must never disagree.
         raise document_error(ErrorCode.FACT_ALREADY_DECIDED, _ALREADY_DECIDED)
+
+    # **P3-R17 (P1).** A correction is a doctor's claim about what the page says,
+    # so it is held to the same admissibility as the extractor's own reading —
+    # per field. Without this, ``'   '`` or ``'abc'`` was recorded as a *verified*
+    # measurement: doctor-verified evidence with no numeric meaning behind it.
+    #
+    # Deliberately evaluated **after** the identity guard and the append-only
+    # guard. Precedence is part of the contract: a document that may belong to
+    # another patient must answer ``409 E_VI_004_UNRESOLVED``, not a cosmetic
+    # "your date is malformed" 400 that hides the real reason it is refused
+    # (R02, preserved by ``test_p3_r02_corrected_fact_cannot_bypass_the_identity_blocker``).
+    if decision is VerificationDecision.CORRECTED:
+        correctable = True
+        normalized = normalize_corrected_value(fact.field_name, corrected_value or "")
+        if normalized is None:
+            correctable = False
+        if correctable and corrected_unit is not None:
+            unit = normalize_corrected_value(FactField.UNIT.value, corrected_unit)
+            if unit is None:
+                correctable = False
+            else:
+                corrected_unit = unit
+        if not correctable:
+            # ``E_VALIDATION`` is the contract's general 400 (§4), not a
+            # document-specific code, so it is raised directly — the same way the
+            # route raises it for a missing ``corrected_value``.
+            raise ApiError(400, ErrorCode.VALIDATION, _INADMISSIBLE_CORRECTION)
+        corrected_value = normalized
 
     decided_at = format_utc(utc_now())
     previous_value = fact.normalized_value

@@ -404,6 +404,7 @@ def gate_ocr_corruption(results: list[Result], *, engine_present: bool) -> None:
     import generate_p3_fixtures as fixtures
     from app.core.enums import ExtractionPath
     from app.services.documents.field_parser import parse_pages
+    from app.services.documents.issues import collect_flag_issues
     from app.services.documents.ocr import run_ocr
     from app.services.documents.text_extraction import PageText
 
@@ -423,6 +424,21 @@ def gate_ocr_corruption(results: list[Result], *, engine_present: bool) -> None:
     flags = {flag.value for fact in value_facts for flag in fact.quality_flags}
     normalized = [fact.normalized_value for fact in value_facts if fact.normalized_value]
     raw_tokens = [fact.raw_text for fact in value_facts]
+
+    # **R17:** whether a human must review this value is a property of the real
+    # blocker logic, not a sentence written into the payload. The previous
+    # The field used to be a hard-coded true, emitted even when the gate had
+    # failed to a reading nobody was asked about. These drafts are produced
+    # by the same function the HTTP path uses (`intake` -> `quality.compute_drafts`),
+    # so the flag cannot drift away from the application's behaviour.
+    flag_drafts = collect_flag_issues(
+        [
+            (index, fact.field_name.value, tuple(flag.value for flag in fact.quality_flags))
+            for index, fact in enumerate(parsed.facts)
+        ]
+    )
+    blocking_issue_types = sorted({draft.issue_type.value for draft in flag_drafts})
+    human_review_required = bool(blocking_issue_types)
 
     # What the ENGINE returned, independent of what the parser made of it. The source
     # image contains ``1O5``; the only question is whether the engine preserved it.
@@ -487,11 +503,17 @@ def gate_ocr_corruption(results: list[Result], *, engine_present: bool) -> None:
             status,
             f"{reason}; value flags={sorted(flags)} normalized={normalized} raw={raw_tokens}",
             {
-                # 3. whether a human must look at this value
-                "human_review_required": True,
+                # 3. whether a human must look at this value — DERIVED, not asserted:
+                # it is true only when the real blocker logic raised a blocking VI-*
+                # for these parsed facts (R17).
+                "human_review_required": human_review_required,
+                "human_review_required_basis": "persisted-blocker-logic:collect_flag_issues",
+                "human_review_blocking_issues": blocking_issue_types,
                 "human_review_reason": (
-                    "the OCR reading is ambiguous or substituted, so the value is never "
-                    "used without a doctor's decision"
+                    "a blocking verification issue is raised for these parsed facts, so "
+                    "the value cannot be used without a doctor's decision"
+                    if human_review_required
+                    else "no blocking issue was raised for these parsed facts"
                 ),
                 "diagnosis": (
                     "preserved_and_refused"

@@ -373,9 +373,18 @@ def compute_drafts(
     if identity is not None:
         drafts.append(identity)
 
+    # **R17:** a flag on a *superseded* original describes a reading the doctor
+    # has already replaced. Reading it kept ``VI-005`` (and every other
+    # flag-derived blocker) open forever on a document that was fully resolved —
+    # the same permanent-blocker defect D-14 fixed for ``VI-002``. The history row
+    # keeps its flags for audit; it simply stops generating blockers.
+    # A plain rejection is **not** superseded, so its flag still blocks, exactly
+    # as ``DEMO_REVIEW_RULES.md`` §4 requires.
+    superseded_for_flags = superseded_fact_ids(facts)
     flag_input = [
         (index, fact.field_name, decode_flags(fact.quality_flags))
         for index, fact in enumerate(facts)
+        if fact.id not in superseded_for_flags
     ]
     drafts.extend(collect_flag_issues(flag_input))
 
@@ -394,12 +403,11 @@ def compute_drafts(
     # are not yet verified." open forever on a document that is fully decided —
     # a permanent blocker no doctor action could ever clear. A plain rejection
     # still counts, exactly as ``DEMO_REVIEW_RULES.md`` §4/§6.1 specifies.
-    superseded = superseded_fact_ids(facts)
     pending = [
         (index, fact.verification_status)
         for index, fact in enumerate(facts)
         if fact.verification_status != FactVerificationStatus.VERIFIED.value
-        and fact.id not in superseded
+        and fact.id not in superseded_for_flags
     ]
     unverified = collect_unverified_issue(pending)
     # ``VI-002`` has two documented reasons: the generic ``fact_unverified`` and

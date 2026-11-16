@@ -130,6 +130,14 @@ def collect_flag_issues(
             by_type[IssueType.VI_003].append(index)
         if QualityFlag.UNPARSEABLE_VALUE in flags or QualityFlag.LOW_CONFIDENCE in flags:
             by_type[IssueType.VI_005].append(index)
+        # ``page_missing`` is the documented flag for "OCR yielded nothing usable
+        # for the page / blocking if the field was expected there"
+        # (``EXTRACTION_PROVENANCE.md`` §4). P3-R17 makes it reachable: the parser
+        # emits it for a ``Value:`` line it could not attribute, so a measurement
+        # that was printed but never parsed becomes a blocking ``VI-005`` instead
+        # of vanishing. Without this mapping the flag is dead code.
+        if QualityFlag.PAGE_MISSING in flags and field_name == FactField.VALUE.value:
+            by_type[IssueType.VI_005].append(index)
         if QualityFlag.SOURCE_CONFLICT in flags:
             by_type[IssueType.VI_006].append(index)
 
