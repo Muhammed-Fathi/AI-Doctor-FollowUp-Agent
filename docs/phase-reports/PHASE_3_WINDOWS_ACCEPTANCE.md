@@ -10,7 +10,7 @@ owner executes it and records the output.
 | Main checkout (**never** mutated by this procedure) | `E:\DEPI\AI-Doctor-FollowUp-Agent` |
 | Disposable acceptance worktree | `E:\DEPI\P3-Acceptance` (or `P3-Acceptance-<short-sha>` if taken — §2.1) |
 | Branch (remote-only) | `arena/f80e1923-ai-doctor-followup-agent` — the **R21 implementation**, not PR #10 |
-| Pinned commit | `e7d73b597870ef4d38b214a27d68d8b00ca45a61` (+ this Stage 5.1 commit, §2.0) |
+| Pinned commit | the SHA the reviewer names for this Stage 5.1 correction (§2.0) |
 | PR | [#10](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10) — draft, open, **not** this branch |
 | Phase | **`IN_REVIEW`** — no PASS, no merge, no P4/P5 |
 
@@ -77,20 +77,43 @@ out, and the main checkout is never touched.
 
 ### 2.0 The exact SHA you must paste
 
-The reviewer-approved implementation commit for this run is:
+`$ApprovedSha` below is a placeholder on purpose. **Fill it with the SHA the
+reviewer names when approving this Stage 5.1 correction** — that is the only
+correct source. Two rules make it safe:
 
+1. **It is the reviewer's SHA, never the branch tip.** The branch may have moved
+   since review. Binding the evidence to a commit a human actually reviewed is the
+   entire point of the check.
+2. **It must be a commit that carries this document.** The expected figures in §6
+   and the populated-graph regression only exist from the Stage 5.1 commit onward.
+   A commit cannot name its own hash, so this file cannot quote it — but the
+   checkout can tell you whether you are holding the right pairing (below).
+
+Do **not** paste `18a53b2` (PR #10) or `867ab12` (`main`); neither contains R21.
+
+#### Verify the document and the code are the same commit
+
+The expected test count travels with the commit. `e7d73b5` — the implementation
+commit that was reviewed — carries the **pre**-Stage-5.1 handoff, which expects
+**663** passed (P3: 275). This revision expects **666** (P3: 275, unchanged). So
+pinning the older SHA while reading this table would report a false FAIL on a run
+that actually succeeded.
+
+Let the checkout settle it, before recording any number:
+
+```powershell
+# Which document did the pinned commit actually check out?
+Select-String -Path (Join-Path $env:P3_ACCEPT 'docs\phase-reports\PHASE_3_WINDOWS_ACCEPTANCE.md') `
+               -Pattern 'passed\*\*, of which'
+
+# And what does that checkout actually collect?
+Set-Location $env:P3_ACCEPT
+& $Py -m pytest backend/tests --collect-only -q 2>&1 | Select-Object -Last 2
 ```
-e7d73b597870ef4d38b214a27d68d8b00ca45a61
-```
 
-That is the R21 Stages 3-5 implementation. **If this Stage 5.1 correction has been
-reviewed and a newer SHA given to you in the review, paste *that* SHA instead** —
-the rule is *the SHA the reviewer named*, never "whatever the branch points at
-now". Pasting the branch tip is wrong by construction: the branch may have moved
-since review, and the whole point of this check is to bind the Windows evidence to
-a commit a human actually reviewed.
-
-Do not paste `18a53b2` (PR #10) or `867ab12` (`main`); neither contains R21.
+If the figure the document states and the figure pytest collects disagree, **stop**.
+You are holding one commit's procedure against another commit's code, and no
+Windows result from that combination is usable. Re-pin and start §2 again.
 
 ### 2.1 Handle an existing acceptance worktree without destroying it
 
@@ -101,7 +124,7 @@ there, and moves to a new destination instead.
 ```powershell
 $Main        = 'E:\DEPI\AI-Doctor-FollowUp-Agent'
 $Branch      = 'refs/heads/arena/f80e1923-ai-doctor-followup-agent'
-$ApprovedSha = 'e7d73b597870ef4d38b214a27d68d8b00ca45a61'   # see §2.0
+$ApprovedSha = '<PASTE THE REVIEWED STAGE 5.1 SHA HERE>'   # see §2.0
 $Base        = 'E:\DEPI\P3-Acceptance'
 $Accept      = $Base
 
