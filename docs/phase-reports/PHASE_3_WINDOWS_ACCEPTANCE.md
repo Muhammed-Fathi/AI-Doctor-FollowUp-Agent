@@ -416,14 +416,14 @@ Record the per-gate summary block **and** the exit code. `SKIPPED` is never a pa
 note which gate skipped and why (the Playwright smoke legitimately skips unless
 `-IncludeE2E` is given and browser binaries are installed).
 
-Expected backend figure at this commit: **688 passed**, of which **297** are the P3
+Expected backend figure at this commit: **702 passed**, of which **311** are the P3
 suite (`backend/tests/p3`). Verified by collection and by a full run on the
 reviewed commit, not estimated:
 
 | Suite | Tests |
 |---|---|
-| `backend/tests` (whole backend) | **688 passed** |
-| `backend/tests/p3` (P3 suite) | **297** |
+| `backend/tests` (whole backend) | **702 passed** |
+| `backend/tests/p3` (P3 suite) | **311** |
 | ├ `test_p3_verification.py` | 29 |
 | ├ `test_p3_extraction.py` | 26 |
 | ├ `test_p3_edge_cases.py` (R06–R09) | 24 |
@@ -433,7 +433,7 @@ reviewed commit, not estimated:
 | ├ `test_p3_r17_safety.py` (R17 OCR substitution + fail-closed) | 24 |
 | ├ `test_p3_r18_provenance.py` (R18 span exactness + bare label) | 14 |
 | ├ `test_p3_windows_findings.py` (R13–R16) | 47 |
-| ├ `test_windows_ocr_acceptance.py` (probe, W1 gate + handoff) | 39 |
+| ├ `test_windows_ocr_acceptance.py` (probe, W1 gate + handoff) | 53 |
 | ├ `test_p3_upload.py` | 12 |
 | ├ `test_p3_authorization.py` | 12 |
 | └ `test_p3_fixtures.py` (incl. CRLF portability) | 12 |
@@ -446,8 +446,9 @@ reviewed commit, not estimated:
 > CHECK-constraint survival, downgrade refusal, downgrade round trip, plus the
 > populated P3 dependency graph and its downgrade/link cases), for +31 in
 > total as of Stage 5.1; no pre-existing test was removed, renamed or skipped, and
-> the pre-existing 635 remain among the 666 measured then. Stage 5.2 adds the 20
-> W1 cases above on top of that (see the Stage 5.2 note below).
+> the pre-existing 635 remain among the 666 measured then. Stage 5.2 adds the 22
+> W1 cases above on top of that, and Stage 5.2a adds 14 W1 plumbing, validity
+> and teardown regressions (see the Stage 5.2 / 5.2a notes below).
 >
 > **Stage 5.2 (current figures).** The R21 W1 gate added 22 cases to
 > `test_windows_ocr_acceptance.py` (17 -> 39), so the backend total moved
@@ -455,6 +456,16 @@ reviewed commit, not estimated:
 > renamed or skipped, and the pre-existing 666 remain among the 688. Stage 5.1's
 > populated-graph cases stay in `backend/tests/p2/`, beside the migration tests
 > they extend.
+>
+> **Stage 5.2a (current figures).** Review follow-up on the W1 probe added 14
+> cases to `test_windows_ocr_acceptance.py` (39 -> 53), moving the backend total
+> 688 -> **702** and the P3 suite 297 -> **311**: end-to-end `_w1_run`
+> plumbing with simulated OCR, a positive mapping control proving the same
+> `report_a_glucose.txt` fixture promotes a `verified_document` glucose
+> `Observation` when verified, unmappable/damaged OCR negative cases (`NOT RUN`,
+> never vacuous `PASS`), mid-setup engine disposal and `main()` duplicate-row
+> protection. These simulated-OCR tests prove W1's wiring only and are never
+> Windows or real-Tesseract evidence.
 >
 > The R1-R8 R21 cases were written **RED first** and stayed RED until the
 > implementation landed. They are now all GREEN — R1/R1a/R1b/R2/R3 from the
@@ -517,7 +528,7 @@ evidence is bound to the exact commit it was produced from.
 | `GOLD-EX-11 OCR-produced 1O5` | an OCR'd `1O5` is flagged, never repaired to `105` | `GOLD-EX-11` |
 | `PDFIUM-01 rasterize` | `pypdfium2` renders page 0 (D-01) | D-01 |
 | `ING-02 OCR upload end-to-end` | a PNG uploaded over HTTP yields `extractor='tesseract'` in the **response**, the **stored fact** and the attempt log | `REQ-ING-02`, `REQ-VERIFY-01` |
-| `W1 R21 rejection: OCR value fact` | a real Tesseract scan of `report_a_glucose.txt` produces a `value` fact whose evidence extractor is `tesseract` | R21 W1 |
+| `W1 R21 rejection: OCR value fact` | a real Tesseract scan of `report_a_glucose.txt` produces a mappable numeric `value` fact (supported unit, `extractor='tesseract'`) and a mapping-eligible document | R21 W1 |
 | `W1 R21 rejection: doctor rejection` | the **assigned doctor** rejects that exact fact; one decision row is stored | R21 W1 |
 | `W1 R21 rejection: terminal failure` | stored `extraction_status='failed'` **and** `failure_code='measurement_rejected'` | R21 W1 |
 | `W1 R21 rejection: no Observation` | **no** Observation references the rejected document's facts — a real assertion here, because this fixture's 104 mg/dL glucose would otherwise map | R21 W1 |

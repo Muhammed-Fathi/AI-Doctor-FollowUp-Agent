@@ -18,11 +18,13 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 
 from app.core.paths import REPO_ROOT
 
@@ -261,6 +263,7 @@ def _w1_pass_evidence():
     candidate = {
         "fact_id": "fact-value",
         "raw_text": "104",
+        "normalized_value": "104",
         "unit": "mg/dL",
         "confidence": 0.88,
         "verification_status": "pending",
@@ -476,16 +479,525 @@ def test_w1_reports_not_run_without_an_engine(capsys):
 
 
 def test_w1_rejects_an_unusable_candidate_that_is_not_tesseract():
-    """A ``value`` fact from any other extractor is not a real-engine candidate."""
+    """Only a tesseract ``value`` fact with a finite positive number and unit qualifies."""
     module = _module()
     facts = [
-        {"field_name": "value", "raw_text": "104", "evidence": {"extractor": "pypdf"}},
-        {"field_name": "value", "raw_text": "   ", "evidence": {"extractor": "tesseract"}},
+        {
+            "field_name": "value",
+            "raw_text": "104",
+            "normalized_value": "104",
+            "unit": "mg/dL",
+            "quality_flags": [],
+            "evidence": {"extractor": "pypdf"},
+        },
+        {
+            "field_name": "value",
+            "raw_text": "   ",
+            "normalized_value": "104",
+            "unit": "mg/dL",
+            "quality_flags": [],
+            "evidence": {"extractor": "tesseract"},
+        },
+        {
+            "field_name": "value",
+            "raw_text": "1O4",
+            "normalized_value": None,
+            "unit": "mg/dL",
+            "quality_flags": ["unparseable_value"],
+            "evidence": {"extractor": "tesseract"},
+        },
+        {
+            "field_name": "value",
+            "raw_text": "104",
+            "normalized_value": "104",
+            "unit": "g/dL",
+            "quality_flags": [],
+            "evidence": {"extractor": "tesseract"},
+        },
+        {
+            "field_name": "value",
+            "raw_text": "104",
+            "normalized_value": "104",
+            "unit": "mg/dL",
+            "quality_flags": ["page_missing"],
+            "evidence": {"extractor": "tesseract"},
+        },
+        {
+            "field_name": "value",
+            "raw_text": "-5",
+            "normalized_value": "-5",
+            "unit": "mg/dL",
+            "quality_flags": [],
+            "evidence": {"extractor": "tesseract"},
+        },
+        {
+            "field_name": "value",
+            "raw_text": "104",
+            "normalized_value": "104",
+            "unit": None,
+            "quality_flags": ["ambiguous_unit"],
+            "evidence": {"extractor": "tesseract"},
+        },
     ]
     assert module._w1_candidate(facts) is None
 
-    good = {"field_name": "value", "raw_text": "104", "evidence": {"extractor": "tesseract"}}
+    good = {
+        "field_name": "value",
+        "raw_text": "104",
+        "normalized_value": "104",
+        "unit": "mg/dL",
+        "quality_flags": [],
+        "evidence": {"extractor": "tesseract"},
+    }
     assert module._w1_candidate([*facts, good]) is good
+
+
+def test_w1_mappability_guard_rejects_keywords_without_valid_mapping(monkeypatch, capsys, tmp_path):
+    """Simply mentioning 'glucose' and 'mg/dL' is not enough if mapping fails."""
+    module = _module()
+    fake_sources = tmp_path / "sources"
+    fake_sources.mkdir()
+    (fake_sources / module.W1_SOURCE_NAME).write_text(
+        "SYNTHETIC\nTest: Unrecognized glucose marker   Value: 104 mg/dL\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "SOURCES", fake_sources)
+
+    results: list = []
+    ok = module.gate_r21_rejection_is_mappable(results)
+    capsys.readouterr()
+
+    assert ok is False
+    assert [row.status for row in results] == [module.FAIL]
+    assert "vacuous" in results[0].detail
+
+
+def test_w1_assess_reports_not_run_when_document_not_mapping_eligible():
+    """A parseable value fact still produces NOT RUN if document mapping is blocked."""
+    module, evidence = _w1_pass_evidence()
+    evidence.mapping_eligible = False
+    evidence.mapping_reason = "extracted facts are not mappable (unmapped_test_name)"
+    rows = module.assess_w1(evidence)
+
+    assert [row.status for row in rows] == [module.NOT_RUN] * len(module.W1_CASES)
+    assert module.PASS not in {row.status for row in rows}
+    assert "unmapped_test_name" in rows[0].detail
+
+
+def test_w1_assess_reports_not_run_when_candidate_lacks_normalized_value():
+    """Even a direct caller passing an unparseable candidate cannot manufacture PASS."""
+    module, evidence = _w1_pass_evidence()
+    evidence.candidate["normalized_value"] = None
+    rows = module.assess_w1(evidence)
+
+    assert [row.status for row in rows] == [module.NOT_RUN] * len(module.W1_CASES)
+    assert module.PASS not in {row.status for row in rows}
+
+
+def _mock_intake_ocr(monkeypatch, text: str, *, confidence: float = 0.94) -> None:
+    """Install a deterministic OCR simulation for W1 plumbing regressions.
+
+    This simulates engine output so we can verify SQLite persistence, API
+    routes, mapping eligibility and cleanup here; it is never Windows evidence.
+    """
+    from app.services.documents import intake, ocr
+
+    def _fake_run_ocr(image, *, tesseract_cmd, language, preprocessing):
+        return ocr.OcrResult(
+            text=text,
+            confidence=confidence,
+            tool_version="5.3.0.simulated-w1-plumbing-test",
+        )
+
+    monkeypatch.setattr(intake, "run_ocr", _fake_run_ocr)
+
+
+def test_w1_runner_end_to_end_with_mocked_ocr_and_cleanup(monkeypatch, capsys):
+    """Exercise ``_w1_run(engine_present=True)`` through real FastAPI/SQLite plumbing.
+
+    Uses deterministic simulated OCR on the committed glucose source, inspects
+    persisted SQLite rows before teardown, and verifies zero ``KeyError``, seven
+    PASS verdicts, engine pool disposal, temp-dir removal and env restoration.
+    """
+    from app.core.config import reset_settings_cache
+    from app.db import models
+    from app.db.session import cached_engine_urls
+
+    module = _module()
+    glucose_text = (
+        REPO_ROOT / "data" / "synthetic" / "documents" / "sources" / module.W1_SOURCE_NAME
+    ).read_text(encoding="utf-8")
+    _mock_intake_ocr(monkeypatch, glucose_text)
+
+    sentinels = {
+        "DATABASE_URL": "sqlite:///sentinel-before-w1.db",
+        "APP_ENV": "test",
+        "UPLOAD_DIR": "/tmp/sentinel-w1-uploads",
+        "DEMO_SEED_PASSWORD": "sentinel-demo-value",
+    }
+    for key, value in sentinels.items():
+        monkeypatch.setenv(key, value)
+    reset_settings_cache()
+
+    urls_before = cached_engine_urls()
+    observed: dict = {}
+    orig_teardown = module._w1_teardown
+
+    def _inspect_and_teardown(seam: dict) -> list[str]:
+        observed["tmp"] = Path(seam["tmp"])
+        observed["engine"] = seam.get("engine")
+        observed["database_url"] = seam["database_url"]
+        with seam["session_factory"]() as session:
+            doc = session.execute(select(models.Document)).scalars().one()
+            facts = session.execute(select(models.ExtractedFact)).scalars().all()
+            fact_ids = [f.id for f in facts]
+            decisions = session.execute(select(models.FactVerification)).scalars().all()
+            observations = (
+                session.execute(
+                    select(models.Observation).where(
+                        models.Observation.source_fact_id.in_(fact_ids)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            issues = (
+                session.execute(
+                    select(models.VerificationIssue).where(
+                        models.VerificationIssue.document_id == doc.id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            value_fact = next(f for f in facts if f.field_name == "value")
+            sibling_statuses = {f.verification_status for f in facts if f.field_name != "value"}
+            observed["db"] = {
+                "extraction_status": doc.extraction_status,
+                "failure_code": doc.failure_code,
+                "value_status": value_fact.verification_status,
+                "value_raw": value_fact.raw_text,
+                "value_norm": value_fact.normalized_value,
+                "sibling_count": len(facts) - 1,
+                "sibling_statuses": sibling_statuses,
+                "decision_count": len(decisions),
+                "decision": decisions[0].decision if decisions else None,
+                "observation_count": len(observations),
+                "issues": [(i.issue_type, i.state, i.blocking) for i in issues],
+            }
+        return orig_teardown(seam)
+
+    monkeypatch.setattr(module, "_w1_teardown", _inspect_and_teardown)
+
+    results: list = []
+    module._w1_run(results, engine_present=True)
+    capsys.readouterr()
+
+    assert [row.gate for row in results] == [
+        f"W1 R21 rejection: {name}" for name in module.W1_CASES
+    ]
+    assert [row.status for row in results] == [module.PASS] * len(module.W1_CASES)
+    assert all("cleanup" not in row.gate.lower() for row in results)
+
+    assert observed["db"] == {
+        "extraction_status": "failed",
+        "failure_code": "measurement_rejected",
+        "value_status": "rejected",
+        "value_raw": "104",
+        "value_norm": "104",
+        "sibling_count": 4,
+        "sibling_statuses": {"pending"},
+        "decision_count": 1,
+        "decision": "rejected",
+        "observation_count": 0,
+        "issues": [("VI-002", "open", 1)],
+    }
+
+    assert not observed["tmp"].exists()
+    assert observed["engine"] is not None
+    assert observed["engine"].pool.checkedin() == 0
+    assert observed["engine"].pool.checkedout() == 0
+    assert cached_engine_urls() == urls_before
+    for key, value in sentinels.items():
+        assert os.environ.get(key) == value
+
+
+def test_w1_positive_mapping_control_verifies_same_fixture_creates_observation(
+    monkeypatch, tmp_path
+):
+    """Control: verifying the exact same W1 document promotes a glucose Observation.
+
+    Proves W1's 'no Observation' assertion is non-vacuous without touching golden
+    fixtures or parser code.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.core.config import reset_settings_cache
+    from app.db import models
+
+    module = _module()
+    glucose_text = (
+        REPO_ROOT / "data" / "synthetic" / "documents" / "sources" / module.W1_SOURCE_NAME
+    ).read_text(encoding="utf-8")
+    _mock_intake_ocr(monkeypatch, glucose_text)
+
+    saved_env = {name: os.environ.get(name) for name in module._PROBE_ENV_KEYS}
+    work_tmp = tmp_path / "control"
+    work_tmp.mkdir()
+    seam = None
+    try:
+        seam = module._isolated_app(str(work_tmp))
+        doctor_headers = {"Authorization": f"Bearer {seam['doctor_token']}"}
+        patient_headers = {"Authorization": f"Bearer {seam['patient_token']}"}
+
+        with TestClient(seam["app"]) as http:
+            upload = http.post(
+                "/api/v1/documents/upload",
+                headers=patient_headers,
+                files={"file": ("glucose.png", seam["image_bytes"], "image/png")},
+            )
+            assert upload.status_code == 202, upload.text
+            document_id = upload.json()["document_id"]
+
+            extraction = http.get(
+                f"/api/v1/documents/{document_id}/extraction",
+                headers=doctor_headers,
+            )
+            assert extraction.status_code == 200, extraction.text
+            body = extraction.json()
+
+            eligible, reason = module._w1_mapping_eligibility(body)
+            assert eligible is True, reason
+            assert module._w1_candidate(body["facts"]) is not None
+
+            for fact in body["facts"]:
+                verify = http.post(
+                    f"/api/v1/documents/{document_id}/verify",
+                    headers=doctor_headers,
+                    json={
+                        "fact_id": fact["fact_id"],
+                        "decision": "verified",
+                        "reason": "control confirms glucose report promotes when verified",
+                    },
+                )
+                assert verify.status_code == 200, verify.text
+
+            after = http.get(
+                f"/api/v1/documents/{document_id}/extraction",
+                headers=doctor_headers,
+            )
+            assert after.status_code == 200, after.text
+            assert after.json()["document_status"] == "verified"
+
+        fact_ids = [fact["fact_id"] for fact in body["facts"]]
+        with seam["session_factory"]() as session:
+            observations = (
+                session.execute(
+                    select(models.Observation).where(
+                        models.Observation.source_fact_id.in_(fact_ids)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(observations) == 1
+            obs = observations[0]
+            assert obs.measure_type == "glucose"
+            assert obs.value == pytest.approx(104.0)
+            assert obs.unit == "mg/dL"
+            assert obs.source == "verified_document"
+    finally:
+        if seam is not None:
+            seam["saved_env"] = saved_env
+            seam["tmp"] = str(work_tmp)
+            problems = module._w1_teardown(seam)
+            assert problems == []
+        else:
+            for key, prev in saved_env.items():
+                if prev is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = prev
+        reset_settings_cache()
+
+
+@pytest.mark.parametrize(
+    "label,ocr_text",
+    [
+        (
+            "o_confusion_unparseable_value",
+            "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD\n"
+            "Demo Patient A            Ref: DEMO-A-001            Report date: 2026-11-02\n"
+            "Test: Fasting glucose     Value: 1O4 mg/dL\n"
+            "Reference range: 70 - 99 mg/dL\n",
+        ),
+        (
+            "unsupported_unit_hemoglobin",
+            "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD\n"
+            "Demo Patient A            Ref: DEMO-A-001            Report date: 2026-11-02\n"
+            "Test: Hemoglobin          Value: 13.4 g/dL\n"
+            "Reference range: 12.0 - 15.5 g/dL\n",
+        ),
+        (
+            "mangled_test_name",
+            "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD\n"
+            "Demo Patient A            Ref: DEMO-A-001            Report date: 2026-11-02\n"
+            "Test: Fasting glucase     Value: 104 mg/dL\n"
+            "Reference range: 70 - 99 mg/dL\n",
+        ),
+        (
+            "missing_unit",
+            "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD\n"
+            "Demo Patient A            Ref: DEMO-A-001            Report date: 2026-11-02\n"
+            "Test: Fasting glucose     Value: 104\n"
+            "Reference range: 70 - 99 mg/dL\n",
+        ),
+        (
+            "ambiguous_slash_report_date",
+            "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD\n"
+            "Demo Patient A            Ref: DEMO-A-001            Report date: 03/11/2026\n"
+            "Test: Fasting glucose     Value: 104 mg/dL\n"
+            "Reference range: 70 - 99 mg/dL\n",
+        ),
+        (
+            "unreadable_empty_value_page_missing",
+            "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD\n"
+            "Demo Patient A            Ref: DEMO-A-001            Report date: 2026-11-02\n"
+            "Test: Fasting glucose     Value:\n"
+            "Reference range: 70 - 99 mg/dL\n",
+        ),
+        (
+            "patient_identity_mismatch_vi004",
+            "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD\n"
+            "Demo Patient B            Ref: DEMO-B-001            Report date: 2026-11-02\n"
+            "Test: Fasting glucose     Value: 104 mg/dL\n"
+            "Reference range: 70 - 99 mg/dL\n",
+        ),
+    ],
+)
+def test_w1_runner_does_not_pass_when_ocr_produces_unmappable_output(
+    monkeypatch, capsys, label, ocr_text
+):
+    """Damaged or unmappable OCR output never yields a vacuous W1 PASS."""
+    from app.core.config import reset_settings_cache
+
+    module = _module()
+    _mock_intake_ocr(monkeypatch, ocr_text)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///sentinel-{label}.db")
+    reset_settings_cache()
+
+    results: list = []
+    module._w1_run(results, engine_present=True)
+    capsys.readouterr()
+
+    assert [row.gate for row in results] == [
+        f"W1 R21 rejection: {name}" for name in module.W1_CASES
+    ]
+    assert [row.status for row in results] == [module.NOT_RUN] * len(module.W1_CASES)
+    assert module.PASS not in {row.status for row in results}
+    assert all(row.data.get("extracted_facts") for row in results)
+
+
+def test_w1_runner_disposes_partial_engine_and_reports_all_cases_on_seam_failure(
+    monkeypatch, capsys
+):
+    """If ``_isolated_app`` fails after creating an engine, nothing leaks and 7 FAILs emit."""
+    import app.services.seed as seed_module
+    from app.core.config import reset_settings_cache
+    from app.db.session import cached_engine_urls
+
+    module = _module()
+    created_engines: list = []
+
+    import app.db.session as db_session
+
+    orig_create_db_engine = db_session.create_db_engine
+
+    def _spy_create_db_engine(url: str):
+        engine = orig_create_db_engine(url)
+        created_engines.append(engine)
+        return engine
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated mid-setup seed failure")
+
+    monkeypatch.setattr(db_session, "create_db_engine", _spy_create_db_engine)
+    monkeypatch.setattr(seed_module, "seed_demo_data", _boom)
+
+    sentinels = {
+        "DATABASE_URL": "sqlite:///sentinel-partial.db",
+        "APP_ENV": "test",
+        "UPLOAD_DIR": "/tmp/sentinel-partial-uploads",
+        "DEMO_SEED_PASSWORD": "sentinel-demo-value",
+    }
+    for key, value in sentinels.items():
+        monkeypatch.setenv(key, value)
+    reset_settings_cache()
+    urls_before = cached_engine_urls()
+
+    seen_tmp: list[Path] = []
+    orig_teardown = module._w1_teardown
+
+    def _spy_teardown(seam: dict) -> list[str]:
+        seen_tmp.append(Path(seam["tmp"]))
+        return orig_teardown(seam)
+
+    monkeypatch.setattr(module, "_w1_teardown", _spy_teardown)
+
+    results: list = []
+    module._w1_run(results, engine_present=True)
+    capsys.readouterr()
+
+    assert [row.gate for row in results] == [
+        f"W1 R21 rejection: {name}" for name in module.W1_CASES
+    ]
+    assert [row.status for row in results] == [module.FAIL] * len(module.W1_CASES)
+    assert all("simulated mid-setup seed failure" in row.detail for row in results)
+
+    assert len(created_engines) == 1
+    assert created_engines[0].pool.checkedin() == 0
+    assert created_engines[0].pool.checkedout() == 0
+    assert cached_engine_urls() == urls_before
+    assert len(seen_tmp) == 1 and not seen_tmp[0].exists()
+    for key, value in sentinels.items():
+        assert os.environ.get(key) == value
+
+
+def test_main_emits_unique_w1_verdicts_when_fixture_is_unmappable(monkeypatch, capsys, tmp_path):
+    """Failing the W1 fixture guard skips ``_w1_run`` and emits each W1 case once."""
+    module = _module()
+    fake_sources = tmp_path / "sources"
+    fake_sources.mkdir()
+    for name in ("report_a_glucose.txt", "report_b_bp_hr.txt", "report_ocr_o_confusion.txt"):
+        (fake_sources / name).write_text("SYNTHETIC\nTest: Hemoglobin\n", encoding="utf-8")
+
+    called = {"w1_run": False}
+    monkeypatch.setattr(module, "SOURCES", fake_sources)
+    monkeypatch.setattr(module, "gate_environment", lambda r: None)
+    monkeypatch.setattr(module, "gate_engine", lambda r: None)
+    monkeypatch.setattr(module, "gate_ocr_live", lambda r, engine_present: None)
+    monkeypatch.setattr(module, "gate_ocr_corruption", lambda r, engine_present: None)
+    monkeypatch.setattr(module, "gate_rasterizer", lambda r: None)
+    monkeypatch.setattr(module, "gate_api_ocr_upload", lambda r, engine_present: None)
+    monkeypatch.setattr(
+        module,
+        "_w1_run",
+        lambda r, engine_present: called.__setitem__("w1_run", True),
+    )
+
+    out_json = tmp_path / "out.json"
+    exit_code = module.main(["windows_ocr_acceptance.py", "--json", str(out_json)])
+    capsys.readouterr()
+
+    assert exit_code == 2
+    assert called["w1_run"] is False
+    import json
+
+    payload = json.loads(out_json.read_text(encoding="utf-8"))
+    gates = [row["gate"] for row in payload["gates"]]
+    assert gates == [f"W1 R21 rejection: {name}" for name in module.W1_CASES]
+    assert len(gates) == len(set(gates))
+    assert all(row["status"] == module.FAIL for row in payload["gates"])
 
 
 def test_the_probe_registers_w1_as_a_gate():

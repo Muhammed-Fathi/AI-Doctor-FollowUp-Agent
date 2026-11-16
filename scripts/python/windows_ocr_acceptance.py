@@ -607,8 +607,11 @@ def _isolated_app(tmp: str) -> dict:
     overrides, the migrated database, the seeded demo users, the minted sessions and
     the disabled session cache are all established once, here.
 
+    Returns ``engine``, ``database_url``, ``settings``, ``app``,
+    ``session_factory``, ``patient_token``, ``doctor_token`` and ``image_bytes``.
     Callers must restore the environment and dispose ``engine`` themselves; the
-    owning gate's ``finally`` does both.
+    owning gate's ``finally`` does both. If setup raises after opening ``engine``,
+    this function disposes it before re-raising so no handle leaks on Windows.
     """
     from sqlalchemy.orm import Session
 
@@ -641,43 +644,51 @@ def _isolated_app(tmp: str) -> dict:
     command.upgrade(config, "head")
 
     engine = create_db_engine(settings.database_url)
+    try:
+        with Session(engine) as session:
+            seed_demo_data(
+                session,
+                password=_seed_password(settings),
+                now=datetime(2026, 11, 15, tzinfo=UTC),
+                iterations=1000,
+            )
+            session.commit()
+            patient = session.execute(
+                select(User).where(User.username == "demo_patient_a")
+            ).scalar_one()
+            doctor = session.execute(
+                select(User).where(User.username == "demo_doctor")
+            ).scalar_one()
+            # ``issue_session`` is keyword-only and takes an explicit clock; the
+            # reviewed probe omitted it and raised TypeError before any upload.
+            #
+            # The clock must be *now*, not a fixed date: a session lives for 60
+            # minutes, so a hard-coded midnight expiry is already in the past and
+            # the upload answers 401. That is the probe borrowing the seed's
+            # deterministic timestamp for something time-sensitive.
+            issued_at = datetime.now(UTC)
+            patient_token, _ = issue_session(session, user=patient, now=issued_at, ttl_minutes=60)
+            doctor_token, _ = issue_session(session, user=doctor, now=issued_at, ttl_minutes=60)
+            session.commit()
 
-    with Session(engine) as session:
-        seed_demo_data(
-            session,
-            password=_seed_password(settings),
-            now=datetime(2026, 11, 15, tzinfo=UTC),
-            iterations=1000,
-        )
-        session.commit()
-        patient = session.execute(
-            select(User).where(User.username == "demo_patient_a")
-        ).scalar_one()
-        doctor = session.execute(select(User).where(User.username == "demo_doctor")).scalar_one()
-        # ``issue_session`` is keyword-only and takes an explicit clock; the
-        # reviewed probe omitted it and raised TypeError before any upload.
-        #
-        # The clock must be *now*, not a fixed date: a session lives for 60
-        # minutes, so a hard-coded midnight expiry is already in the past and
-        # the upload answers 401. That is the probe borrowing the seed's
-        # deterministic timestamp for something time-sensitive.
-        issued_at = datetime.now(UTC)
-        patient_token, _ = issue_session(session, user=patient, now=issued_at, ttl_minutes=60)
-        doctor_token, _ = issue_session(session, user=doctor, now=issued_at, ttl_minutes=60)
-        session.commit()
+        scripts_dir = str(REPO_ROOT / "scripts" / "python")
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        import generate_p3_fixtures as fixtures
 
-    import generate_p3_fixtures as fixtures
-
-    return {
-        "engine": engine,
-        "database_url": database_url,
-        "settings": settings,
-        "app": create_app(settings),
-        "session_factory": lambda: Session(engine),
-        "patient_token": patient_token,
-        "doctor_token": doctor_token,
-        "image_bytes": fixtures.image_bytes(W1_SOURCE_NAME, fmt="PNG"),
-    }
+        return {
+            "engine": engine,
+            "database_url": database_url,
+            "settings": settings,
+            "app": create_app(settings),
+            "session_factory": lambda: Session(engine),
+            "patient_token": patient_token,
+            "doctor_token": doctor_token,
+            "image_bytes": fixtures.image_bytes(W1_SOURCE_NAME, fmt="PNG"),
+        }
+    except Exception:
+        engine.dispose()
+        raise
 
 
 def gate_api_ocr_upload(results: list[Result], *, engine_present: bool) -> None:
@@ -897,6 +908,11 @@ class W1Evidence:
     #: asserting ``measurement_rejected`` there would be a false FAIL.
     non_value_fact_count: int = 0
     extracted_fields: tuple[str, ...] = ()
+    extracted_facts: tuple[dict, ...] = ()
+    verification_issues: tuple[dict, ...] = ()
+    #: Whether the extracted document satisfies closed mapping + promotion rules.
+    mapping_eligible: bool = True
+    mapping_reason: str = ""
     attempts: tuple[dict, ...] = ()
     #: Stored document state after the rejection.
     document_status: str | None = None
@@ -926,17 +942,29 @@ def _w1_open_vi002(issues) -> list[dict]:
 def assess_w1(evidence: W1Evidence) -> list[Result]:
     """Turn measured W1 evidence into one verdict per requirement.
 
-    Pure: no I/O, no database, no engine. A missing candidate short-circuits to
-    ``NOT RUN`` for every requirement — an honest non-result, never a PASS and
-    never a manufactured fact.
+    Pure: no I/O, no database, no engine. A missing or unmappable candidate
+    short-circuits to ``NOT RUN`` for every requirement — an honest non-result,
+    never a PASS and never a manufactured fact.
     """
     gate = "W1 R21 rejection"
 
-    def rows(status: str, detail: str) -> list[Result]:
-        return [Result(f"{gate}: {name}", status, detail) for name in W1_CASES]
+    def rows(status: str, detail: str, data: dict | None = None) -> list[Result]:
+        return [Result(f"{gate}: {name}", status, detail, dict(data or {})) for name in W1_CASES]
+
+    extracted_summary = {
+        "extracted_fields": list(evidence.extracted_fields),
+        "extracted_facts": list(evidence.extracted_facts),
+        "verification_issues": list(evidence.verification_issues),
+        "attempts": list(evidence.attempts),
+        **({"mapping_reason": evidence.mapping_reason} if evidence.mapping_reason else {}),
+    }
 
     if evidence.candidate is None:
-        return rows(NOT_RUN, evidence.candidate_absence or "no usable OCR value fact")
+        return rows(
+            NOT_RUN,
+            evidence.candidate_absence or "no usable OCR value fact",
+            extracted_summary,
+        )
 
     if evidence.non_value_fact_count == 0:
         # The document holds only a ``value`` fact, so rejecting it makes *every*
@@ -948,6 +976,18 @@ def assess_w1(evidence: W1Evidence) -> list[Result]:
             "the engine produced only a `value` fact, so the contract-correct code is "
             "`all_facts_rejected`, not `measurement_rejected`; W1 cannot assert the "
             "required code on this shape",
+            extracted_summary,
+        )
+
+    if not evidence.mapping_eligible or (
+        "normalized_value" in evidence.candidate and not evidence.candidate.get("normalized_value")
+    ):
+        return rows(
+            NOT_RUN,
+            evidence.mapping_reason
+            or "the extracted OCR value is not mappable to an Observation; "
+            "W1's 'no Observation' assertion would be vacuous",
+            {"candidate": evidence.candidate, **extracted_summary},
         )
 
     candidate = evidence.candidate
@@ -1112,19 +1152,109 @@ def _w1_read(session_factory, models, document_id: str, fact_id: str) -> dict:
 
 
 def _w1_candidate(facts: list[dict]) -> dict | None:
-    """Return the OCR-produced ``value`` fact, or ``None``.
+    """Return a mappable OCR-produced ``value`` fact, or ``None``.
 
-    A ``value`` fact whose extractor is not ``tesseract`` would not prove the real
-    engine produced it, so it is not accepted.
+    A ``value`` fact only qualifies when:
+    * its extractor is ``tesseract`` (real engine output);
+    * it carries non-empty ``raw_text`` and a finite positive numeric
+      ``normalized_value``;
+    * its ``unit`` is an observation-supported unit (``mmHg``, ``bpm``, ``mg/dL``);
+    * its quality flags do not mark the reading unparseable, unit-ambiguous or
+      page-missing.
+
+    A candidate lacking any of those could never yield an ``Observation`` even if
+    verified, which would make W1's "no Observation" assertion vacuous.
     """
+    import math
+
+    from app.core.enums import QualityFlag, Unit
+
+    supported_units = {unit.value for unit in Unit}
+    disqualifying_flags = {
+        QualityFlag.UNPARSEABLE_VALUE.value,
+        QualityFlag.AMBIGUOUS_UNIT.value,
+        QualityFlag.PAGE_MISSING.value,
+    }
+
     for fact in facts:
         if fact.get("field_name") != "value":
             continue
         if (fact.get("evidence") or {}).get("extractor") != "tesseract":
             continue
-        if (fact.get("raw_text") or "").strip():
-            return fact
+        if not (fact.get("raw_text") or "").strip():
+            continue
+        flags = set(fact.get("quality_flags") or ())
+        if flags & disqualifying_flags:
+            continue
+        raw_normalized = fact.get("normalized_value")
+        if not isinstance(raw_normalized, str) or not raw_normalized.strip():
+            continue
+        try:
+            number = float(raw_normalized.strip().replace(",", "."))
+        except ValueError:
+            continue
+        if not math.isfinite(number) or number <= 0:
+            continue
+        if fact.get("unit") not in supported_units:
+            continue
+        return fact
     return None
+
+
+def _w1_mapping_eligibility(body: dict) -> tuple[bool, str]:
+    """Verify the extracted document would promote an Observation if verified.
+
+    Calls the production mapping boundary (``decide_mapping``) on the document's
+    extracted facts as if every active fact were verified, and checks that no
+    identity/conflict/unread-value blocker would prevent promotion. This guarantees
+    W1's "no Observation" assertion is never vacuous on a damaged OCR read.
+    """
+    from app.core.enums import FactField, IssueType, QualityFlag
+    from app.services.documents.mapping import VerifiedFactView, decide_mapping
+
+    facts = body.get("facts") or []
+    issues = body.get("verification_issues") or []
+
+    blocking_for_promotion = {
+        IssueType.VI_001.value,
+        IssueType.VI_003.value,
+        IssueType.VI_004.value,
+        IssueType.VI_006.value,
+    }
+    open_blockers = sorted(
+        {
+            issue["issue_type"]
+            for issue in issues
+            if issue.get("issue_type") in blocking_for_promotion
+        }
+    )
+    if open_blockers:
+        return False, f"blocking issue(s) prevent mapping/promotion: {open_blockers}"
+
+    if any(
+        fact.get("field_name") == FactField.VALUE.value
+        and QualityFlag.PAGE_MISSING.value in (fact.get("quality_flags") or ())
+        for fact in facts
+    ):
+        return False, "extracted document contains a page_missing value fact"
+
+    views = [
+        VerifiedFactView(
+            field_name=fact["field_name"],
+            normalized_value=fact.get("normalized_value"),
+            unit=fact.get("unit"),
+            verification_status="verified",
+        )
+        for fact in facts
+    ]
+    decision = decide_mapping(views)
+    if not decision.is_mapped or decision.mapped is None:
+        return False, f"extracted facts are not mappable ({decision.reason})"
+
+    return True, (
+        f"eligible for {decision.mapped.measure_type.value} "
+        f"{decision.mapped.value} {decision.mapped.unit} at {decision.mapped.measured_at}"
+    )
 
 
 def gate_r21_rejection(results: list[Result], objects: dict | None) -> None:
@@ -1142,11 +1272,15 @@ def gate_r21_rejection(results: list[Result], objects: dict | None) -> None:
             )
         return
 
+    from fastapi.testclient import TestClient
+
+    from app.db import models as db_models
+
     evidence = W1Evidence()
-    client = objects["test_client"]
+    client = objects["test_client"] if "test_client" in objects else TestClient(objects["app"])
     doctor_headers = {"Authorization": f"Bearer {objects['doctor_token']}"}
     patient_headers = {"Authorization": f"Bearer {objects['patient_token']}"}
-    models = objects["models"]
+    models = objects.get("models", db_models)
     session_factory = objects["session_factory"]
 
     with client as http:
@@ -1186,17 +1320,41 @@ def gate_r21_rejection(results: list[Result], objects: dict | None) -> None:
             {"path": a["path"], "succeeded": a["succeeded"]} for a in body["attempts"]
         )
         evidence.extracted_fields = tuple(sorted(f["field_name"] for f in body["facts"]))
+        evidence.extracted_facts = tuple(
+            {
+                "field_name": f.get("field_name"),
+                "raw_text": f.get("raw_text"),
+                "normalized_value": f.get("normalized_value"),
+                "unit": f.get("unit"),
+                "quality_flags": list(f.get("quality_flags") or ()),
+                "extractor": (f.get("evidence") or {}).get("extractor"),
+            }
+            for f in body["facts"]
+        )
+        evidence.verification_issues = tuple(
+            {
+                "issue_type": issue.get("issue_type"),
+                "reason_code": issue.get("reason_code"),
+            }
+            for issue in body.get("verification_issues", ())
+        )
         evidence.non_value_fact_count = sum(
             1 for f in body["facts"] if f.get("field_name") != "value"
         )
         candidate = _w1_candidate(body["facts"])
+        eligible, mapping_detail = _w1_mapping_eligibility(body)
+        evidence.mapping_eligible = eligible
+        evidence.mapping_reason = mapping_detail
 
         if candidate is None:
-            # Honest NOT RUN. The engine ran and produced nothing this gate can
-            # reject; inventing a fact to reach a decision would be fabrication.
+            # Honest NOT RUN. The engine ran and produced no mappable value fact;
+            # inventing or rejecting an unmappable fact would make "no Observation"
+            # vacuous.
             evidence.candidate_absence = (
-                "the real engine produced no mappable `value` fact; "
+                "the real engine produced no mappable `value` fact "
+                f"({mapping_detail}); "
                 f"fields={list(evidence.extracted_fields)} "
+                f"facts={list(evidence.extracted_facts)} "
                 f"attempts={list(evidence.attempts)}"
             )
             for row in assess_w1(evidence):
@@ -1206,12 +1364,23 @@ def gate_r21_rejection(results: list[Result], objects: dict | None) -> None:
         evidence.candidate = {
             "fact_id": candidate["fact_id"],
             "raw_text": candidate["raw_text"],
+            "normalized_value": candidate.get("normalized_value"),
             "unit": candidate.get("unit"),
             "confidence": candidate.get("confidence"),
             "verification_status": candidate["verification_status"],
             "extractor": (candidate.get("evidence") or {}).get("extractor"),
             "non_value_fact_count": evidence.non_value_fact_count,
+            "mapping_detail": mapping_detail,
         }
+
+        if not eligible:
+            # A value fact exists, yet the extracted document as a whole cannot
+            # promote an Observation (e.g. mangled test name, missing/ambiguous date,
+            # VI-004/VI-006 blocker). Stop before rejection so we never report a
+            # vacuous "no Observation" PASS.
+            for row in assess_w1(evidence):
+                _record(results, row)
+            return
 
         before = _w1_read(session_factory, models, document_id, candidate["fact_id"])
         evidence.before = before["snapshot"]
@@ -1271,39 +1440,62 @@ def gate_r21_rejection(results: list[Result], objects: dict | None) -> None:
             _record(results, row)
 
 
-def gate_r21_rejection_is_mappable(results: list[Result]) -> None:
+def gate_r21_rejection_is_mappable(results: list[Result]) -> bool:
     """Fail early if W1's fixture is not the mappable glucose report.
 
     W1 asserts that *no* Observation was promoted. That only means something when
     the rejected value would otherwise have mapped, so the fixture is checked
-    rather than assumed — an unsupported measurement would make the assertion
-    vacuous while still reading as a PASS.
+    through the parser and ``decide_mapping`` rather than assumed — an unsupported
+    measurement would make the assertion vacuous while still reading as a PASS.
     """
+    from app.core.enums import ExtractionPath
+    from app.services.documents.field_parser import parse_pages
+    from app.services.documents.mapping import VerifiedFactView, decide_mapping
+    from app.services.documents.text_extraction import PageText
+
     gate = "W1 R21 rejection: OCR value fact"
     source = SOURCES / W1_SOURCE_NAME
     if not source.is_file():
         _record(results, Result(gate, FAIL, f"missing committed fixture {W1_SOURCE_NAME}"))
-        return
+        return False
     text = source.read_text(encoding="utf-8", errors="replace")
-    if "mg/dL" not in text or "glucose" not in text.lower():
+    parsed = parse_pages(
+        [PageText(page_index=0, text=text, extractor=ExtractionPath.TESSERACT, confidence=1.0)]
+    )
+    views = [
+        VerifiedFactView(
+            field_name=fact.field_name.value,
+            normalized_value=fact.normalized_value,
+            unit=fact.unit,
+            verification_status="verified",
+        )
+        for fact in parsed.facts
+    ]
+    decision = decide_mapping(views)
+    if "mg/dL" not in text or "glucose" not in text.lower() or not decision.is_mapped:
         _record(
             results,
             Result(
                 gate,
                 FAIL,
-                f"{W1_SOURCE_NAME} is not the mappable glucose report: W1's "
-                "'no Observation' assertion would be vacuous",
+                f"{W1_SOURCE_NAME} is not a mappable glucose report "
+                f"(mapping_reason={decision.reason}): W1's 'no Observation' "
+                "assertion would be vacuous",
             ),
         )
+        return False
+    return True
 
 
 def _w1_teardown(seam: dict) -> list[str]:
     """Release W1's seam, returning any teardown problems for the caller to record."""
     errors: list[str] = []
-    try:
-        seam["engine"].dispose()
-    except Exception as error:  # pragma: no cover - defensive
-        errors.append(f"engine: {type(error).__name__}: {error}")
+    engine = seam.get("engine")
+    if engine is not None:
+        try:
+            engine.dispose()
+        except Exception as error:  # pragma: no cover - defensive
+            errors.append(f"engine: {type(error).__name__}: {error}")
     try:
         from app.db.session import dispose_engines
 
@@ -1337,7 +1529,7 @@ def _w1_run(results: list[Result], *, engine_present: bool) -> None:
 
     Cleanup lives here rather than in the gate so the temporary database and the
     restored environment are released on every path — including the honest
-    ``NOT RUN`` when the engine produced no candidate.
+    ``NOT RUN`` when the engine produced no candidate and a mid-setup failure.
     """
     if not engine_present:
         gate_r21_rejection(results, None)
@@ -1350,29 +1542,27 @@ def _w1_run(results: list[Result], *, engine_present: bool) -> None:
         seam = _isolated_app(tmp)
         gate_r21_rejection(results, seam)
     except Exception as error:
-        if not _verdicts_for(results, "W1 R21 rejection: OCR value fact"):
-            _record(
-                results,
-                Result(
-                    "W1 R21 rejection: OCR value fact",
-                    FAIL,
-                    f"unexpected {type(error).__name__}: {error}\n{traceback.format_exc(limit=3)}",
-                ),
-            )
+        detail = f"unexpected {type(error).__name__}: {error}\n{traceback.format_exc(limit=3)}"
+        recorded_any = False
+        for name in W1_CASES:
+            gate = f"W1 R21 rejection: {name}"
+            if not _verdicts_for(results, gate):
+                _record(results, Result(gate, FAIL, detail))
+                recorded_any = True
+        if not recorded_any:
+            _record(results, Result("W1 R21 rejection error", FAIL, detail))
     finally:
-        if seam is not None:
-            seam["saved_env"] = saved_env
-        else:
-            # The seam failed to build; still restore what we changed.
-            for name, previous in saved_env.items():
-                if previous is None:
-                    os.environ.pop(name, None)
-                else:
-                    os.environ[name] = previous
-            shutil.rmtree(tmp, ignore_errors=True)
-            return
-        seam["tmp"] = tmp
-        problems = _w1_teardown(seam)
+        teardown_seam = (
+            dict(seam)
+            if seam is not None
+            else {
+                "engine": None,
+                "database_url": f"sqlite:///{(Path(tmp) / 'accept.db').as_posix()}",
+            }
+        )
+        teardown_seam["saved_env"] = saved_env
+        teardown_seam["tmp"] = tmp
+        problems = _w1_teardown(teardown_seam)
         if problems:
             _record(
                 results,
@@ -1423,16 +1613,27 @@ def main(argv: list[str]) -> int:
     # W1 is the R21 rejection gate. The fixture guard runs first: if the source is
     # not the mappable glucose report, W1's "no Observation" assertion would be
     # vacuous, so it fails loudly instead of passing hollowly.
-    _guarded(
+    mappable_ok = _guarded(
         results,
         "W1 R21 rejection: OCR value fact",
         lambda: gate_r21_rejection_is_mappable(results),
     )
-    _guarded(
-        results,
-        "W1 R21 rejection",
-        lambda: _w1_run(results, engine_present=engine_present),
-    )
+    if mappable_ok:
+        _guarded(
+            results,
+            "W1 R21 rejection",
+            lambda: _w1_run(results, engine_present=engine_present),
+        )
+    else:
+        detail = (
+            _verdicts_for(results, "W1 R21 rejection: OCR value fact")[-1].detail
+            if _verdicts_for(results, "W1 R21 rejection: OCR value fact")
+            else "W1 source fixture is not mappable"
+        )
+        for name in W1_CASES:
+            gate = f"W1 R21 rejection: {name}"
+            if not _verdicts_for(results, gate):
+                _record(results, Result(gate, FAIL, detail))
 
     print()
     print("=" * 78)
