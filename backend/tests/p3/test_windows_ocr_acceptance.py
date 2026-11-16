@@ -261,6 +261,7 @@ def _w1_pass_evidence():
     candidate = {
         "fact_id": "fact-value",
         "raw_text": "104",
+        "normalized_value": "104",
         "unit": "mg/dL",
         "confidence": 0.88,
         "verification_status": "pending",
@@ -484,8 +485,31 @@ def test_w1_rejects_an_unusable_candidate_that_is_not_tesseract():
     ]
     assert module._w1_candidate(facts) is None
 
-    good = {"field_name": "value", "raw_text": "104", "evidence": {"extractor": "tesseract"}}
-    assert module._w1_candidate([*facts, good]) is good
+    good = {
+        "field_name": "value",
+        "raw_text": "104",
+        "normalized_value": "104",
+        "unit": "mg/dL",
+        "verification_status": "pending",
+        "evidence": {"extractor": "tesseract"},
+    }
+    context = [
+        {
+            "field_name": name,
+            "normalized_value": value,
+            "verification_status": "pending",
+            "evidence": {"extractor": "tesseract"},
+        }
+        for name, value in [
+            ("report_date", "2026-10-20"),
+            ("test_name", "Glucose"),
+            ("unit", "mg/dL"),
+        ]
+    ]
+    assert module._w1_candidate([*context, good]) is good
+    assert module._w1_candidate([*context, {**good, "normalized_value": None}]) is None
+    assert module._w1_candidate([*context, {**good, "quality_flags": ["page_missing"]}]) is None
+    assert module._w1_candidate([*context, good], [{"issue_type": "VI-004"}]) is None
 
 
 def test_the_probe_registers_w1_as_a_gate():
@@ -686,3 +710,137 @@ def test_handoff_test_count_matches_the_suite_it_describes():
 
     # And the stale pair must never come back.
     assert "522 passed" not in text and "P3: 139" not in text
+
+
+def test_w1_fails_no_observation_when_positive_control_fails():
+    module, evidence = _w1_pass_evidence()
+    evidence.positive_control_promoted = False
+    evidence.positive_control_detail = "control did not promote"
+    row = next(r for r in module.assess_w1(evidence) if r.gate.endswith("no Observation"))
+    assert row.status == module.FAIL
+    assert "control did not promote" in row.detail
+
+
+@pytest.mark.parametrize(
+    "variant", ["good", "collapsed", "unparseable", "unsupported", "garbled", "date"]
+)
+def test_w1_runner_simulated_ocr_plumbing(monkeypatch, variant):
+    """Simulation with real routes/SQLite; this is not Windows OCR evidence."""
+    import os
+
+    from sqlalchemy import select
+
+    from app.services.documents import intake, ocr
+
+    module = _module()
+    text = (module.SOURCES / module.W1_SOURCE_NAME).read_text(encoding="utf-8")
+    if variant == "collapsed":
+        import re
+
+        text = re.sub(r"\s{2,}(Value:)", r" \1", text)
+    elif variant == "unparseable":
+        text = text.replace("104", "1O5")
+    elif variant == "unsupported":
+        text = text.replace("Fasting glucose", "Hemoglobin").replace("104 mg/dL", "13.4 g/dL")
+    elif variant == "garbled":
+        text = text.replace("Fasting glucose", "Fasting gluccse")
+    elif variant == "date":
+        text = text.replace("2026-11-02", "03/11/2026")
+
+    def fake_ocr(image, *, tesseract_cmd, language, preprocessing):
+        return ocr.OcrResult(
+            text=text, confidence=0.95, tool_version="scripted-engine-not-tesseract"
+        )
+
+    monkeypatch.setattr(intake, "run_ocr", fake_ocr)
+    saved = {key: os.environ.get(key) for key in module._PROBE_ENV_KEYS}
+    original = module._w1_teardown
+    captured = {}
+
+    def inspect(seam):
+        captured["tmp"] = seam["tmp"]
+        models = seam["models"]
+        with seam["session_factory"]() as session:
+            docs = list(session.execute(select(models.Document)).scalars())
+            facts = list(session.execute(select(models.ExtractedFact)).scalars())
+            obs = list(session.execute(select(models.Observation)).scalars())
+            decisions = list(session.execute(select(models.FactVerification)).scalars())
+            issues = list(session.execute(select(models.VerificationIssue)).scalars())
+            if variant == "good":
+                rejected = next(d for d in docs if d.original_filename == "glucose.png")
+                control = next(d for d in docs if d.original_filename == "control.pdf")
+                ids = {f.id for f in facts if f.document_id == rejected.id}
+                control_ids = {f.id for f in facts if f.document_id == control.id}
+                assert (rejected.extraction_status, rejected.failure_code) == (
+                    "failed",
+                    "measurement_rejected",
+                )
+                assert not [o for o in obs if o.source_fact_id in ids]
+                rejected_fact = next(
+                    f for f in facts if f.document_id == rejected.id and f.field_name == "value"
+                )
+                assert (
+                    rejected_fact.verification_status,
+                    rejected_fact.raw_text,
+                    rejected_fact.normalized_value,
+                ) == ("rejected", "104", "104")
+                assert control.extraction_status == "verified"
+                assert len([d for d in decisions if d.fact_id in ids]) == 1
+                assert any(
+                    i.document_id == rejected.id and i.issue_type == "VI-002" and i.state == "open"
+                    for i in issues
+                )
+                promoted = [o for o in obs if o.source_fact_id in control_ids]
+                assert len(promoted) == 1 and (
+                    promoted[0].measure_type,
+                    promoted[0].value,
+                    promoted[0].unit,
+                    promoted[0].trust_level,
+                ) == ("glucose", 104.0, "mg/dL", "doctor_verified")
+        return original(seam)
+
+    monkeypatch.setattr(module, "_w1_teardown", inspect)
+    results = []
+    module._w1_run(results, engine_present=True)
+    assert len(results) == 7, [(r.gate, r.status, r.detail) for r in results]
+    assert all(
+        r.status == (module.PASS if variant == "good" else module.NOT_RUN) for r in results
+    ), [(r.gate, r.status, r.detail) for r in results]
+    assert not Path(captured["tmp"]).exists()
+    assert {key: os.environ.get(key) for key in module._PROBE_ENV_KEYS} == saved
+
+
+def test_w1_partial_initialization_failure_disposes_and_restores(monkeypatch):
+    import os
+
+    from app.db import session as db_session
+    from app.services import seed
+
+    module = _module()
+    saved = {key: os.environ.get(key) for key in module._PROBE_ENV_KEYS}
+    create = db_session.create_db_engine
+    captured = {}
+
+    def tracked(url):
+        engine = create(url)
+        dispose = engine.dispose
+
+        def wrapped(*args, **kwargs):
+            captured["disposed"] = True
+            return dispose(*args, **kwargs)
+
+        monkeypatch.setattr(engine, "dispose", wrapped)
+        captured["tmp"] = Path(url.removeprefix("sqlite:///")).parent
+        return engine
+
+    monkeypatch.setattr(db_session, "create_db_engine", tracked)
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("injected initialization failure")
+
+    monkeypatch.setattr(seed, "seed_demo_data", fail)
+    results = []
+    module._w1_run(results, engine_present=True)
+    assert len(results) == 7 and all(r.status == module.FAIL for r in results)
+    assert captured["disposed"] and not captured["tmp"].exists()
+    assert {key: os.environ.get(key) for key in module._PROBE_ENV_KEYS} == saved

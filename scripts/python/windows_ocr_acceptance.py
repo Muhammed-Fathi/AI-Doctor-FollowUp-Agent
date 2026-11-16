@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import math
 import os
 import platform
 import shutil
@@ -599,6 +600,13 @@ def _seed_password(settings) -> str:
     return str(configured) or "acceptance-only-password"
 
 
+def _ensure_scripts_on_path() -> None:
+    """Ensure ``scripts/python`` is importable regardless of caller entry point."""
+    scripts_dir = str(REPO_ROOT / "scripts" / "python")
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+
+
 def _isolated_app(tmp: str) -> dict:
     """Build a throwaway settings/app/session seam over a temporary SQLite file.
 
@@ -608,11 +616,15 @@ def _isolated_app(tmp: str) -> dict:
     the disabled session cache are all established once, here.
 
     Callers must restore the environment and dispose ``engine`` themselves; the
-    owning gate's ``finally`` does both.
+    owning gate's ``finally`` does both. If initialization fails after ``engine`` is
+    opened, ``engine`` is disposed before propagating so Windows never retains a
+    SQLite file handle.
     """
+    from fastapi.testclient import TestClient
     from sqlalchemy.orm import Session
 
     from app.core.config import get_settings, reset_settings_cache
+    from app.db import models
     from app.db.models import User
     from app.db.session import create_db_engine
     from app.main import create_app
@@ -641,43 +653,52 @@ def _isolated_app(tmp: str) -> dict:
     command.upgrade(config, "head")
 
     engine = create_db_engine(settings.database_url)
+    try:
+        with Session(engine) as session:
+            seed_demo_data(
+                session,
+                password=_seed_password(settings),
+                now=datetime(2026, 11, 15, tzinfo=UTC),
+                iterations=1000,
+            )
+            session.commit()
+            patient = session.execute(
+                select(User).where(User.username == "demo_patient_a")
+            ).scalar_one()
+            doctor = session.execute(
+                select(User).where(User.username == "demo_doctor")
+            ).scalar_one()
+            # ``issue_session`` is keyword-only and takes an explicit clock; the
+            # reviewed probe omitted it and raised TypeError before any upload.
+            #
+            # The clock must be *now*, not a fixed date: a session lives for 60
+            # minutes, so a hard-coded midnight expiry is already in the past and
+            # the upload answers 401. That is the probe borrowing the seed's
+            # deterministic timestamp for something time-sensitive.
+            issued_at = datetime.now(UTC)
+            patient_token, _ = issue_session(session, user=patient, now=issued_at, ttl_minutes=60)
+            doctor_token, _ = issue_session(session, user=doctor, now=issued_at, ttl_minutes=60)
+            session.commit()
 
-    with Session(engine) as session:
-        seed_demo_data(
-            session,
-            password=_seed_password(settings),
-            now=datetime(2026, 11, 15, tzinfo=UTC),
-            iterations=1000,
-        )
-        session.commit()
-        patient = session.execute(
-            select(User).where(User.username == "demo_patient_a")
-        ).scalar_one()
-        doctor = session.execute(select(User).where(User.username == "demo_doctor")).scalar_one()
-        # ``issue_session`` is keyword-only and takes an explicit clock; the
-        # reviewed probe omitted it and raised TypeError before any upload.
-        #
-        # The clock must be *now*, not a fixed date: a session lives for 60
-        # minutes, so a hard-coded midnight expiry is already in the past and
-        # the upload answers 401. That is the probe borrowing the seed's
-        # deterministic timestamp for something time-sensitive.
-        issued_at = datetime.now(UTC)
-        patient_token, _ = issue_session(session, user=patient, now=issued_at, ttl_minutes=60)
-        doctor_token, _ = issue_session(session, user=doctor, now=issued_at, ttl_minutes=60)
-        session.commit()
+        _ensure_scripts_on_path()
+        import generate_p3_fixtures as fixtures
 
-    import generate_p3_fixtures as fixtures
-
-    return {
-        "engine": engine,
-        "database_url": database_url,
-        "settings": settings,
-        "app": create_app(settings),
-        "session_factory": lambda: Session(engine),
-        "patient_token": patient_token,
-        "doctor_token": doctor_token,
-        "image_bytes": fixtures.image_bytes(W1_SOURCE_NAME, fmt="PNG"),
-    }
+        app = create_app(settings)
+        return {
+            "engine": engine,
+            "database_url": database_url,
+            "settings": settings,
+            "app": app,
+            "test_client": TestClient(app),
+            "models": models,
+            "session_factory": lambda: Session(engine),
+            "patient_token": patient_token,
+            "doctor_token": doctor_token,
+            "image_bytes": fixtures.image_bytes(W1_SOURCE_NAME, fmt="PNG"),
+        }
+    except Exception:
+        engine.dispose()
+        raise
 
 
 def gate_api_ocr_upload(results: list[Result], *, engine_present: bool) -> None:
@@ -891,6 +912,8 @@ class W1Evidence:
     candidate: dict | None = None
     #: Why there is no candidate, for the NOT RUN detail.
     candidate_absence: str = ""
+    positive_control_promoted: bool = True
+    positive_control_detail: str = ""
     #: How many non-``value`` facts the engine produced. ``measurement_rejected`` is
     #: only reachable when at least one sibling exists: with a value-only document
     #: the service's own rule classifies the outcome as ``all_facts_rejected``, so
@@ -937,6 +960,8 @@ def assess_w1(evidence: W1Evidence) -> list[Result]:
 
     if evidence.candidate is None:
         return rows(NOT_RUN, evidence.candidate_absence or "no usable OCR value fact")
+    if not _w1_value_usable(evidence.candidate):
+        return rows(NOT_RUN, "candidate is not an eligible pending OCR value")
 
     if evidence.non_value_fact_count == 0:
         # The document holds only a ``value`` fact, so rejecting it makes *every*
@@ -984,16 +1009,16 @@ def assess_w1(evidence: W1Evidence) -> list[Result]:
         )
     )
 
-    no_observation = not evidence.promoted_observations
+    no_observation = not evidence.promoted_observations and evidence.positive_control_promoted
     results.append(
         Result(
             f"{gate}: no Observation",
             PASS if no_observation else FAIL,
             (
-                "no Observation references this document's facts"
+                f"no Observation references this document's facts; positive control: {evidence.positive_control_detail}"
                 if no_observation
-                else f"{len(evidence.promoted_observations)} Observation(s) promoted from a "
-                f"rejected document: {list(evidence.promoted_observations)}"
+                else f"rejected observations={list(evidence.promoted_observations)}; "
+                f"positive control: {evidence.positive_control_detail}"
             ),
             {"promoted": list(evidence.promoted_observations)},
         )
@@ -1111,20 +1136,120 @@ def _w1_read(session_factory, models, document_id: str, fact_id: str) -> dict:
         }
 
 
-def _w1_candidate(facts: list[dict]) -> dict | None:
-    """Return the OCR-produced ``value`` fact, or ``None``.
+def _w1_value_usable(value: dict) -> bool:
+    """Reject values that cannot become a valid Observation."""
+    from app.core.enums import Unit
 
-    A ``value`` fact whose extractor is not ``tesseract`` would not prove the real
-    engine produced it, so it is not accepted.
-    """
-    for fact in facts:
-        if fact.get("field_name") != "value":
-            continue
-        if (fact.get("evidence") or {}).get("extractor") != "tesseract":
-            continue
-        if (fact.get("raw_text") or "").strip():
-            return fact
-    return None
+    try:
+        number = float(str(value.get("normalized_value")).replace(",", "."))
+    except ValueError:
+        return False
+    extractor = value.get("extractor") or (value.get("evidence") or {}).get("extractor")
+    return (
+        math.isfinite(number)
+        and number > 0
+        and value.get("unit") in {u.value for u in Unit}
+        and bool((value.get("raw_text") or "").strip())
+        and value.get("verification_status") == "pending"
+        and extractor == "tesseract"
+        and not set(value.get("quality_flags") or ())
+        & {"unparseable_value", "ambiguous_unit", "page_missing"}
+    )
+
+
+def _w1_candidate_assessment(facts: list[dict], issues=()) -> tuple[dict | None, str]:
+    """Check the actual OCR facts against the existing verified mapping boundary."""
+    from app.services.documents.mapping import VerifiedFactView, decide_mapping
+
+    if any(i.get("issue_type") in {"VI-004", "VI-006"} for i in issues):
+        return None, "identity or conflict blocker"
+    values = [f for f in facts if f.get("field_name") == "value"]
+    if len(values) != 1:
+        return None, "expected exactly one value fact"
+    value = values[0]
+    if not _w1_value_usable(value):
+        return None, "value is not eligible pending OCR output"
+    context = [
+        f for f in facts if f.get("field_name") in {"report_date", "test_name", "value", "unit"}
+    ]
+    if {f.get("field_name") for f in context} != {"report_date", "test_name", "value", "unit"}:
+        return None, "mapping context incomplete"
+    if any(
+        f.get("verification_status") != "pending"
+        or (f.get("evidence") or {}).get("extractor") != "tesseract"
+        for f in context
+    ):
+        return None, "mapping context is not pending OCR output"
+    views = [
+        VerifiedFactView(f["field_name"], f.get("normalized_value"), f.get("unit"), "verified")
+        for f in context
+    ]
+    decision = decide_mapping(views)
+    if decision.mapped is None or decision.mapped.unit != value.get("unit"):
+        return None, f"mapping rejected context: {decision.reason}"
+    return value, "mapped by map-1.0.0"
+
+
+def _w1_candidate(facts: list[dict], issues=()) -> dict | None:
+    return _w1_candidate_assessment(facts, issues)[0]
+
+
+def _w1_positive_mapping_control(
+    http, patient_headers, doctor_headers, objects, rejected_id, rejected_fact_id
+):
+    """Prove promotion through the real API on a separate synthetic text PDF."""
+    from sqlalchemy import select
+
+    import generate_p3_fixtures as fixtures
+
+    pdf = fixtures.build_pdf([(SOURCES / W1_SOURCE_NAME).read_text(encoding="utf-8").splitlines()])
+    response = http.post(
+        "/api/v1/documents/upload",
+        headers=patient_headers,
+        files={"file": ("control.pdf", pdf, "application/pdf")},
+    )
+    if response.status_code != 202:
+        return False, f"control upload: {response.status_code} {response.text[:200]}"
+    control_id = response.json()["document_id"]
+    response = http.get(f"/api/v1/documents/{control_id}/extraction", headers=doctor_headers)
+    if response.status_code != 200:
+        return False, f"control extraction: {response.status_code}"
+    for fact in response.json()["facts"]:
+        if fact["verification_status"] == "pending":
+            result = http.post(
+                f"/api/v1/documents/{control_id}/verify",
+                headers=doctor_headers,
+                json={"fact_id": fact["fact_id"], "decision": "verified"},
+            )
+            if result.status_code != 200:
+                return False, f"control verify: {result.status_code} {result.text[:200]}"
+    models = objects["models"]
+    with objects["session_factory"]() as session:
+        ids = set(
+            session.execute(
+                select(models.ExtractedFact.id).where(
+                    models.ExtractedFact.document_id == control_id
+                )
+            ).scalars()
+        )
+        observations = [
+            o
+            for o in session.execute(select(models.Observation)).scalars()
+            if o.source_fact_id in ids
+        ]
+        valid = (
+            len(observations) == 1
+            and observations[0].measure_type == "glucose"
+            and observations[0].value == 104.0
+            and observations[0].unit == "mg/dL"
+            and observations[0].trust_level == "doctor_verified"
+        )
+    rejected = _w1_read(objects["session_factory"], models, rejected_id, rejected_fact_id)
+    valid = valid and not rejected["promoted_observations"]
+    return (
+        valid,
+        f"control observations={len(observations)}, rejected observations={len(rejected['promoted_observations'])}",
+    )
 
 
 def gate_r21_rejection(results: list[Result], objects: dict | None) -> None:
@@ -1189,13 +1314,16 @@ def gate_r21_rejection(results: list[Result], objects: dict | None) -> None:
         evidence.non_value_fact_count = sum(
             1 for f in body["facts"] if f.get("field_name") != "value"
         )
-        candidate = _w1_candidate(body["facts"])
+        candidate, candidate_reason = _w1_candidate_assessment(
+            body["facts"], body.get("verification_issues", [])
+        )
 
         if candidate is None:
             # Honest NOT RUN. The engine ran and produced nothing this gate can
             # reject; inventing a fact to reach a decision would be fabrication.
             evidence.candidate_absence = (
                 "the real engine produced no mappable `value` fact; "
+                f"reason={candidate_reason}; facts={body['facts']} "
                 f"fields={list(evidence.extracted_fields)} "
                 f"attempts={list(evidence.attempts)}"
             )
@@ -1206,6 +1334,8 @@ def gate_r21_rejection(results: list[Result], objects: dict | None) -> None:
         evidence.candidate = {
             "fact_id": candidate["fact_id"],
             "raw_text": candidate["raw_text"],
+            "normalized_value": candidate.get("normalized_value"),
+            "quality_flags": candidate.get("quality_flags", []),
             "unit": candidate.get("unit"),
             "confidence": candidate.get("confidence"),
             "verification_status": candidate["verification_status"],
@@ -1267,6 +1397,14 @@ def gate_r21_rejection(results: list[Result], objects: dict | None) -> None:
         settled = _w1_read(session_factory, models, document_id, candidate["fact_id"])
         evidence.decision_count_after_refusal = settled["snapshot"]["decision_count"]
 
+        evidence.positive_control_promoted, evidence.positive_control_detail = (
+            _w1_positive_mapping_control(
+                http, patient_headers, doctor_headers, objects, document_id, candidate["fact_id"]
+            )
+        )
+        evidence.promoted_observations = _w1_read(
+            session_factory, models, document_id, candidate["fact_id"]
+        )["promoted_observations"]
         for row in assess_w1(evidence):
             _record(results, row)
 
@@ -1284,15 +1422,31 @@ def gate_r21_rejection_is_mappable(results: list[Result]) -> None:
     if not source.is_file():
         _record(results, Result(gate, FAIL, f"missing committed fixture {W1_SOURCE_NAME}"))
         return
+    from app.core.enums import ExtractionPath
+    from app.services.documents.field_parser import parse_pages
+    from app.services.documents.mapping import VerifiedFactView, decide_mapping
+    from app.services.documents.text_extraction import PageText
+
     text = source.read_text(encoding="utf-8", errors="replace")
-    if "mg/dL" not in text or "glucose" not in text.lower():
+    parsed = parse_pages([PageText(0, text, ExtractionPath.PYPDF)])
+    decision = decide_mapping(
+        [
+            VerifiedFactView(f.field_name.value, f.normalized_value, f.unit, "verified")
+            for f in parsed.facts
+        ]
+    )
+    if (
+        not decision.mapped
+        or decision.mapped.measure_type != "glucose"
+        or decision.mapped.value != 104.0
+        or decision.mapped.unit != "mg/dL"
+    ):
         _record(
             results,
             Result(
                 gate,
                 FAIL,
-                f"{W1_SOURCE_NAME} is not the mappable glucose report: W1's "
-                "'no Observation' assertion would be vacuous",
+                f"{W1_SOURCE_NAME} is not the mappable glucose report; no Observation would be vacuous: {decision}",
             ),
         )
 
@@ -1301,7 +1455,8 @@ def _w1_teardown(seam: dict) -> list[str]:
     """Release W1's seam, returning any teardown problems for the caller to record."""
     errors: list[str] = []
     try:
-        seam["engine"].dispose()
+        if seam.get("engine") is not None:
+            seam["engine"].dispose()
     except Exception as error:  # pragma: no cover - defensive
         errors.append(f"engine: {type(error).__name__}: {error}")
     try:
@@ -1339,6 +1494,13 @@ def _w1_run(results: list[Result], *, engine_present: bool) -> None:
     restored environment are released on every path — including the honest
     ``NOT RUN`` when the engine produced no candidate.
     """
+    if any(r.status == FAIL for r in _verdicts_for(results, "W1 R21 rejection: OCR value fact")):
+        for name in W1_CASES[1:]:
+            _record(
+                results,
+                Result(f"W1 R21 rejection: {name}", NOT_RUN, "fixture mapping guard failed"),
+            )
+        return
     if not engine_present:
         gate_r21_rejection(results, None)
         return
@@ -1350,29 +1512,22 @@ def _w1_run(results: list[Result], *, engine_present: bool) -> None:
         seam = _isolated_app(tmp)
         gate_r21_rejection(results, seam)
     except Exception as error:
-        if not _verdicts_for(results, "W1 R21 rejection: OCR value fact"):
-            _record(
-                results,
-                Result(
-                    "W1 R21 rejection: OCR value fact",
-                    FAIL,
-                    f"unexpected {type(error).__name__}: {error}\n{traceback.format_exc(limit=3)}",
-                ),
-            )
+        for name in W1_CASES:
+            gate = f"W1 R21 rejection: {name}"
+            if not _verdicts_for(results, gate):
+                _record(
+                    results,
+                    Result(
+                        gate,
+                        FAIL,
+                        f"unexpected {type(error).__name__}: {error}\n{traceback.format_exc(limit=3)}",
+                    ),
+                )
     finally:
-        if seam is not None:
-            seam["saved_env"] = saved_env
-        else:
-            # The seam failed to build; still restore what we changed.
-            for name, previous in saved_env.items():
-                if previous is None:
-                    os.environ.pop(name, None)
-                else:
-                    os.environ[name] = previous
-            shutil.rmtree(tmp, ignore_errors=True)
-            return
-        seam["tmp"] = tmp
-        problems = _w1_teardown(seam)
+        cleanup = dict(seam or {})
+        cleanup.update(saved_env=saved_env, tmp=tmp)
+        cleanup.setdefault("database_url", f"sqlite:///{(Path(tmp) / 'accept.db').as_posix()}")
+        problems = _w1_teardown(cleanup)
         if problems:
             _record(
                 results,

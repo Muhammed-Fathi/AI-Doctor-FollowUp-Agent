@@ -9,7 +9,7 @@ owner executes it and records the output.
 |---|---|
 | Main checkout (**never** mutated by this procedure) | `E:\DEPI\AI-Doctor-FollowUp-Agent` |
 | Disposable acceptance worktree | `E:\DEPI\P3-Acceptance` (or `P3-Acceptance-<short-sha>` if taken — §2.1) |
-| Branch (remote-only) | `arena/f80e1923-ai-doctor-followup-agent` — the **R21 implementation**, not PR #10 |
+| Branch (remote-only) | `arena/818751e0-ai-doctor-followup-agent` — the **R21 implementation**, not PR #10 |
 | Pinned commit | the SHA the reviewer names for this Stage 5.1 correction (§2.0) |
 | PR | [#10](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10) — draft, open, **not** this branch |
 | Phase | **`IN_REVIEW`** — no PASS, no merge, no P4/P5 |
@@ -95,8 +95,7 @@ Do **not** paste `18a53b2` (PR #10) or `867ab12` (`main`); neither contains R21.
 
 The expected test count travels with the commit. The count has moved twice:
 `e7d73b5` (Stages 3-5) expects **663** (P3: 275); the Stage 5.1 revision expects
-**666** (P3: 275); and this Stage 5.2 revision expects **688** (P3: **297**), after
-the R21 W1 gate added 22 cases. Pinning an older SHA while reading a newer table —
+**666** (P3: 275); and Stage 5.2 expected **688** (P3: **297**); Stage 5.2a expects **696** (P3: **305**) after eight probe regressions. Pinning an older SHA while reading a newer table —
 or the reverse — reports a false FAIL on a run that actually succeeded, which is
 why the check below reads the figure from the pinned checkout rather than from
 whatever copy of this file you happen to be holding.
@@ -132,7 +131,7 @@ there, and moves to a new destination instead.
 
 ```powershell
 $Main        = 'E:\DEPI\AI-Doctor-FollowUp-Agent'
-$Branch      = 'refs/heads/arena/f80e1923-ai-doctor-followup-agent'
+$Branch      = 'refs/heads/arena/818751e0-ai-doctor-followup-agent'
 $ApprovedSha = '<PASTE THE REVIEWED STAGE 5.1 SHA HERE>'   # see §2.0
 $Base        = 'E:\DEPI\P3-Acceptance'
 $Accept      = $Base
@@ -416,14 +415,13 @@ Record the per-gate summary block **and** the exit code. `SKIPPED` is never a pa
 note which gate skipped and why (the Playwright smoke legitimately skips unless
 `-IncludeE2E` is given and browser binaries are installed).
 
-Expected backend figure at this commit: **688 passed**, of which **297** are the P3
-suite (`backend/tests/p3`). Verified by collection and by a full run on the
-reviewed commit, not estimated:
+Expected backend figure at this commit: **696 passed**, of which **305** are the P3
+suite (`backend/tests/p3`). Verified by collection and a full run on this Stage 5.2a commit, not estimated:
 
 | Suite | Tests |
 |---|---|
-| `backend/tests` (whole backend) | **688 passed** |
-| `backend/tests/p3` (P3 suite) | **297** |
+| `backend/tests` (whole backend) | **696 passed** |
+| `backend/tests/p3` (P3 suite) | **305** |
 | ├ `test_p3_verification.py` | 29 |
 | ├ `test_p3_extraction.py` | 26 |
 | ├ `test_p3_edge_cases.py` (R06–R09) | 24 |
@@ -433,7 +431,7 @@ reviewed commit, not estimated:
 | ├ `test_p3_r17_safety.py` (R17 OCR substitution + fail-closed) | 24 |
 | ├ `test_p3_r18_provenance.py` (R18 span exactness + bare label) | 14 |
 | ├ `test_p3_windows_findings.py` (R13–R16) | 47 |
-| ├ `test_windows_ocr_acceptance.py` (probe, W1 gate + handoff) | 39 |
+| ├ `test_windows_ocr_acceptance.py` (probe, W1 gate + handoff) | 47 |
 | ├ `test_p3_upload.py` | 12 |
 | ├ `test_p3_authorization.py` | 12 |
 | └ `test_p3_fixtures.py` (incl. CRLF portability) | 12 |
