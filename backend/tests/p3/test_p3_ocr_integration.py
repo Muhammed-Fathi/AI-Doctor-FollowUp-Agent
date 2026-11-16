@@ -22,6 +22,8 @@ than mocking the exception away. No real Tesseract runs here; live OCR remains
 
 from __future__ import annotations
 
+import ntpath
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -70,6 +72,23 @@ def _isolate_pytesseract_global(monkeypatch):
         monkeypatch.setattr(target, "_result", target, raising=False)
 
 
+def _assert_same_executable(actual: str, expected: Path) -> None:
+    """Assert ``actual`` names the same executable file as ``expected``.
+
+    On Windows, ``shutil.which`` appends the upper-case extension from ``PATHEXT``
+    (e.g. ``tesseract.BAT``) even when the file on disk is ``tesseract.bat``.
+    ``os.path.normcase`` preserves strict case sensitivity on POSIX while applying
+    platform-semantic case folding on Windows, and ``os.path.samefile`` verifies
+    both paths resolve to the exact same filesystem entry.
+    """
+    actual_path = Path(actual)
+    assert actual_path.is_file(), f"resolved executable does not exist: {actual!r}"
+    assert os.path.samefile(actual_path, expected), f"{actual!r} is not {expected!r}"
+    assert os.path.normcase(os.path.abspath(actual)) == os.path.normcase(
+        os.path.abspath(expected)
+    ), f"{actual!r} != {str(expected)!r}"
+
+
 # ---------------------------------------------------------------- defect 1: version
 
 
@@ -107,7 +126,7 @@ def test_engine_version_points_pytesseract_at_the_resolved_executable(monkeypatc
     version = ocr_module.engine_version(str(engine.path))
 
     assert version == "5.4.0.20240606"
-    assert recorded["cmd"] == str(engine.path), "pytesseract must target the resolved path"
+    _assert_same_executable(recorded["cmd"], engine.path)
 
 
 def test_engine_version_returns_none_when_the_engine_is_missing(monkeypatch, tmp_path):
@@ -158,8 +177,8 @@ def test_run_ocr_targets_the_explicit_executable_not_path(monkeypatch, tmp_path)
         preprocessing=Preprocessing.NONE,
     )
 
-    assert seen["cmd"] == str(engine.path), "image_to_string must use the explicit path"
-    assert seen["data_cmd"] == str(engine.path), "image_to_data must use the explicit path"
+    _assert_same_executable(seen["cmd"], engine.path)
+    _assert_same_executable(seen["data_cmd"], engine.path)
     assert result.tool_version == "5.4.0.20240606"
 
 
@@ -190,9 +209,36 @@ def test_run_ocr_uses_path_discovery_when_nothing_is_configured(monkeypatch, tmp
         preprocessing=Preprocessing.NONE,
     )
 
-    assert seen["cmd"] == str(engine.path)
+    _assert_same_executable(seen["cmd"], engine.path)
     assert result.text == "text"
     assert result.confidence == pytest.approx(0.8)
+
+
+def test_executable_identity_helper_respects_platform_casing(monkeypatch, tmp_path):
+    """Windows ``PATHEXT`` casing (``.BAT`` vs ``.bat``) matches; wrong files fail."""
+    bat = tmp_path / "tesseract.bat"
+    bat.write_text("@echo off\r\n", encoding="utf-8")
+    upper_bat = tmp_path / "tesseract.BAT"
+    if not upper_bat.exists():
+        upper_bat.symlink_to(bat)
+
+    # Under Windows normalization, `.BAT` and `.bat` pointing to the same file match.
+    with monkeypatch.context() as win_ctx:
+        win_ctx.setattr(os.path, "normcase", ntpath.normcase)
+        _assert_same_executable(str(upper_bat), bat)
+
+    # Under POSIX normalization (os.path.normcase restored), mismatched case still fails.
+    if sys.platform != "win32":
+        with pytest.raises(AssertionError):
+            _assert_same_executable(str(upper_bat), bat)
+
+    # A different binary with the same directory never passes under either rule.
+    other = tmp_path / "other.bat"
+    other.write_text("@echo off\r\n", encoding="utf-8")
+    with monkeypatch.context() as win_ctx:
+        win_ctx.setattr(os.path, "normcase", ntpath.normcase)
+        with pytest.raises(AssertionError):
+            _assert_same_executable(str(other), bat)
 
 
 def test_run_ocr_restores_the_global_command_after_use(monkeypatch, tmp_path):
@@ -568,13 +614,12 @@ def test_run_ocr_holds_the_selection_across_its_engine_calls(monkeypatch, tmp_pa
 
     # While run_ocr is inside, no other selection may take effect.
     assert not intruded.wait(0.25), "another selection entered during a live run_ocr"
-    assert pytesseract.pytesseract.tesseract_cmd == str(engine.path), (
-        "the global was swapped while run_ocr was inside the selection"
-    )
+    _assert_same_executable(pytesseract.pytesseract.tesseract_cmd, engine.path)
 
     release.set()
     worker.join(_R12_HOLD_TIMEOUT)
     other.join(_R12_HOLD_TIMEOUT)
 
-    assert seen == [str(engine.path)]
+    assert len(seen) == 1
+    _assert_same_executable(seen[0], engine.path)
     assert intruded.is_set(), "the intruder should proceed once run_ocr releases"

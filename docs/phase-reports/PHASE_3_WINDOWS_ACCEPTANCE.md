@@ -9,8 +9,8 @@ owner executes it and records the output.
 |---|---|
 | Main checkout (**never** mutated by this procedure) | `E:\DEPI\AI-Doctor-FollowUp-Agent` |
 | Disposable acceptance worktree | `E:\DEPI\P3-Acceptance` (or `P3-Acceptance-<short-sha>` if taken — §2.1) |
-| Branch (remote-only) | `arena/f80e1923-ai-doctor-followup-agent` — the **R21 implementation**, not PR #10 |
-| Pinned commit | the SHA the reviewer names for this Stage 5.1 correction (§2.0) |
+| Branch (remote-only) | `arena/752cca1f-ai-doctor-followup-agent` — the **R21 + Stage 5.2a / 6a implementation**, not PR #10 |
+| Pinned commit | the SHA the reviewer names for this Stage 6a correction (§2.0) |
 | PR | [#10](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10) — draft, open, **not** this branch |
 | Phase | **`IN_REVIEW`** — no PASS, no merge, no P4/P5 |
 
@@ -93,13 +93,15 @@ Do **not** paste `18a53b2` (PR #10) or `867ab12` (`main`); neither contains R21.
 
 #### Verify the document and the code are the same commit
 
-The expected test count travels with the commit. The count has moved twice:
-`e7d73b5` (Stages 3-5) expects **663** (P3: 275); the Stage 5.1 revision expects
-**666** (P3: 275); and this Stage 5.2 revision expects **688** (P3: **297**), after
-the R21 W1 gate added 22 cases. Pinning an older SHA while reading a newer table —
-or the reverse — reports a false FAIL on a run that actually succeeded, which is
-why the check below reads the figure from the pinned checkout rather than from
-whatever copy of this file you happen to be holding.
+The expected test count travels with the commit. The count has moved across
+revisions: `e7d73b5` (Stages 3-5) expects **663** (P3: 275); Stage 5.1 expects
+**666** (P3: 275); Stage 5.2 expects **688** (P3: 297); Stage 5.2a
+(`e3a4698`) expects **702** (P3: 311); and this Stage 6a revision expects
+**708** (P3: **314**), adding 6 Windows portability and isolation regressions.
+Pinning an older SHA while reading a newer table — or the reverse — reports a
+false FAIL on a run that actually succeeded, which is why the check below reads
+the figure from the pinned checkout rather than from whatever copy of this file
+you happen to be holding.
 
 Let the checkout settle it, before recording any number:
 
@@ -112,12 +114,25 @@ Select-String -Path (Join-Path $env:P3_ACCEPT 'docs\phase-reports\PHASE_3_WINDOW
 # NOTE: this needs the 3.12 runtime built in §3/§4, so it runs *after* those steps.
 # $Py is defined here explicitly rather than assumed, because this block appears
 # before §3 and would otherwise fail with "Cannot bind argument to parameter 'Path'".
+# Scoped ErrorActionPreference='Continue' prevents PowerShell 5.1 from treating
+# benign native stderr lines as terminating errors if $ErrorActionPreference='Stop'.
 Set-Location $env:P3_ACCEPT
 $Py = Join-Path $env:APP_VENV_DIR "Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $Py)) {
     throw "Run §3/§4 first: no interpreter at $Py. The count check below needs it."
 }
-& $Py -m pytest backend/tests --collect-only -q 2>&1 | Select-Object -Last 2
+& {
+    $ErrorActionPreference = 'Continue'
+    & $Py -m pytest backend/tests --collect-only -q 2>&1 |
+        ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) {
+                if ($_.Exception) { $_.Exception.Message } else { $_.ToString() }
+            } else {
+                $_
+            }
+        } |
+        Select-Object -Last 2
+}
 ```
 
 If the figure the document states and the figure pytest collects disagree, **stop**.
@@ -132,8 +147,8 @@ there, and moves to a new destination instead.
 
 ```powershell
 $Main        = 'E:\DEPI\AI-Doctor-FollowUp-Agent'
-$Branch      = 'refs/heads/arena/f80e1923-ai-doctor-followup-agent'
-$ApprovedSha = '<PASTE THE REVIEWED STAGE 5.1 SHA HERE>'   # see §2.0
+$Branch      = 'refs/heads/arena/752cca1f-ai-doctor-followup-agent'
+$ApprovedSha = '<PASTE THE REVIEWED STAGE 6A SHA HERE>'   # see §2.0
 $Base        = 'E:\DEPI\P3-Acceptance'
 $Accept      = $Base
 
@@ -412,27 +427,79 @@ Set-Location $env:P3_ACCEPT
 powershell -NoProfile -ExecutionPolicy Bypass -File '.\scripts\powershell\test_all.ps1'
 ```
 
+If you capture logs from an outer Windows PowerShell 5.1 script where
+`$ErrorActionPreference = 'Stop'`, **do not** run bare `& ... 2>&1`: PowerShell 5.1
+wraps native stderr lines (such as Alembic `INFO [alembic.runtime.migration] ...`
+diagnostics during `pytest`) as `ErrorRecord` objects and aborts on the first
+one. Use a wrapper that scopes `Continue`, unwraps `ErrorRecord` entries to text,
+streams live via `Out-Host`, and returns the exact scalar child exit code:
+
+```powershell
+function Invoke-Logged {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$Arguments = @(),
+        [Parameter(Mandatory = $true)][string]$LogPath
+    )
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $global:LASTEXITCODE = 0
+    try {
+        & $FilePath @Arguments 2>&1 |
+            ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) {
+                    if ($_.Exception) { $_.Exception.Message } else { $_.ToString() }
+                } else {
+                    $_
+                }
+            } |
+            Tee-Object -FilePath $LogPath |
+            Out-Host
+        $code = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
+        if (-not $? -and $code -eq 0) { $code = 1 }
+    }
+    finally {
+        $ErrorActionPreference = $prev
+    }
+    return $code
+}
+
+# Example — log full output, keep failures visible, and fail only on real non-zero exit:
+$Evidence = Join-Path $env:P3_ACCEPT "artifacts"
+New-Item -ItemType Directory -Force -Path $Evidence | Out-Null
+$GateExit = Invoke-Logged -FilePath 'powershell.exe' `
+    -Arguments @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', '.\scripts\powershell\test_all.ps1') `
+    -LogPath (Join-Path $Evidence 'test_all.log')
+Write-Host "test_all exit code: $GateExit"
+if ($GateExit -ne 0) { throw "test_all.ps1 failed (exit $GateExit); see test_all.log" }
+```
+
+> **Note on temporary scripts under `$env:P3_ACCEPT`:** Ruff checks all `.py`
+> files in the worktree (including `artifacts\*.py`), so keep any ad-hoc
+> helper scripts outside `$env:P3_ACCEPT` or delete them before running
+> `test_all.ps1`.
+
 Record the per-gate summary block **and** the exit code. `SKIPPED` is never a pass —
 note which gate skipped and why (the Playwright smoke legitimately skips unless
 `-IncludeE2E` is given and browser binaries are installed).
 
-Expected backend figure at this commit: **702 passed**, of which **311** are the P3
+Expected backend figure at this commit: **708 passed**, of which **314** are the P3
 suite (`backend/tests/p3`). Verified by collection and by a full run on the
 reviewed commit, not estimated:
 
 | Suite | Tests |
 |---|---|
-| `backend/tests` (whole backend) | **702 passed** |
-| `backend/tests/p3` (P3 suite) | **311** |
+| `backend/tests` (whole backend) | **708 passed** |
+| `backend/tests/p3` (P3 suite) | **314** |
 | ├ `test_p3_verification.py` | 29 |
 | ├ `test_p3_extraction.py` | 26 |
 | ├ `test_p3_edge_cases.py` (R06–R09) | 24 |
 | ├ `test_p3_review_corrections.py` (R01–R05) | 21 |
 | ├ `test_p3_rejection_recovery.py` (R21 rejection/recovery) | 21 |
-| ├ `test_p3_ocr_integration.py` (R11/R12 pytesseract + lock) | 16 |
+| ├ `test_p3_ocr_integration.py` (R11/R12 pytesseract + lock) | 17 |
 | ├ `test_p3_r17_safety.py` (R17 OCR substitution + fail-closed) | 24 |
 | ├ `test_p3_r18_provenance.py` (R18 span exactness + bare label) | 14 |
-| ├ `test_p3_windows_findings.py` (R13–R16) | 47 |
+| ├ `test_p3_windows_findings.py` (R13–R16) | 49 |
 | ├ `test_windows_ocr_acceptance.py` (probe, W1 gate + handoff) | 53 |
 | ├ `test_p3_upload.py` | 12 |
 | ├ `test_p3_authorization.py` | 12 |
@@ -447,8 +514,9 @@ reviewed commit, not estimated:
 > populated P3 dependency graph and its downgrade/link cases), for +31 in
 > total as of Stage 5.1; no pre-existing test was removed, renamed or skipped, and
 > the pre-existing 635 remain among the 666 measured then. Stage 5.2 adds the 22
-> W1 cases above on top of that, and Stage 5.2a adds 14 W1 plumbing, validity
-> and teardown regressions (see the Stage 5.2 / 5.2a notes below).
+> W1 cases above on top of that, Stage 5.2a adds 14 W1 plumbing, validity and
+> teardown regressions, and Stage 6a adds 6 Windows portability and test-isolation
+> regressions (see the Stage 5.2 / 5.2a / 6a notes below).
 >
 > **Stage 5.2 (current figures).** The R21 W1 gate added 22 cases to
 > `test_windows_ocr_acceptance.py` (17 -> 39), so the backend total moved
@@ -467,6 +535,15 @@ reviewed commit, not estimated:
 > protection. These simulated-OCR tests prove W1's wiring only and are never
 > Windows or real-Tesseract evidence.
 >
+> **Stage 6a (current figures).** Windows acceptance fixes added 6 regressions
+> (`702 -> 708`, P3 `311 -> 314`): platform-semantic Windows `PATHEXT` executable
+> identity check in `test_p3_ocr_integration.py` (16 -> 17), isolated Windows
+> subprocess environment (`SYSTEMROOT`/`WINDIR`/`System32` preserved without host
+> leaks, fixing `WinError 10106`) and `.gitattributes` LF policy verification in
+> `test_p3_windows_findings.py` (47 -> 49), plus full `/health` dependency state
+> (`not_configured`, `ok`, `unavailable`) and host-`TESSERACT_CMD` fixture
+> isolation tests in `backend/tests/test_health.py` (+3).
+>
 > The R1-R8 R21 cases were written **RED first** and stayed RED until the
 > implementation landed. They are now all GREEN — R1/R1a/R1b/R2/R3 from the
 > Stage 2 rejection-state rule, R4–R7 from the Stage 3 recovery route and
@@ -480,12 +557,13 @@ reviewed commit, not estimated:
 > Windows evidence, and no OCR configuration changed as part of R21.
 
 
-> **Windows CRLF note (P3-R10).** `git` may check these `.txt` fixtures out with CRLF,
-> which changes their byte length and SHA-256. That is expected: the integrity test
-> canonicalizes CRLF to LF before hashing and compares against the committed
-> `manifest.json` values, so a CRLF checkout is not a failure. If you *do* see a hash
-> mismatch, it is a real content difference — report the file and both digests rather
-> than re-cloning. Set nothing; do not add `core.autocrlf=false` to work around it.
+> **Windows CRLF note (P3-R10).** The repository `.gitattributes` pins
+> `data/synthetic/documents/sources/*.txt` and `data/synthetic/documents/manifest.json`
+> to `text eol=lf` so a fresh Windows checkout preserves the exact committed LF
+> bytes even when `core.autocrlf=true` (keeping both `test_p3_fixtures.py` and
+> `test_the_new_fixture_is_registered_with_a_correct_digest` exact against
+> `manifest.json`). Do not add `core.autocrlf=false` locally; if you *do* see a
+> hash mismatch on a fresh checkout, report the file and both digests.
 
 Those figures come from a **Linux sandbox on Python 3.11**, so treat them as the
 expected *count*, not as Windows evidence. A different count on your machine is a

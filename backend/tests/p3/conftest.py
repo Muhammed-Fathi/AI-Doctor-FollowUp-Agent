@@ -63,10 +63,10 @@ def p3_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Set
     monkeypatch.setenv("LOGIN_RATE_LIMIT_WINDOW_SECONDS", "300")
     # Keep every byte a test writes inside tmp_path.
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
-    # OCR is deliberately *not* configured: the sandbox has no engine, and a test
-    # must never silently depend on a machine binary. The real-engine path is
-    # marked Windows-only in the report.
-    monkeypatch.delenv("TESSERACT_CMD", raising=False)
+    # OCR is deliberately *not* configured: tests must never silently depend on
+    # a host binary or .env TESSERACT_CMD. The real-engine path is covered by
+    # the Windows acceptance probe.
+    monkeypatch.setenv("TESSERACT_CMD", "")
 
     reset_settings_cache()
     try:

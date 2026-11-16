@@ -9,6 +9,8 @@ defect when it was not.
 from __future__ import annotations
 
 import importlib.util
+import ntpath
+import os
 import sys
 from pathlib import Path
 
@@ -400,6 +402,103 @@ def test_every_gate_emits_at_most_one_row_in_a_full_probe_run(monkeypatch):
     assert len(identifiers) == len(set(identifiers))
 
 
+def _isolated_subprocess_env(
+    tmp_path: Path,
+    *,
+    platform: str | None = None,
+    host_env: dict[str, str] | None = None,
+    python_executable: str | None = None,
+) -> dict[str, str]:
+    """Build a minimal isolated environment that still initializes Python on Windows.
+
+    Stripping ``SystemRoot`` / ``WINDIR`` / ``System32`` causes Winsock startup in
+    Windows Python subprocesses to fail with ``OSError: [WinError 10106]``. This
+    helper keeps only the OS runtime directories/variables needed for Python and
+    SQLite/Winsock while excluding host ``PATH``, ``TESSERACT_CMD``, ``DATABASE_URL``
+    and other test-contaminating variables, and confining ``TEMP``/``HOME`` to
+    ``tmp_path``.
+    """
+    target_platform = sys.platform if platform is None else platform
+    source_env = os.environ if host_env is None else host_env
+    env: dict[str, str] = {
+        "PYTHONPATH": str(Path(__file__).resolve().parents[3] / "backend"),
+        "HOME": str(tmp_path),
+        "TEMP": str(tmp_path),
+        "TMP": str(tmp_path),
+    }
+    if target_platform == "win32":
+        system_root = source_env.get("SYSTEMROOT") or source_env.get("SystemRoot") or r"C:\Windows"
+        win_dir = source_env.get("WINDIR") or source_env.get("windir") or system_root
+        exe = python_executable or sys.executable
+        exe_dirs = [ntpath.dirname(exe)]
+        if python_executable is None:
+            resolved_dir = os.path.dirname(os.path.realpath(sys.executable))
+            if resolved_dir not in exe_dirs:
+                exe_dirs.append(resolved_dir)
+        system32 = ntpath.join(system_root, "System32")
+        path_parts: list[str] = []
+        for entry in (*exe_dirs, system32, system_root):
+            if entry and entry not in path_parts:
+                path_parts.append(entry)
+        env["PATH"] = ";".join(path_parts)
+        env["SYSTEMROOT"] = system_root
+        env["WINDIR"] = win_dir
+        env["USERPROFILE"] = str(tmp_path)
+        for key in (
+            "SYSTEMDRIVE",
+            "SystemDrive",
+            "COMSPEC",
+            "ComSpec",
+            "PATHEXT",
+            "NUMBER_OF_PROCESSORS",
+            "PROCESSOR_ARCHITECTURE",
+        ):
+            value = source_env.get(key)
+            if value and key.upper() not in env:
+                env[key.upper()] = value
+    else:
+        env["PATH"] = "/usr/bin:/bin"
+    return env
+
+
+def test_isolated_subprocess_env_preserves_windows_system_vars_without_host_leaks(tmp_path):
+    """Windows subprocess isolation keeps Winsock DLL lookup intact and strips host secrets."""
+    host_env = {
+        "SYSTEMROOT": r"C:\Windows",
+        "WINDIR": r"C:\Windows",
+        "SYSTEMDRIVE": "C:",
+        "COMSPEC": r"C:\Windows\System32\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD",
+        "PATH": r"C:\Program Files\Tesseract-OCR;C:\Windows\System32",
+        "TESSERACT_CMD": r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        "DATABASE_URL": "sqlite:///host.db",
+        "DEMO_SEED_PASSWORD": "host-seed-value",
+        "TEMP": r"C:\Users\owner\AppData\Local\Temp",
+    }
+
+    env = _isolated_subprocess_env(
+        tmp_path,
+        platform="win32",
+        host_env=host_env,
+        python_executable=r"E:\DEPI\P3-Acceptance\.venv\Scripts\python.exe",
+    )
+
+    assert env["SYSTEMROOT"] == r"C:\Windows"
+    assert env["WINDIR"] == r"C:\Windows"
+    assert env["SYSTEMDRIVE"] == "C:"
+    assert env["COMSPEC"] == r"C:\Windows\System32\cmd.exe"
+    assert env["PATHEXT"] == ".COM;.EXE;.BAT;.CMD"
+    assert r"C:\Windows\System32" in env["PATH"].split(";")
+    assert r"E:\DEPI\P3-Acceptance\.venv\Scripts" in env["PATH"].split(";")
+    assert r"C:\Program Files\Tesseract-OCR" not in env["PATH"]
+    for leaked in ("TESSERACT_CMD", "DATABASE_URL", "DEMO_SEED_PASSWORD"):
+        assert leaked not in env
+    assert env["TEMP"] == str(tmp_path)
+    assert env["TMP"] == str(tmp_path)
+    assert env["HOME"] == str(tmp_path)
+    assert env["USERPROFILE"] == str(tmp_path)
+
+
 def test_cleanup_releases_every_pool_not_just_the_file(tmp_path):
     """Issue 3: ``unlink()`` is not proof — assert the pools are empty.
 
@@ -451,11 +550,7 @@ sys.exit(0)
         [sys.executable, str(script)],
         capture_output=True,
         text=True,
-        env={
-            "PATH": "/usr/bin:/bin",
-            "PYTHONPATH": str(Path(__file__).resolve().parents[3] / "backend"),
-            "HOME": str(tmp_path),
-        },
+        env=_isolated_subprocess_env(tmp_path),
         check=False,
         timeout=120,
     )
@@ -522,11 +617,7 @@ print("ENV", after)
         [sys.executable, str(script)],
         capture_output=True,
         text=True,
-        env={
-            "PATH": "/usr/bin:/bin:/tmp/v/bin",
-            "PYTHONPATH": str(Path(__file__).resolve().parents[3] / "backend"),
-            "HOME": str(tmp_path),
-        },
+        env=_isolated_subprocess_env(tmp_path),
         check=False,
         timeout=300,
     )
@@ -993,6 +1084,38 @@ def test_the_new_fixture_is_registered_with_a_correct_digest():
     assert len(raw) == entry["size_bytes"]
     assert entry["contract_case"] == "GOLD-EX-11"
     assert entry["produces_binary"] is False
+
+
+def test_gitattributes_enforces_lf_for_synthetic_fixtures():
+    """Synthetic fixture sources must keep LF on Windows even with ``core.autocrlf=true``."""
+    import subprocess
+
+    from app.core.paths import REPO_ROOT
+
+    gitattributes = REPO_ROOT / ".gitattributes"
+    assert gitattributes.is_file(), ".gitattributes must preserve LF for synthetic sources"
+    rules = gitattributes.read_text(encoding="utf-8")
+    assert "data/synthetic/documents/sources/*.txt text eol=lf" in rules
+    assert "data/synthetic/documents/manifest.json text eol=lf" in rules
+
+    completed = subprocess.run(
+        [
+            "git",
+            "check-attr",
+            "eol",
+            "--",
+            NEW_SOURCE_PATH,
+            "data/synthetic/documents/manifest.json",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    if completed.returncode == 0:
+        lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+        assert all(line.endswith("eol: lf") for line in lines), completed.stdout
 
 
 def test_the_existing_golden_sources_and_hashes_are_untouched():

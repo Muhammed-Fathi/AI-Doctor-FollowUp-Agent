@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
 from fastapi.testclient import TestClient
 
 EXPECTED_KEYS = {"status", "version", "db", "ollama", "tesseract", "disclaimer"}
@@ -48,9 +51,59 @@ def test_health_reports_degraded_without_leaking_details(offline_client: TestCli
 
 
 def test_health_reports_unimplemented_dependencies_honestly(client: TestClient) -> None:
-    """Ollama and Tesseract are not used in P1 and must not claim ``ok``."""
+    """When unconfigured, Ollama and Tesseract report ``not_configured`` honestly."""
     payload = client.get("/health").json()
     assert payload["ollama"] == "not_configured"
+    assert payload["tesseract"] == "not_configured"
+
+
+def test_health_reports_tesseract_ok_when_configured_and_working(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient, tmp_path: Path
+) -> None:
+    """A configured, runnable Tesseract engine surfaces as ``ok``."""
+    from app.core.config import reset_settings_cache
+    from app.services.documents import ocr as ocr_module
+
+    fake_engine = tmp_path / "tesseract"
+    fake_engine.write_text("", encoding="utf-8")
+    monkeypatch.setenv("TESSERACT_CMD", str(fake_engine))
+    monkeypatch.setattr(ocr_module, "engine_version", lambda cmd: "5.4.0.20240606")
+    reset_settings_cache()
+
+    payload = client.get("/health").json()
+    assert payload["status"] == "ok"
+    assert payload["tesseract"] == "ok"
+    assert payload["ollama"] == "not_configured"
+
+
+def test_health_reports_tesseract_unavailable_when_configured_path_missing(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient, tmp_path: Path
+) -> None:
+    """A configured path that cannot run reports ``unavailable``, keeping liveness ``ok``."""
+    from app.core.config import reset_settings_cache
+
+    monkeypatch.setenv("TESSERACT_CMD", str(tmp_path / "absent" / "tesseract"))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    reset_settings_cache()
+
+    payload = client.get("/health").json()
+    assert payload["status"] == "ok"
+    assert payload["tesseract"] == "unavailable"
+
+
+def test_client_fixture_ignores_host_tesseract_cmd(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, tmp_path: Path
+) -> None:
+    """Ambient ``TESSERACT_CMD`` on the host does not leak into ``client``-based tests."""
+    from app.services.documents import ocr as ocr_module
+
+    fake_engine = tmp_path / "tesseract"
+    fake_engine.write_text("", encoding="utf-8")
+    monkeypatch.setenv("TESSERACT_CMD", str(fake_engine))
+    monkeypatch.setattr(ocr_module, "engine_version", lambda cmd: "5.4.0.20240606")
+
+    isolated_client: TestClient = request.getfixturevalue("client")
+    payload = isolated_client.get("/health").json()
     assert payload["tesseract"] == "not_configured"
 
 
