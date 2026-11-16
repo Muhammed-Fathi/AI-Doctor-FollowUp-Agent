@@ -18,7 +18,16 @@ actual defect is narrower and worse: **`verified` while a blocking `VI-002` is s
 open, and no doctor action can ever clear it.** The correction was requested in review
 [`5916697862`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#pullrequestreview-5916697862).
 
-**Revision 3 (this round).** Review
+**Revision 4 (this round).** Review
+[`5917068456`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#pullrequestreview-5917068456)
+found the last authorization contradiction: revision 3 still described a correction as a
+recovery route after a plain rejection. Measured — `corrected` **and** `verified` on an
+already-`rejected` fact both return `409 E_FACT_ALREADY_DECIDED`. §8.1.4 is rewritten around
+that irreversibility, §8.1.6a presents the owner's two explicit choices, and the
+"zero Observations after a correction" claim is corrected as fixture-specific. **Still no
+production change.**
+
+**Revision 3.** Review
 [`5916921991`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#pullrequestreview-5916921991)
 found three errors in revision 2's S1 test matrix: A-3 demanded a `VI-005` that no code path
 emits for a rejected *clean* value; A-6 claimed a system-wide invariant that the report's own
@@ -406,10 +415,12 @@ fail-closed measure, accepting that it over-blocks. The reasoning:
    writes no new fact state, revises no decision, and deletes no history. D-11 and D-14
    both hold unchanged.
 3. **It needs no migration and no API change**, so it is reviewable as a small diff.
-4. **Its cost is over-blocking, and over-blocking is visible and safe.** A doctor who
-   deliberately rejected a spurious value sees a document that stays in review; they are
-   inconvenienced, not misled. The reverse error is a `verified` document whose
-   measurement nobody read.
+4. **Its cost is over-blocking — and the block is permanent, not merely visible.** A doctor
+   who deliberately rejected a spurious value sees a document that stays in review **and can
+   never be completed**: `corrected` and `verified` on that fact both return `409`, so there
+   is no same-fact recovery (§8.1.4). They are inconvenienced rather than misled, and the
+   reverse error is a `verified` document whose measurement nobody read — but the cost is
+   strictly worse than "stays in review" and must be authorized as such (§8.1.6a).
 
 **Explicit non-claims for S1:**
 
@@ -419,9 +430,10 @@ fail-closed measure, accepting that it over-blocks. The reasoning:
 * S1 does **not** make `preserve_interword_spaces=1` safe, and must not be cited as
   grounds for enabling it.
 * S1 does **not** close the corrected-from-unread path and does **not** close XO-3 in
-  general. A correction creates a verified numeric replacement and supersedes the original,
-  which is the sanctioned route out of an unread measurement; source review of such a
-  correction is requirement B (§8.1.3).
+  general. A **first-decision** correction of a still-`pending` value creates a verified
+  numeric replacement and supersedes the original — that is the sanctioned route out of an
+  unread measurement. It is **not** available after a rejection (§8.1.4). Source review of
+  such a correction is requirement B (§8.1.3).
 * S1 does **not** harmonize status for rejected **non-measurement** facts. A rejected
   `reference_text` can still leave `verified` with open `VI-002` — measured in §1.2. That is
   R20-D2 and is deliberately out of scope.
@@ -432,8 +444,9 @@ fail-closed measure, accepting that it over-blocks. The reasoning:
   (§8.1.1, measured).
 
 A later explicit acknowledgement / typed rejection-reason design (S2 or S4) remains
-available if over-blocking proves unacceptable in use; it is **not** required for the
-interim measure and is out of scope for the next increment.
+available if the non-recoverable hold proves unacceptable in use; it is **not** required for
+the interim measure, is out of scope for the next increment, and is exactly **Option 2** in
+§8.1.6a.
 
 ### 6.3 For reviewability (§3, P2)
 
@@ -497,7 +510,7 @@ the decision in §9.** Steps are ordered by dependency, not by appeal.
 
 | Step | Requirement | Work | Closes | Evidence class | Approval |
 |---|---|---|---|---|---|
-| **1** | **A** | S1: an **active** rejected `value` fact leaves the document `needs_verification`, keyed on the declared-measurement condition — **not** on open-issue count, **not** on a superseded original | FC-2, narrow XO-3 only | scripted HTTP | **owner — NOT YET AUTHORIZED** (§8.1.6) |
+| **1** | **A** | S1: an **active** rejected `value` fact leaves the document `needs_verification`, keyed on the declared-measurement condition — **not** on open-issue count, **not** on a superseded original. Produces an intentionally blocked document with no same-fact recovery (§8.1.4) | FC-2, narrow XO-3 only | scripted HTTP | **owner — NOT YET AUTHORIZED** (§8.1.6a Option 1 + A1–A8) |
 | **2** | **C** | Document the destroyed-`Value:`-label case (FC-5) as an **honest limitation**, with no claim of detection | FC-5 (as limitation) | analysis | owner (status wording) |
 | **3** | **A** | FC-4: zero-fact documents surface an explicit, reviewable failure rather than an empty issue list | FC-4 | scripted HTTP | owner (triage governance) |
 | **4** | **B (partial)** | P-c: correct `EXTRACTION_PROVENANCE.md` / US-09 to "spans resolve at intake only" | doc truth | docs | none |
@@ -574,17 +587,43 @@ did not over-reach.
 | **C2** | Plain rejected measurement, scripted OCR | scripted engine, case-B text (clean `105`), reject `value`, verify the rest | same as C1 | **RED** |
 | **C3** | `VI-002` preserved under D-14 | C1/C2 state | `VI-002` present in `verification_issues`, `state == open`, `reason_code == fact_unverified`; **open-issue set identical to today's** | **GREEN — must stay green** |
 | **C4** | No false `verified` in covered cases | C1/C2 | the specific contradiction (`verified` + open `VI-002`) is unreachable **for a rejected active `value` fact** | **RED** |
-| **C5** | Zero Observations from rejected measurements | C1/C2 | `source_fact_id`-bearing Observation count for the document is 0; document-derived total unchanged | **GREEN** |
-| **C6** | Valid correction still works, lineage intact | correct a `value` (both a clean value and a `page_missing` value), verify the rest | status `verified`; `corrected_from_fact_id` lineage present; original row retained `rejected`; `VI-002`/`VI-005` **`resolved`** | **GREEN** |
+| **C5** | No Observation derived from a **rejected** measurement | C1/C2 | no Observation with `source_fact_id` references a fact of this document whose status is `rejected`; asserted **per document**, not as a global count | **GREEN** |
+| **C6** | Valid **first-decision** correction still works, lineage intact | `pending` fact → `corrected` → verify the rest; run on both the `page_missing` value and a clean value | status `verified`; `corrected_from_fact_id` lineage present; original row retained `rejected`; `VI-002`/`VI-005` **`resolved`**. **Does not assert "zero Observations"** — a mappable glucose/mg/dL correction legitimately creates one (§8.1.2 baselines) | **GREEN** |
 | **C7** | Document-only reports unaffected | report with `report_date` + `reference_text`, **no `value` fact**; verify both | predicate does not fire; status `verified`; `VI-002` `resolved` | **GREEN** |
 | **C8** | Identity-blocker precedence and contract preserved | document with unresolved identity (`VI-004`) | `409 E_VI_004_UNRESOLVED` still raised **before** any decision is recorded; S1 does not mask or reorder it | **GREEN** |
 
-Measured baselines for C5–C8 on `07442e7`, so the guard tests have a known reference:
+Measured baselines for C5–C8 on `3898dba`, so the guard tests have a known reference:
 
-* C6 corrected-from-unread → `verified`, issues `VI-002 resolved`, `VI-005 resolved`, 0 document Observations.
-* C6 corrected-from-clean → `verified`, `VI-002 resolved`, 0 document Observations.
-* C7 document-only → `verified`, `VI-002 resolved`, predicate false.
-* C1/C2 today → `verified` with `VI-002` **open** (the defect C4 targets).
+| Baseline | Result | Observations |
+|---|---|---|
+| C6 corrected-from-unread (`page_missing`, then corrected) | `verified`, `VI-002`/`VI-005` `resolved` | **0** |
+| C6 corrected-from-clean, **hemoglobin / g/dL** fixture | `verified`, `VI-002` `resolved` | **0** |
+| C6 corrected-from-clean, **glucose / mg/dL** fixture | `verified`, `VI-002` `resolved` | **1 — `('glucose', 150.0, 'mg/dL', 'doctor_verified')`** |
+| C7 document-only | `verified`, `VI-002` `resolved`, predicate false | 0 |
+| C1/C2 today | `verified` with `VI-002` **open** (the defect C4 targets) | 0 |
+
+**Correction to revision 3, point 5: "zero Observations after a valid correction" is
+fixture-specific and must not be written as a universal rule.** The two C6 fixtures differ
+for a mundane reason: `report_a_clean.txt` is **Hemoglobin 13.4 g/dL**, and `g/dL` is not in
+the unit allowlist (`mmHg`, `bpm`, `mg/dL`), so `decide_mapping` produces no mappable
+measurement. A **glucose / mg/dL** correction *does* produce a `doctor_verified` Observation
+on the first decision.
+
+The correct, general statement of C5 is therefore narrowly about **rejected** measurements:
+
+* **C5 (rejected measurement): no Observation with `source_fact_id` may reference a rejected
+  fact.** `decide_mapping` reads `verified` facts only, so this holds today and must keep
+  holding. It is asserted against the document's own facts, not against a global Observation
+  count.
+* **A valid first-decision correction on a mappable measurement is *expected* to produce a
+  `doctor_verified` Observation** where the test and unit map. That is correct behaviour, not
+  absence of behaviour, and C6 must assert **the lineage and the resolution**, not "zero
+  Observations".
+* Consequence for the tests: C5 and C6 must use **different fixtures** — C5 uses a rejected
+  measurement (either unit), C6 uses a **mappable** glucose/mg/dL measurement if it wants to
+  assert an Observation is created, or the hemoglobin fixture if it only asserts lineage. A
+  test written on the hemoglobin fixture must never claim "corrections create no
+  Observation".
 
 #### 8.1.3 What S1 explicitly does **not** claim
 
@@ -614,16 +653,51 @@ Revision 2 overstated three things. Each is now a bound on the claim, not a goal
 **The single-sentence scope:** *S1 prevents a document from becoming `verified` while a
 doctor has rejected its measurement and no verified replacement exists — and nothing more.*
 
-#### 8.1.4 Interaction with the permanently-open `VI-002`
+#### 8.1.4 The hold is irreversible — S1 creates a terminal-in-practice state
 
-S1 keeps the document in `needs_verification` after a plain rejection. Because D-11 makes
-re-decision return **409 `E_FACT_ALREADY_DECIDED`**, that document cannot be cleared by
-retrying the rejected fact. S1 therefore **must not** be paired with a "verify again" prompt
-or any affordance implying the doctor can resolve it: the only forward actions are a
-**correction** of the value (creates a verified replacement, clears the block) or leaving
-the document in review. The UI/API must not misrepresent this. Making a plain rejection
-clearable is **S2/S4 territory** (typed reason / explicit acknowledgement) and is out of
-scope.
+Revision 3 said a correction was an available recovery after a plain rejection. **That was
+wrong, and it is wrong under D-11, not merely under S1.** Measured on the glucose/mg/dL
+path:
+
+| Attempted action on a fact already `rejected` | Result |
+|---|---|
+| `decision=corrected` (same fact) | **409 `E_FACT_ALREADY_DECIDED`** |
+| `decision=verified` (same fact) | **409 `E_FACT_ALREADY_DECIDED`** |
+| state after either attempt | unchanged: `needs_verification`, `VI-002` **open** |
+
+Both decisions are refused by `record_decision()` **before** any correction is recorded, so
+the "correction clears the block" path does not exist once a rejection is on the record.
+**A correction is an alternative *first* decision on a pending fact, never a recovery from an
+already-recorded rejection.** Concretely:
+
+* **Valid, first-decision correction (C6).** Fact is still `pending` → `corrected` succeeds
+  → a new `verified` numeric fact supersedes the original → `VI-002` `resolved` → status
+  `verified`. This is the path that must keep working and that C6 pins.
+* **Post-rejection recovery (does not exist).** Fact is `rejected` → every further decision is
+  `409`. There is **no currently authorized same-fact resolution**, no correction, no retry,
+  no supersede-via-correction.
+
+**What S1 therefore produces, stated plainly:** a document that is *intentionally* blocked,
+with a permanently open `VI-002`, and **no authorized action that can resolve it**. The
+document is not "awaiting a correction"; it is a **non-recoverable hold**. Under S1 the only
+things a doctor can still do are to act on *other* pending facts on that document; the
+rejected measurement itself is final.
+
+**Consequences the implementation must honour:**
+
+* No "verify again", "correct this value", or "resolve" affordance may be offered for a
+  rejected fact. D-11 makes all of them 409, and offering one would be a false promise.
+* The UI/API must not describe the document as recoverable. Its honest description is
+  "rejected measurement — document cannot be completed; re-upload a clearer source or
+  escalate", and the re-upload/escalation route is **outside S1** and currently unspecified.
+* A correction attempted on a rejected fact must keep returning `409` with the existing
+  neutral detail; S1 changes no error path.
+
+**This is the trade S1 makes explicit**: it converts a *silently wrong* `verified` state into
+an *honestly stuck* one. That is the fail-closed direction, but it is a real cost and it
+requires the owner's decision in **§8.1.6a** — either accept the non-recoverable hold as an
+interim measure (Option 1, requiring A3 and A8), or authorize a terminal/recovery-state
+design separately (Option 2).
 
 #### 8.1.5 Tests described, not written
 
@@ -654,11 +728,30 @@ an explicit owner authorization of this scope, stated as all of:
 |---|---|
 | A1 | Change **one predicate** in `verification.py` (`_unread_measurement_blocks_verification` or a sibling), keyed on **active** rejected `value` facts — no other production change |
 | A2 | Accept that a document with a plain-rejected measurement stays in `needs_verification`, including for the doctor who deliberately rejected a spurious value |
-| A3 | Accept that the stranded `VI-002` remains open and unclearable, with **no** "verify again" affordance, and that clearing requires a correction |
+| A3 | **Accept a non-recoverable hold.** The stranded `VI-002` stays open; the rejected fact admits **no** further decision (`corrected` and `verified` are both `409 E_FACT_ALREADY_DECIDED`); there is **no** same-fact resolution, and **no** "verify again"/"correct"/"resolve" affordance may be offered |
 | A4 | Accept that general non-measurement rejection (`reference_text` → `verified` + open `VI-002`) **remains** as R20-D2 |
 | A5 | Accept that corrected-from-unread still reaches `verified` with an Observation, and XO-3 stays FAIL pending requirement B |
 | A6 | Approve the C1–C8 test set as the acceptance criteria, with C1/C2/C4 red and C3/C5–C8 green |
 | A7 | Confirm **no** VI-005 policy change for clean rejections (that would be a separate approval) |
+| A8 | Confirm the document is described as **not completable** (re-upload / escalate), and that any terminal/recovery-state design is a **separate, later** authorization — not part of S1 |
+
+#### 8.1.6a The decision the owner must actually make
+
+Because the hold is non-recoverable, "approve S1" is not one question but a choice between
+two forward paths. Presenting only the first would understate the cost:
+
+| | **Option 1 — accept the non-recoverable hold (interim)** | **Option 2 — authorize a terminal/recovery design first** |
+|---|---|---|
+| What it means | Ship the narrow predicate. A rejected measurement makes the document permanently non-completable with an open `VI-002`. | Do not ship S1 yet. Separately authorize a design that gives a rejected measurement a *terminal, honest* state and/or a legitimate recovery route. |
+| Safety | Closes the false `verified` state immediately; fails closed. | Same safety, later, with a usable workflow. |
+| Cost | Doctor is stuck with a dead document; the only real remedy is re-uploading a clearer source or escalating, neither of which is specified today. | No S1 protection until the design lands; longer exposure to the §1.1 contradiction. |
+| Scope | One predicate, no schema, no API, no migration. | Likely typed rejection reason (S2) or an explicit acknowledgement surface (S4) → schema and/or API change, plus its own acceptance criteria. |
+| Reversible later? | Yes — Option 2 can be layered on top of Option 1 without undoing it. | — |
+| My recommendation | **Acceptable as a short-lived interim** *only if* Option 2 is explicitly scheduled, because a permanently stuck document generates operational pressure to weaken the gate. | Preferred long-term. |
+
+**Neither option is authorized by this document.** R20-D1b in §9 records the choice as open.
+If the owner chooses Option 1, A1–A8 must all be granted. If the owner chooses Option 2,
+S1 stays unimplemented and a new design round is required.
 
 #### 8.1.7 Gaps that remain outside S1
 
@@ -667,7 +760,8 @@ Stated explicitly so no reader mistakes S1 for a general fix:
 | Gap | Status after S1 | Governed by |
 |---|---|---|
 | Rejection of **non-measurement** facts (`reference_text`, `unit`, `test_name`) | **unchanged** — can still yield `verified` + open `VI-002` | R20-D2 |
-| Permanently open, unclearable `VI-002` after a plain rejection | **unchanged** (S1 makes it honest, not clearable) | S2/S4, later design |
+| Permanently open `VI-002` **and no same-fact recovery** after a plain rejection | **unchanged** — `corrected` and `verified` both `409`; S1 makes the block honest, not clearable or recoverable | §8.1.6a Option 2; S2/S4 |
+| Re-upload / escalation route from a non-completable document | **does not exist** | unspecified; outside S1 |
 | False-clean OCR approval reaching `doctor_verified` | **unchanged**; S1 never fires because the doctor rejects nothing | requirement B |
 | Durable OCR page text / scoped read endpoint / retention | **unchanged**; three separate decisions | R20-D5, R20-D6 |
 | Zero-fact documents (`verification_issues: []`) | **unchanged** | step 3 / R20-D4 |
@@ -697,7 +791,7 @@ I am not implementing any of these. Each is a genuine choice I should not make f
 | # | Decision | Options | Status |
 |---|---|---|---|
 | **R20-D1** | State model for a rejected/unread declared measurement | **S1** (rejection keeps doc blocked; may over-block) / **S2** (typed rejection reason; needs migration) / **S4** (explicit "no measurement" acknowledgement; needs API) | **Recommended: S1 interim — NOT authorized.** Requires explicit scope approval per §8.1.6 (A1–A7). S2/S4 remain available later |
-| **R20-D1b** | Approve the narrow S1 scope as specified in §8.1 | **A1–A7** as listed in §8.1.6 | **open — this is the blocking decision for the next increment** |
+| **R20-D1b** | **Which S1 path** — the blocking decision | **Option 1:** accept the interim non-recoverable hold and grant **A1–A8** / **Option 2:** do not ship S1; authorize a terminal/recovery-state design first (§8.1.6a) | **open — nothing in §8.1 is authorized** |
 | **R20-D2** | May a document reach `verified` while a blocking issue is open **for non-measurement facts**? | currently yes (`reference_text`, §1.2) — general harmonization | open — **deliberately outside S1** (§8.1.7) |
 | **R20-D3** | Is a destroyed-`Value:`-label document (FC-5) required to block, or accepted as document-only with the limitation documented? | recommend **documented limitation**, since it is undetectable deterministically | open |
 | **R20-D4** | Zero-fact documents (FC-4): reviewable blocker, or `failed` is sufficient? | needs triage governance | open |
@@ -741,34 +835,43 @@ production code is written.
    workflow behaviour (G3/`FC`) and doctor-verified observations (G4/`XO`) remain **four
    separate properties**; progress on one is never evidence for another.
 5. **Over-blocking is a real cost of S1.** Documents whose value a doctor deliberately
-   rejects will stay in review, with an open `VI-002` that **no action clears** (409 on
-   retry) — only a correction clears it. This is accepted deliberately as the fail-closed
-   direction, must not be papered over with a "verify again" affordance (§8.1.4), and
-   should be revisited only with data from use or via S2/S4.
-6. **The append-only contract leaves a stranded `VI-002`.** A plain rejection cannot be
-   revised (409 `E_FACT_ALREADY_DECIDED`), so `VI-002` remains open with no clearing action.
-   S1 makes this honest by keeping the document in review; it does not make the issue
-   clearable. A typed rejection-reason design (S2) or a superseding correction (existing)
-   are the only routes, and both are out of scope here.
+   rejects stay in review with an open `VI-002` that **no action clears** — both `corrected`
+   and `verified` on a rejected fact return `409`. Nothing recovers the document today. This
+   is accepted deliberately as the fail-closed direction, must not be papered over with a
+   "verify again"/"correct"/"resolve" affordance (§8.1.4), and requires the explicit §8.1.6a
+   choice between an interim non-recoverable hold and a separately authorized
+   terminal/recovery design.
+6. **The append-only contract leaves a stranded `VI-002` with no same-fact resolution.**
+   A plain rejection cannot be revised (409 `E_FACT_ALREADY_DECIDED` for *every* further
+   decision), so `VI-002` remains open and the document cannot be completed. S1 makes this
+   honest by keeping the document in review; it does not make the issue clearable, and no
+   currently authorized path does. A typed rejection-reason design (S2), an explicit
+   acknowledgement surface (S4), or a terminal-state design are the candidate routes; **all
+   are out of scope here**, and none is authorized.
 
 ---
 
 ## 11. What this round did and did not do
 
-**Did:** replaced §8.1 with a scoped S1 acceptance specification (C1–C8) that matches a
-one-predicate implementation; removed the unsatisfiable `VI-005` demand; scoped the
-invariant claim to rejected **measurement** facts; corrected the corrected-from-unread and
-XO-3 overclaims; downgraded "adopted" to "recommended, not authorized"; listed the exact
-owner authorization required (§8.1.6, A1–A7) and the gaps S1 leaves open (§8.1.7);
-measured the corrected-from-unread supersession trap that a naive predicate would hit.
+**Did (revision 4):** corrected §8.1.4 and A3, which wrongly described a correction as an
+available recovery after a plain rejection — measured `409 E_FACT_ALREADY_DECIDED` for
+**both** `corrected` and `verified` on a rejected fact, so the hold is non-recoverable;
+separated the valid **first-decision** correction (C6) from post-rejection recovery, which
+does not exist; stated S1's product plainly as an intentionally blocked document with a
+permanently open `VI-002` and no authorized same-fact resolution; added §8.1.6a presenting
+the owner with two explicit choices (accept the interim non-recoverable hold, or authorize a
+terminal/recovery design first) and A8; and corrected "zero Observations after a valid
+correction" to be **fixture-specific** — a glucose/mg/dL correction legitimately creates a
+`doctor_verified` Observation, the hemoglobin/g/dL fixture does not because `g/dL` is outside
+the unit allowlist.
 
 **Did not:** change production code, API, schema, migrations, UI or OCR configuration; touch
 D-14, `VI-002` or the `VI-005` triggers; reclassify `GOLD-EX-11`; write the tests (specified
 only); enable `preserve_interword_spaces=1`; persist OCR page text; add an endpoint; decide
-retention; authorize S1.
+retention; authorize S1 or any recovery design.
 
-**Next step requires the owner:** grant or decline A1–A7 (§8.1.6). No implementation begins
-before that.
+**Next step requires the owner:** choose Option 1 or Option 2 in §8.1.6a. If Option 1, grant
+A1–A8 (§8.1.6). No implementation begins before that.
 
 PR #10 remains **DRAFT**; P3 remains **IN_REVIEW**; `GOLD-EX-11` remains **FAIL / NOT
 PROVEN**; no merge; P4/P5 not started.
