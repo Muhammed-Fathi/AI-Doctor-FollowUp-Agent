@@ -22,6 +22,16 @@ This document is the next increment after
 direction. This round turns that direction into a concrete, minimal, testable
 design. **Nothing here is authorized.**
 
+**Corrigendum R21-B1…B4** (independent review
+[`5918165016`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#pullrequestreview-5918165016),
+against `a46a7fd`). This revision resolves four targeted findings **without
+changing the recommended approach**: B1 terminal timing is now explicitly
+**rejection-first** (§4.1); B2 adds patient-safe recovery metadata (§4.9); B3
+specifies a tested additive self-FK migration with a safe downgrade refusal
+(§4.10); B4 restates the recovery link as a **patient-declared association** and
+expands the negative tests (§4.3, §4.4, §4.7, §7). The acceptance matrix is
+revised in §7. Nothing in this corrigendum is implementation authorization.
+
 ---
 
 ## 0. Verified baseline (executed in this session)
@@ -264,15 +274,14 @@ lives* and *how recovery is modelled*.
 
 ## 4. Recommended design — Approach A
 
-### 4.1 Exact status transition model
+### 4.1 Exact status transition model and terminal timing
 
 `_recompute_document_status()` becomes:
 
 ```
 facts = all facts of the document
 if not facts:                                -> failed (intake has already set failure_code = "no_facts_extracted")
-if any fact.pending:                        -> needs_verification
-if all facts rejected:                      -> failed, failure_code = "all_facts_rejected"
+if all facts rejected:                       -> failed, failure_code = "all_facts_rejected"
 superseded = superseded_fact_ids(facts)
 active_rejected = [f for f in facts
                    if f.verification_status == "rejected" and f.id not in superseded]
@@ -280,9 +289,40 @@ if active_rejected:
     failure_code = "measurement_rejected" if any(f.field_name == "value" for f in active_rejected)
                    else "fact_rejected"
                                              -> failed
+if any fact.pending:                         -> needs_verification
 if _unread_measurement_blocks_verification(...): -> needs_verification
                                              -> verified
 ```
+
+**Terminal timing policy (resolves R21-B1).** The rejection check is
+**rejection-first**: it runs before the `pending` check, so the document becomes
+terminal `failed` on the **first** plain rejection, even while sibling facts are
+still `pending`. The previous revision ordered `pending` first, which meant the
+first rejection did not produce a terminal document and `recovery_of` could not
+be used until every sibling was decided; that contradiction is removed.
+
+* **Remaining pending siblings stay decidable.** `record_decision` keeps its
+  existing guards (identity, append-only) and gains **no** new terminal guard.
+  A decision on a still-pending sibling is accepted, recorded and audited
+  exactly as before; it cannot resurrect the document, because the active
+  rejected fact persists and `_recompute_document_status` returns `failed`
+  again. Rationale: refusing those decisions would need a new
+  `E_DOCUMENT_TERMINAL` error code and would discard the doctor's verdicts on
+  the other facts; the fail-closed property already holds because promotion is
+  gated on `verified` (§4.2) and the rejected fact can never be superseded by a
+  sibling decision.
+* **`failed` means "terminal for verification", not "frozen".** Fact rows may
+  still receive decisions; the document can never return to `verified` and can
+  never promote an Observation. A strict-freeze variant that refuses sibling
+  decisions is a documented, separately approvable alternative; it is **not**
+  part of this design.
+* **Recovery eligibility begins immediately** on the first rejection, because
+  the document is already `failed` with a rejection `failure_code`. A recovery
+  upload does not depend on the old document's pending siblings being decided.
+* **Reject-first and reject-last are both terminal** and both tested (§7
+  R1a/R1b): rejecting the `value` first while siblings are pending yields
+  `failed` immediately; verifying the siblings first and rejecting the `value`
+  last yields `failed` at the last decision. The end state is identical.
 
 Notes:
 
@@ -324,6 +364,16 @@ exists beside it (the §0.2 `reference_text` case).
   its Observation carries `source_fact_id` → its own verified fact. Lineage is
   therefore two explicit hops: `observation.source_fact_id -> new fact ->
   new document.recovered_from_document_id -> old document`.
+* **The link is patient-declared, not validated equivalence (resolves R21-B4).**
+  `recovery_of` asserts only "the uploader says this new report replaces that
+  terminal document". The application does **not** assert that the new bytes are
+  clearer, related or clinically equivalent, and the audit detail must not use
+  words such as "corrected" or "validated". The new document is independently
+  scope-checked, identity-checked (`VI-004`), conflict-checked (`VI-006`),
+  extracted and doctor-verified; a link never substitutes for any of those.
+* The `document.recovered` audit event is written **only after** the upload is
+  accepted and the document row is created. A refused `recovery_of` writes no
+  link and no audit event.
 
 ### 4.4 What happens to open `VI-002` issues
 
@@ -335,6 +385,12 @@ signal is `document_status == "failed"` plus `failure_code`. No issue row is
 deleted, re-typed or auto-resolved. (A terminal-specific message/reason is a
 possible follow-up; it is not required and would be a separate `DEMO_REVIEW_RULES`
 change.)
+
+A recovery upload does **not** resolve, supersede or clear the old document's
+open `VI-002`; the old row stays `open` and historical. Whether any downstream
+consumer may treat a recovered document as closing the old blocker is a
+separate, explicitly **deferred** governance decision (P4/P5 or later); this
+design neither performs nor implies it.
 
 ### 4.5 Rejected non-measurement facts
 
@@ -362,11 +418,93 @@ recoverable terminal state (it cannot reach `failed` through decisions), so it
 cannot be a recovery source. The new document is subject to the normal
 `VI-004` / `VI-006` checks at read and verify time.
 
+The recovery link is **not** a trust boundary: the new document must clear its
+own `VI-004` / `VI-006` and its own doctor verification. A patient-declared link
+to an unrelated failed document is stored as a declared association only and is
+never described as a clinically validated recovery.
+
 ### 4.8 Append-only decision history
 
 No `fact_verification` row is ever updated or deleted. The rejected fact keeps
 its status, `raw_text`, span and flags. `corrected` / `verified` on it still
 return `409 E_FACT_ALREADY_DECIDED`. The recovery creates **new** rows only.
+
+### 4.9 Patient-safe recovery metadata (resolves R21-B2)
+
+The patient is the actor who performs the recovery upload, so the patient's own
+`GET /api/v1/documents/{document_id}` must expose the three non-clinical facts
+it needs: the terminal reason, whether recovery is allowed, and the source
+document id. `DocumentMeta` gains exactly three optional fields and nothing
+else:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `failure_code` | `str \| None` | The terminal reason; one of the §4.1 codes or an extraction code. Never document text. |
+| `recovery_eligible` | `bool` | Derived: `extraction_status == "failed"` **and** `failure_code ∈ {all_facts_rejected, measurement_rejected, fact_rejected}`. |
+| `recovered_from_document_id` | `str \| None` | The source document this row was recovered from, if any. |
+
+Redaction rules (all tested):
+
+* No `facts`, `raw_text`, `normalized_value`, `unit`, span, `quality_flags`,
+  `confidence` or Observation value may appear. `failure_code` is an
+  enum-like token; `recovered_from_document_id` is a UUID.
+* `recovery_eligible` is `false` for a document that is not terminal, and for
+  every extraction failure code that is not a rejection.
+* The exact-key assertion in `test_p3_authorization.py` is **updated** to the
+  new field set; preserving that old test is not a reason to omit the fields.
+* The doctor-only `ExtractionResponse` also carries `failure_code` and
+  `recovered_from_document_id` (§5).
+* The patient obtains the document id from the existing upload response /
+  `GET /documents/{id}`; **no new list endpoint** is added in this increment.
+
+### 4.10 SQLite migration integrity (resolves R21-B3)
+
+Migration `0004_p3_rejection_recovery` is additive and uses Alembic batch mode:
+
+```
+upgrade:
+  ALTER TABLE document ADD COLUMN recovered_from_document_id VARCHAR(36) NULL
+  CREATE INDEX ix_document_recovered_from ON document (recovered_from_document_id)
+  ALTER TABLE document ADD CONSTRAINT fk_document_recovered_from
+      FOREIGN KEY (recovered_from_document_id) REFERENCES document (id)
+      ON DELETE RESTRICT
+downgrade:
+  if EXISTS (SELECT 1 FROM document WHERE recovered_from_document_id IS NOT NULL):
+      raise DowngradeRefused          # safe refusal; schema and rows untouched
+  DROP CONSTRAINT fk_document_recovered_from
+  DROP INDEX ix_document_recovered_from
+  ALTER TABLE document DROP COLUMN recovered_from_document_id
+```
+
+* **Existing rows are untouched.** The column is nullable with no server
+  default, so every P2/P3 row keeps its values and `recovered_from_document_id`
+  is `NULL`. No table rebuild and no `CHECK` change.
+* **The self-FK is a normal inline FK.** Verified: SQLAlchemy emits
+  `FOREIGN KEY(recovered_from_document_id) REFERENCES document (id)` with no
+  cycle warning, unlike the `user <-> patient` two-table cycle.
+* **Downgrade refusal.** Dropping the column would silently destroy recovery
+  provenance, so `downgrade` refuses when any link exists, raising a neutral
+  error and leaving the schema and rows untouched. A rollback that must keep
+  the data requires an explicit archive step first; this is documented in the
+  migration docstring and tested. When no link exists, the downgrade drops the
+  constraint, index and column and returns to the exact `0003` schema.
+* **Enforcement is verified, not assumed.** The migration engine disables
+  `PRAGMA foreign_keys` (the existing `env.py` pattern); the smoke runs on a
+  runtime-equivalent connection with `PRAGMA foreign_keys=ON` and asserts:
+  - `PRAGMA foreign_key_check` is empty;
+  - inserting a `document` whose `recovered_from_document_id` does not exist
+    fails;
+  - deleting a parent `document` referenced by a child fails (`RESTRICT`);
+  - `PRAGMA foreign_key_list('document')` contains the self-FK.
+* **Head-revision constants must move.** `scripts/python/check_alembic_smoke.py`,
+  `backend/tests/p2/test_p2_migration.py` and `backend/tests/test_database.py`
+  hardcode `HEAD_REVISION = "0003_p3_documents"`; they become
+  `"0004_p3_rejection_recovery"`, and the smoke gains a `p3` state asserting the
+  column/index/FK are absent at `0003` and present at `head`.
+* **Smoke sequence:** `0001 -> 0002 -> 0003 -> 0004(head)`, then
+  `head -> 0003` on a database with no links, then `0003 -> head` again, with
+  P2/P3 row counts preserved across every step and `PRAGMA foreign_key_check`
+  empty at `head`.
 
 ---
 
@@ -376,13 +514,15 @@ Production code (all additive / localised):
 
 | File | Change |
 |---|---|
-| `backend/app/services/documents/verification.py` | `_recompute_document_status`: add the `active_rejected` branch and the two failure codes. `_maybe_promote_document`: add the `document_not_verified` gate. Add a small `_active_rejected_facts(facts, superseded)` helper. |
+| `backend/app/services/documents/verification.py` | `_recompute_document_status`: rejection-first `active_rejected` branch and the two failure codes (§4.1). `_maybe_promote_document`: `document_not_verified` gate. `_active_rejected_facts` helper. |
 | `backend/app/services/documents/intake.py` | `accept_upload(..., recovery_of: str | None = None)`: validate the source document, set `recovered_from_document_id`. |
-| `backend/app/api/v1/documents/upload.py` | Accept `recovery_of: Annotated[str | None, Form()] = None`; pass it through; append `EVENT_DOCUMENT_RECOVERED` when set. |
-| `backend/app/db/models.py` | `Document.recovered_from_document_id` (String(36), nullable, self-FK `document.id` `ondelete="RESTRICT"`), plus `Index("ix_document_recovered_from", ...)`. |
-| `backend/app/schemas/document.py` | Optional `failure_code: str | None` and `recovered_from_document_id: str | None` on `ExtractionResponse` (doctor view). `DocumentMeta` is left unchanged to avoid breaking its exact-key patient-view test. |
-| `backend/migrations/versions/0004_p3_rejection_recovery.py` | Add the column, index and self-FK; reversible downgrade. |
+| `backend/app/api/v1/documents/upload.py` | Accept `recovery_of: Annotated[str | None, Form()] = None`; pass it through; append `EVENT_DOCUMENT_RECOVERED` only on success. |
+| `backend/app/db/models.py` | `Document.recovered_from_document_id` (String(36), nullable, self-FK `document.id` `ondelete="RESTRICT"`), `Index("ix_document_recovered_from", ...)`. |
+| `backend/app/schemas/document.py` | `DocumentMeta`: optional `failure_code`, `recovery_eligible`, `recovered_from_document_id` (§4.9). `ExtractionResponse`: optional `failure_code`, `recovered_from_document_id`. |
+| `backend/migrations/versions/0004_p3_rejection_recovery.py` | Add column, index, self-FK; downgrade refuses when links exist (§4.10). |
 | `backend/app/services/documents/__init__.py` | `EVENT_DOCUMENT_RECOVERED = "document.recovered"`. |
+| `scripts/python/check_alembic_smoke.py` | `HEAD_REVISION` → `0004_p3_rejection_recovery`; add a `p3` state asserting the new column/index/FK are absent at `0003` and present at `head`. |
+| `backend/tests/test_database.py`, `backend/tests/p2/test_p2_migration.py` | `HEAD_REVISION` → `0004_p3_rejection_recovery`. |
 
 No change to `enums.py`, `issues.py`, `quality.py`, `mapping.py`, `access.py`,
 `audit.py`, `ocr.py`, `field_parser.py`, or any fixture.
@@ -391,9 +531,9 @@ Docs / contracts (must land in the same change):
 
 | File | Change |
 |---|---|
-| `docs/contracts/DATA_DICTIONARY.md` §2.4 | New column; `failure_code` values and the terminal semantics. |
-| `docs/contracts/API_CONTRACT.md` §2.4 | `recovery_of` request field; `ExtractionResponse` optional fields; `failure_code` catalogue. |
-| `docs/contracts/openapi.phase0.yaml` | Mirror the two optional `ExtractionResponse` fields. |
+| `docs/contracts/DATA_DICTIONARY.md` §2.4 | New column; `failure_code` values and the terminal semantics; the self-FK and its `RESTRICT` rule. |
+| `docs/contracts/API_CONTRACT.md` §2.4 | `recovery_of` request field; `DocumentMeta` / `ExtractionResponse` optional fields; `failure_code` catalogue; the patient-declared meaning of the link. |
+| `docs/contracts/openapi.phase0.yaml` | Mirror the new optional `DocumentMeta` and `ExtractionResponse` fields. |
 | `docs/clinical-safety/DEMO_REVIEW_RULES.md` | One note: `VI-002` remains open on a terminal rejected document (D-14 unchanged). |
 | `docs/roadmap/PHASE_PROGRESS.md` | Record the owner decision verbatim once granted. |
 | `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md` | Update the collected test counts. |
@@ -403,7 +543,8 @@ Tests:
 | File | Change |
 |---|---|
 | `backend/tests/p3/test_p3_rejection_recovery.py` | New: the §7 acceptance matrix. |
-| `backend/tests/p3/test_p3_authorization.py` | Only if `DocumentMeta` is later extended. |
+| `backend/tests/p3/test_p3_authorization.py` | Update the exact `DocumentMeta` key set; add patient/doctor authorization and redaction tests for the new fields (§4.9). |
+| `backend/tests/p2/test_p2_migration.py` (or a new migration test) | Add the `head -> 0003 -> head` self-FK smoke, row preservation, real FK enforcement and downgrade-refusal tests (§4.10). |
 | `backend/tests/p3/test_windows_ocr_acceptance.py` | Count table only (via the count-matching test). |
 
 ---
@@ -413,13 +554,14 @@ Tests:
 | Decision | Recommended | Genuinely required? |
 |---|---|---|
 | New document status value | No — reuse `failed` | No |
+| Terminal timing | Rejection-first: terminal on the first plain rejection, siblings still decidable (§4.1) | Yes, to remove the B1 contradiction |
 | New `failure_code` values | Yes: `measurement_rejected`, `fact_rejected` | Yes, for a machine-readable terminal reason and recovery-source validation |
 | New column | Yes: `document.recovered_from_document_id` (nullable, self-FK, indexed) | Yes, for durable lineage (an audit-only link is the fallback) |
-| Migration | Yes: one additive, reversible migration | Yes, for the column |
+| Migration | Yes: one additive migration; downgrade refuses when links exist (§4.10) | Yes, for the column |
 | New endpoint | No | No |
 | Request field | Yes: `recovery_of` on `POST /upload` | Yes, to create the link |
-| Response fields | Optional: `failure_code`, `recovered_from_document_id` on `ExtractionResponse` | No — tests can read the DB; recommended for usability |
-| `DocumentMeta` change | No (keeps the exact-key patient-view test green) | No |
+| Patient-safe exposure | Yes: `failure_code`, `recovery_eligible`, `recovered_from_document_id` on `DocumentMeta` (§4.9) | Yes — the patient is the recovery actor (B2) |
+| Doctor exposure | Yes: `failure_code`, `recovered_from_document_id` on `ExtractionResponse` | Recommended for usability |
 | Error codes | No new codes; `E_NOT_FOUND` / `E_VALIDATION` reused | No |
 
 ---
@@ -433,12 +575,16 @@ must stay green. All tests are local and deterministic except where marked
 
 | ID | Test | Setup | Required assertion | Today | Class |
 |---|---|---|---|---|---|
-| **R1** | Rejected measurement | text PDF; reject `value`, verify the other four | `document_status == "failed"`, `failure_code == "measurement_rejected"`, zero Observations | RED | local |
+| **R1** | Rejected measurement (reject-last) | text PDF; verify the four siblings, then reject `value` | `document_status == "failed"`, `failure_code == "measurement_rejected"`, zero Observations | RED | local |
+| **R1a** | Rejected measurement (reject-first) | text PDF; reject `value` **first**, siblings still `pending` | `failed` immediately (not `needs_verification`); `recovery_eligible == true`; a later sibling decision is still accepted and the status stays `failed` | RED | local |
+| **R1b** | Reject-first vs reject-last equivalence | run R1 and R1a to the end | identical terminal state (`failed`, same code, zero Observations); recovery eligible in both | RED | local |
 | **R2** | Rejected non-measurement fact | text PDF; reject `reference_text`, verify the other four | `document_status == "failed"`, `failure_code == "fact_rejected"`, zero Observations | RED | local |
-| **R3** | No misleading `verified` | R1 and R2 end states | `document_status != "verified"` whenever an active rejected fact exists; no `verified` + open `VI-002` pair | RED | local |
-| **R4** | Recovery attempt is created and linked | after R1, upload different bytes with `recovery_of=<old>` | `202`; new document `recovered_from_document_id == old`; old row unchanged (`failed`, rejected fact intact) | RED | local |
+| **R3** | No misleading `verified` | R1/R1a/R2 end states | `document_status != "verified"` whenever an active rejected fact exists; no `verified` + open `VI-002` pair | RED | local |
+| **R4** | Recovery attempt is created and linked | after R1a, upload different bytes with `recovery_of=<old>` | `202`; new document `recovered_from_document_id == old`; old row unchanged (`failed`, rejected fact intact) | RED | local |
 | **R5** | Observation lineage after recovery | R4, then verify the new document | new Observation's `source_fact_id` is a fact of the **new** document; old document still has zero Observations | RED | local |
-| **R6** | Recovery source must be terminal and self-owned | `recovery_of` = absent / other patient / `needs_verification` / `verified` | `404` / `404` / `400` respectively; no link written | RED | local |
+| **R6** | Recovery-source correctness (B4) | each negative: missing `recovery_of` (baseline upload); malformed / non-UUID; non-existent id; other-patient id; `needs_verification`; `verified`; `pending_extraction`; extraction-failed `no_facts_extracted`; duplicate same bytes; repeated recovery of an already-recovered document | malformed → `400`; absent / other-patient / non-existent → indistinguishable `404`; wrong state → `400`; duplicate → `409 E_DUPLICATE_DOCUMENT`; missing → normal upload with no link; repeated recovery → a new chained link is allowed as designed; **no link row and no `document.recovered` audit event on any refusal** | RED | local |
+| **R7** | Patient-safe recovery metadata (B2) | patient `GET /documents/{id}` on a terminal document and on a recovered document; other-patient, doctor and unauthenticated calls | `failure_code`, `recovery_eligible`, `recovered_from_document_id` present and correct; no `facts` / `raw_text` / `normalized_value` / `unit` / span / `quality_flags` / `confidence`; other patient → `403`/`404`; doctor assigned → `200`; unauthenticated → `401` | RED | local |
+| **R8** | SQLite migration integrity (B3) | `0001..0004` upgrade; `head -> 0003 -> head`; non-empty P2/P3 data; a linked recovery row | row counts preserved; column/index/self-FK present at `head` and absent at `0003`; `PRAGMA foreign_key_check` empty; bad-parent insert fails; parent delete with a child fails (`RESTRICT`); `downgrade` with a link raises `DowngradeRefused` and changes nothing | RED | local |
 | **G1** | Correction as the initial decision | `pending` fact → `corrected` → verify rest | `verified`; `corrected_from_fact_id` lineage; original retained `rejected`; `VI-002`/`VI-005` resolved; Observation where mappable | GREEN | local |
 | **G2** | Immutable rejection history | after R1 | `fact_verification` row exists; `corrected` and `verified` on the rejected fact still `409`; fact still `rejected` | GREEN | local |
 | **G3** | Identity-blocker precedence | document with open `VI-004` | `409 E_VI_004_UNRESOLVED` before any decision; `recovery_of` cannot name it; new linked document with a wrong ref gets its own `VI-004` | GREEN | local |
@@ -449,12 +595,15 @@ must stay green. All tests are local and deterministic except where marked
 | **G8** | Duplicate upload | same bytes after R1, with and without `recovery_of` | `409 E_DUPLICATE_DOCUMENT`; no new row | GREEN | local |
 | **G9** | Existing P3 suite | full backend suite | 635 pre-existing tests still pass (new tests added on top) | GREEN | local |
 | **W1** | Real-engine rejection | owner Windows/Tesseract, reject the OCR value | terminal `failed`, zero Observations | RED | **Windows-only** |
-| **W2** | `GOLD-EX-11` unchanged | owner Windows/Tesseract | still **FAIL / NOT PROVEN**; no expectation changed | GREEN | **Windows-only** |
+| **W2** | `GOLD-EX-11` regression preservation | owner Windows/Tesseract | still **FAIL / NOT PROVEN**; a *preservation* check, not a passing acceptance gate, and not by itself evidence of P3 acceptance | GREEN (preservation) | **Windows-only** |
 
-R4/R5/R6 are the tests that need the `recovery_of` field and the new column; R1–R3
-need only the predicate + gate. W1 is the only new test that needs the real
-engine; its application behaviour is otherwise identical to R1/R2, which run
-locally with scripted OCR.
+R4–R8 are the tests that need the `recovery_of` field, the new column, the
+patient-safe `DocumentMeta` fields and the migration; R1–R3 need only the
+predicate + gate. W1 is the only new test that needs the real engine; its
+application behaviour is otherwise identical to R1/R1a, which run locally with
+scripted OCR. W2's expected result is **FAIL / NOT PROVEN**: it is a
+regression-preservation check and must never be reinterpreted as a GREEN
+acceptance gate.
 
 ---
 
@@ -465,11 +614,11 @@ Each stage is independently reviewable and gated. **No stage starts before §9.*
 | Stage | Work | Closes | Evidence |
 |---|---|---|---|
 | 0 | This design round; owner authorization | — | owner |
-| 1 | Write `test_p3_rejection_recovery.py` (R1–R6, G1–G9); run against `18a53b2` and record the RED/GREEN table | baseline evidence | local |
-| 2 | Predicate + promotion gate + failure codes (no schema) | R1, R2, R3, G4, G5 | local |
-| 3 | `recovery_of` + column + migration + audit event + optional response fields | R4, R5, R6 | local |
+| 1 | Write `test_p3_rejection_recovery.py` (R1–R8, G1–G9); run against `18a53b2` and record the RED/GREEN table | baseline evidence | local |
+| 2 | Rejection-first predicate + promotion gate + failure codes (no schema) | R1, R1a, R1b, R2, R3, G4, G5 | local |
+| 3 | `recovery_of` + column + migration (with downgrade refusal) + audit event + `DocumentMeta`/`ExtractionResponse` fields | R4, R5, R6, R7 | local |
 | 4 | Contract/doc sync (§5 docs table); update the handoff counts | auditability | local |
-| 5 | Full suite + `ruff` + `check_openapi.py` + `check_alembic_smoke.py` | G9 | local |
+| 5 | Full suite + `ruff` + `check_openapi.py` + `check_alembic_smoke.py` (updated head + `p3` state) + migration smoke | G9, R8 | local |
 | 6 | Owner Windows run at the new SHA with **unchanged** OCR configuration: W1, W2, and the existing acceptance set | W1, W2 | **Windows-only** |
 | 7 | Independent review; PR #10 stays DRAFT; P3 stays IN_REVIEW | — | owner |
 
@@ -487,13 +636,14 @@ None of these is authorized by this document.
 |---|---|---|
 | **A1** | Terminal state model | **A:** reuse `failed` + `failure_code` (recommended) / **B:** new `rejected` status / **C:** same-document replacement fact |
 | **A2** | Scope of the terminal rule | **any active rejected fact** (recommended; subsumes R20-D2) / measurements only (narrow; R20-D2 stays open) |
-| **A3** | Additive `document.recovered_from_document_id` column + migration + `DATA_DICTIONARY.md` change | approve / reject (fallback: audit-only link) |
-| **A4** | `recovery_of` upload field and its validation (self-owned, terminal, `failed` + rejection code) | approve / adjust |
-| **A5** | Promotion gate: no Observation unless `document_status == "verified"` | approve |
-| **A6** | `VI-002` stays open on a terminal rejected document as an immutable record (D-14 unchanged) | approve / request a terminal-specific reason or message (separate `DEMO_REVIEW_RULES` change) |
-| **A7** | Optional `failure_code` / `recovered_from_document_id` on `ExtractionResponse`; `DocumentMeta` unchanged | approve / also expose on `DocumentMeta` (breaks one exact-key test) |
-| **A8** | Accept the §7 matrix as the gate, with R1–R6 red and G1–G9 green today | approve |
-| **A9** | Confirm: no OCR configuration change; `GOLD-EX-11` unchanged; synthetic fixtures unchanged; PR #10 stays DRAFT; P3 stays IN_REVIEW | confirm |
+| **A3** | Terminal timing | **rejection-first, siblings still decidable** (recommended, §4.1) / strict freeze (new `E_DOCUMENT_TERMINAL`) |
+| **A4** | Additive `document.recovered_from_document_id` column + self-FK + migration with a **downgrade refusal when links exist** + `DATA_DICTIONARY.md` change | approve / reject (fallback: audit-only link) |
+| **A5** | `recovery_of` upload field and its validation (self-owned, terminal, `failed` + rejection code; patient-declared link, not validated equivalence) | approve / adjust |
+| **A6** | Promotion gate: no Observation unless `document_status == "verified"` | approve |
+| **A7** | `VI-002` stays open on a terminal rejected document as an immutable record (D-14 unchanged); the downstream "may a recovery clear it" question is deferred | approve / request a terminal-specific reason or message (separate `DEMO_REVIEW_RULES` change) |
+| **A8** | Patient-safe exposure: `failure_code`, `recovery_eligible`, `recovered_from_document_id` on `DocumentMeta` (§4.9); `ExtractionResponse` optional fields | approve |
+| **A9** | Accept the revised §7 matrix as the gate, with R1–R8 red and G1–G9 green today; W2 remains **FAIL / NOT PROVEN** and is regression preservation only | approve |
+| **A10** | Confirm: no OCR configuration change; `GOLD-EX-11` unchanged; synthetic fixtures unchanged; PR #10 stays DRAFT; P3 stays IN_REVIEW | confirm |
 
 ---
 
@@ -510,6 +660,13 @@ None of these is authorized by this document.
 * It does not merge or approve PR #10, and it does not start P4/P5.
 * All data remains synthetic; every new surface is local, patient-scoped and
   audited.
+* This corrigendum resolves the four findings in review
+  [`5918165016`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#pullrequestreview-5918165016)
+  (B1–B4) and keeps W2 as **FAIL / NOT PROVEN**; it does not introduce new
+  findings and does not authorize implementation.
+* A `recovery_of` link is a patient-declared association, not a claim that the
+  new document is clearer or clinically equivalent; the new document is
+  re-evaluated independently for scope, identity and doctor verification.
 
 PR #10 remains **DRAFT**; P3 remains **IN_REVIEW**; `GOLD-EX-11` remains **FAIL /
 NOT PROVEN**.
