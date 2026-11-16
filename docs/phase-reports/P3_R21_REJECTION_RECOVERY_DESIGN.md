@@ -44,19 +44,30 @@ revised in §7. Nothing in this corrigendum is implementation authorization.
 
 ## 0. Verified baseline (executed in this session)
 
+> **Scope of the numbers in this section, §0.1 and the G9 rows.** The baseline
+> below is the **pre-R21** measurement taken at `18a53b2`, before any R21 test
+> existed. `635` is therefore a historical figure, not the current suite size.
+> The current figure — after R21 plus the Stage 5.1 populated-graph regressions —
+> is **666 passed, of which 275 are the P3 suite**; the authoritative figure for
+> a Windows run is the one quoted in
+> `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md` §6, which is gated against
+> real pytest collection by
+> `test_windows_ocr_acceptance.py::test_handoff_test_count_matches_the_suite_it_describes`.
+
 | Item | Result | How verified |
 |---|---|---|
 | PR #10 | **OPEN / DRAFT / UNMERGED**, base `main`, head `18a53b2`, `mergeable=MERGEABLE`, `mergeStateStatus=CLEAN` | `gh pr view 10` |
 | Reviewed commit | `18a53b2de5ee9a7cd44d473b78f8ecbaa28fb1f5` exists as `refs/pull/10/head` and `refs/heads/arena/ce85d4e6-…` | `git ls-remote`, `git fetch origin pull/10/head` |
 | Working tree at base | clean at `18a53b2` | `git status` |
-| Local backend suite | **635 passed** in 99.31 s | `pytest backend/tests` (see §0.1) |
+| Local backend suite (pre-R21 baseline) | **635 passed** in 99.31 s at `18a53b2` | `pytest backend/tests` (see §0.1) |
 | P3 status | **IN_REVIEW** | `docs/roadmap/PHASE_PROGRESS.md` §P3 |
 
 ### 0.1 Test-suite environment note
 
 The sandbox has only CPython 3.11 and no project dependencies. A throwaway
 virtualenv was built with the pinned runtime/dev packages and the suite was run
-there (`635 passed`). The project targets CPython 3.12 (`pyproject.toml`
+there (`635 passed` — again, the pre-R21 baseline at `18a53b2`; the current total
+is quoted in the note at the top of §0). The project targets CPython 3.12 (`pyproject.toml`
 `requires-python = ">=3.12,<3.13"`); the owner's Windows 3.12 run remains the
 authoritative execution. No Windows/Tesseract behaviour was executed here.
 
@@ -602,7 +613,7 @@ must stay green. All tests are local and deterministic except where marked
 | **G6** | All-rejected unchanged | reject every fact | `failed`, `failure_code == "all_facts_rejected"` | GREEN | local |
 | **G7** | Document-only report unaffected | no `value` fact; verify all | `verified`; `VI-002` resolved | GREEN | local |
 | **G8** | Duplicate upload | same bytes after R1, with and without `recovery_of` | `409 E_DUPLICATE_DOCUMENT`; no new row | GREEN | local |
-| **G9** | Existing P3 suite | full backend suite | 635 pre-existing tests still pass (new tests added on top) | GREEN | local |
+| **G9** | Existing P3 suite | full backend suite | 666 pass, all 635 pre-existing among them (new tests added on top) | GREEN | local |
 | **W1** | Real-engine rejection | owner Windows/Tesseract, reject the OCR value | terminal `failed`, zero Observations | RED | **Windows-only** |
 | **W2** | `GOLD-EX-11` regression preservation | owner Windows/Tesseract | still **FAIL / NOT PROVEN**; a *preservation* check, not a passing acceptance gate, and not by itself evidence of P3 acceptance | GREEN (preservation) | **Windows-only** |
 
@@ -635,7 +646,7 @@ rather than being rewritten to look as though it always passed.
 | **R7** patient-safe metadata | RED | RED | **GREEN** |
 | **R8** migration integrity | RED | RED | **GREEN** |
 | **G1-G8** existing guarantees | GREEN | GREEN | GREEN |
-| **G9** whole suite | GREEN (635) | GREEN (635) | GREEN (**661**) |
+| **G9** whole suite | GREEN (635) | GREEN (635) | GREEN (**666**) |
 
 **R1a's split result is worth recording.** At Stage 2 every Stage-2-owned
 assertion in R1a already passed — reject-first is immediately terminal, a later

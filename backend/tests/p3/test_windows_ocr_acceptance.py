@@ -347,8 +347,8 @@ def test_the_owner_comment_is_the_cited_authorization_source():
                 ), f"{relative}: review must not be presented as approval: {line!r}"
 
 
-def _collected_counts() -> dict[str, int]:
-    """Return real pytest collection counts, keyed by test file name.
+def _collect(subdir: str) -> dict[str, int]:
+    """Return real pytest collection counts under ``subdir``, keyed by file name.
 
     Shelling out to pytest is slower than counting ``def test_`` lines, but it is the
     only way to stay correct as parametrization changes. A hard-coded count rots the
@@ -360,7 +360,7 @@ def _collected_counts() -> dict[str, int]:
             sys.executable,
             "-m",
             "pytest",
-            "backend/tests/p3",
+            subdir,
             "--collect-only",
             "-q",
             "--no-header",
@@ -376,10 +376,26 @@ def _collected_counts() -> dict[str, int]:
     for line in completed.stdout.splitlines():
         # Format: "backend/tests/p3/test_x.py: 12"
         name, _, count = line.partition(": ")
-        if "backend/tests/p3/test_" in name and count.strip().isdigit():
+        if name.startswith(f"{subdir}/") and name.endswith(".py") and count.strip().isdigit():
             counts[name.rsplit("/", 1)[-1]] = int(count)
     assert counts, f"could not parse collection output:\n{completed.stdout[-2000:]}"
     return counts
+
+
+def _collected_counts() -> dict[str, int]:
+    """Per-file P3 collection counts (the handoff's per-suite table)."""
+    return _collect("backend/tests/p3")
+
+
+def _whole_backend_total() -> int:
+    """Total collected backend tests, including suites outside ``p3``.
+
+    The per-file table above only covers ``p3``, so the handoff's *headline*
+    figure — the number the owner compares against `test_all.ps1` output — was
+    never gated and drifted to 661 while the truth was 663. Collect the whole
+    tree so a test added anywhere is reflected in the handoff.
+    """
+    return sum(_collect("backend/tests").values())
 
 
 def test_handoff_test_count_matches_the_suite_it_describes():
@@ -394,6 +410,20 @@ def test_handoff_test_count_matches_the_suite_it_describes():
     p3_total = sum(counts.values())
 
     assert f"**{p3_total}**" in text, f"handoff should quote the P3 total {p3_total}"
+
+    # The headline "whole backend" figure must also be real, not remembered.
+    backend_total = _whole_backend_total()
+    assert f"**{backend_total} passed**" in text, (
+        f"handoff should quote the whole-backend total {backend_total}"
+    )
+
+    # The two figures must also agree *within the sentence* that pairs them, so
+    # the headline number and the P3 number cannot drift apart independently.
+    # Collapse the wrapped prose first: the sentence breaks across Markdown lines,
+    # and the pairing is what matters, not where the newline fell.
+    paired = f"**{backend_total} passed**, of which **{p3_total}** are the P3 suite"
+    assert paired in " ".join(text.split()), f"handoff should pair {backend_total} with {p3_total}"
+
     for name, count in counts.items():
         row = next((line for line in text.splitlines() if name in line), None)
         assert row is not None, f"handoff table is missing a row for {name}"

@@ -567,3 +567,411 @@ def test_0004_downgrade_round_trips_when_no_links_exist(tmp_path: Path) -> None:
         assert _fk_violations(engine) == []
     finally:
         engine.dispose()
+
+
+# --- 0004 against a fully populated P3 dependency graph --------------------
+#
+# `0004` rebuilds ``document`` — the parent of every P3 table — while the
+# migration engine runs with foreign keys OFF. The tests above prove the
+# *schema* survives that rebuild; this one proves the *data graph* does, which is
+# the property a real deployment actually depends on.
+#
+# The graph is seeded at 0003 through explicit SQL (the ORM models `head`, so it
+# cannot write into a pre-0004 database) and every value is chosen to satisfy the
+# real CHECK constraints, so nothing here invents a column or bypasses a rule.
+
+#: Stable ids so a failure message points at a named row rather than a random uuid.
+GRAPH_PATIENT = "11111111-1111-4111-8111-111111111111"
+GRAPH_DOCTOR = "22222222-2222-4222-8222-222222222222"
+GRAPH_DOCUMENT = "33333333-3333-4333-8333-333333333333"
+GRAPH_RECOVERY_DOCUMENT = "44444444-4444-4444-8444-444444444444"
+GRAPH_ATTEMPT = "55555555-5555-4555-8555-555555555555"
+GRAPH_FACT_VALUE = "66666666-6666-4666-8666-666666666666"
+GRAPH_FACT_TEST = "77777777-7777-4777-8777-777777777777"
+GRAPH_VERIFICATION = "88888888-8888-4888-8888-888888888888"
+GRAPH_ISSUE = "99999999-9999-4999-8999-999999999999"
+GRAPH_OBSERVATION = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+
+
+def _seed_populated_p3_graph(engine: Engine) -> None:
+    """Seed one full P3 graph at revision ``0003``.
+
+    Shape: a patient, their assigned doctor, an uploaded document with one
+    extraction attempt and two candidate facts, one append-only decision that
+    verified the ``value`` fact, one open ``VI-002`` issue linked to both facts,
+    and one ``doctor_verified`` observation whose ``source_fact_id`` is the
+    verified fact.
+    """
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO user (id, username, display_name, role, password_hash, "
+                "timezone, is_active, created_at) VALUES "
+                "(:id, 'doctor1', 'Dr One', 'doctor', 'x', 'UTC', 1, '2026-11-14T12:00:00Z')"
+            ),
+            {"id": GRAPH_DOCTOR},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO patient (id, display_name, date_of_birth, sex_at_birth, "
+                "assigned_doctor_id, external_ref, data_source, created_at, updated_at) "
+                "VALUES (:id, 'Demo Patient A', '1990-01-01', 'female', :doctor, "
+                "'DEMO-A-001', 'synthetic_fixture', '2026-11-14T12:00:00Z', "
+                "'2026-11-14T12:00:00Z')"
+            ),
+            {"id": GRAPH_PATIENT, "doctor": GRAPH_DOCTOR},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO document (id, patient_id, uploaded_by_user_id, "
+                "original_filename, stored_path, mime_type, sha256, size_bytes, "
+                "page_count, extraction_status, failure_code, document_patient_ref, "
+                "uploaded_at) VALUES (:id, :patient, :doctor, 'report.pdf', 'stored.pdf', "
+                "'application/pdf', :sha, 1024, 1, 'needs_verification', NULL, "
+                "'DEMO-A-001', '2026-11-14T12:00:00Z')"
+            ),
+            {
+                "id": GRAPH_DOCUMENT,
+                "patient": GRAPH_PATIENT,
+                "doctor": GRAPH_DOCTOR,
+                "sha": "a" * 64,
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO extraction_attempt (id, document_id, path, preprocessing, "
+                "engine_confidence, text_char_count, page_from, page_to, succeeded, "
+                "error_code, duration_ms, tool_version, created_at) VALUES "
+                "(:id, :document, 'pypdf', 'none', 0.92, 240, 0, 0, 1, NULL, 37, "
+                "'pypdf-1.0', '2026-11-14T12:00:01Z')"
+            ),
+            {"id": GRAPH_ATTEMPT, "document": GRAPH_DOCUMENT},
+        )
+
+        facts = (
+            # (id, field_name, raw_text, normalized_value, unit, extractor, status, flags)
+            (GRAPH_FACT_VALUE, "value", "104", "104", "mg/dL", "pypdf", "verified", '["clean"]'),
+            (
+                GRAPH_FACT_TEST,
+                "test_name",
+                "Fasting glucose",
+                None,
+                None,
+                "tesseract",
+                "pending",
+                '["clean"]',
+            ),
+        )
+        for fact_id, field, raw, normalized, unit, extractor, status, flags in facts:
+            connection.execute(
+                text(
+                    "INSERT INTO extracted_fact (id, document_id, patient_id, field_name, "
+                    "raw_text, normalized_value, unit, page_index, char_start, char_end, "
+                    "extractor, corrected_from_fact_id, quality_flags, confidence, "
+                    "verification_status, created_at) VALUES "
+                    "(:id, :document, :patient, :field, :raw, :normalized, :unit, 0, 10, 20, "
+                    ":extractor, NULL, :flags, 0.9, :status, '2026-11-14T12:00:02Z')"
+                ),
+                {
+                    "id": fact_id,
+                    "document": GRAPH_DOCUMENT,
+                    "patient": GRAPH_PATIENT,
+                    "field": field,
+                    "raw": raw,
+                    "normalized": normalized,
+                    "unit": unit,
+                    "extractor": extractor,
+                    "flags": flags,
+                    "status": status,
+                },
+            )
+
+        connection.execute(
+            text(
+                "INSERT INTO fact_verification (id, fact_id, decision, previous_value, "
+                "new_value, new_unit, reason, verified_by_user_id, decided_at) VALUES "
+                "(:id, :fact, 'verified', '104', NULL, NULL, NULL, :doctor, "
+                "'2026-11-14T12:05:00Z')"
+            ),
+            {"id": GRAPH_VERIFICATION, "fact": GRAPH_FACT_VALUE, "doctor": GRAPH_DOCTOR},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO verification_issue (id, patient_id, workflow_run_id, "
+                "document_id, issue_type, reason_code, fact_ids, blocking, message, "
+                "state, created_at) VALUES (:id, :patient, NULL, :document, 'VI-002', "
+                "'fact_unverified', :fact_ids, 1, 'One extracted value is not yet verified.', "
+                "'open', '2026-11-14T12:05:01Z')"
+            ),
+            {
+                "id": GRAPH_ISSUE,
+                "patient": GRAPH_PATIENT,
+                "document": GRAPH_DOCUMENT,
+                "fact_ids": f'["{GRAPH_FACT_VALUE}","{GRAPH_FACT_TEST}"]',
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO observation (id, patient_id, encounter_id, measure_type, value, "
+                "unit, measured_at, source, validation, trust_level, verified_by_user_id, "
+                "verified_at, note, created_at, created_by_user_id, source_fact_id) VALUES "
+                "(:id, :patient, NULL, 'glucose', 104.0, 'mg/dL', '2026-11-14T00:00:00Z', "
+                "'verified_document', 'ok', 'doctor_verified', :doctor, "
+                "'2026-11-14T12:05:00Z', NULL, '2026-11-14T12:05:00Z', :doctor, :fact)"
+            ),
+            {
+                "id": GRAPH_OBSERVATION,
+                "patient": GRAPH_PATIENT,
+                "doctor": GRAPH_DOCTOR,
+                "fact": GRAPH_FACT_VALUE,
+            },
+        )
+
+
+def _graph_counts(engine: Engine) -> dict[str, int]:
+    """Row counts for every table in the seeded P3 graph."""
+    tables = (
+        "user",
+        "patient",
+        "document",
+        "extraction_attempt",
+        "extracted_fact",
+        "fact_verification",
+        "verification_issue",
+        "observation",
+    )
+    with engine.connect() as connection:
+        return {
+            table: connection.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+            for table in tables
+        }
+
+
+def _graph_links(engine: Engine) -> dict[str, object]:
+    """Every cross-row reference the graph depends on, read back from storage."""
+    with engine.connect() as connection:
+        return {
+            "attempt_document": connection.execute(
+                text("SELECT document_id FROM extraction_attempt WHERE id = :id"),
+                {"id": GRAPH_ATTEMPT},
+            ).scalar_one(),
+            "fact_documents": sorted(
+                row[0]
+                for row in connection.execute(
+                    text("SELECT document_id FROM extracted_fact WHERE id IN (:a, :b)"),
+                    {"a": GRAPH_FACT_VALUE, "b": GRAPH_FACT_TEST},
+                )
+            ),
+            "fact_statuses": sorted(
+                row[0]
+                for row in connection.execute(
+                    text("SELECT verification_status FROM extracted_fact WHERE id IN (:a, :b)"),
+                    {"a": GRAPH_FACT_VALUE, "b": GRAPH_FACT_TEST},
+                )
+            ),
+            "verification_fact": connection.execute(
+                text("SELECT fact_id FROM fact_verification WHERE id = :id"),
+                {"id": GRAPH_VERIFICATION},
+            ).scalar_one(),
+            "verification_doctor": connection.execute(
+                text("SELECT verified_by_user_id FROM fact_verification WHERE id = :id"),
+                {"id": GRAPH_VERIFICATION},
+            ).scalar_one(),
+            "issue_document": connection.execute(
+                text("SELECT document_id FROM verification_issue WHERE id = :id"),
+                {"id": GRAPH_ISSUE},
+            ).scalar_one(),
+            "issue_type": connection.execute(
+                text("SELECT issue_type FROM verification_issue WHERE id = :id"),
+                {"id": GRAPH_ISSUE},
+            ).scalar_one(),
+            "issue_state": connection.execute(
+                text("SELECT state FROM verification_issue WHERE id = :id"),
+                {"id": GRAPH_ISSUE},
+            ).scalar_one(),
+            "issue_fact_ids": connection.execute(
+                text("SELECT fact_ids FROM verification_issue WHERE id = :id"),
+                {"id": GRAPH_ISSUE},
+            ).scalar_one(),
+            "observation_source_fact": connection.execute(
+                text("SELECT source_fact_id FROM observation WHERE id = :id"),
+                {"id": GRAPH_OBSERVATION},
+            ).scalar_one(),
+            "observation_trust": connection.execute(
+                text("SELECT trust_level FROM observation WHERE id = :id"),
+                {"id": GRAPH_OBSERVATION},
+            ).scalar_one(),
+            "observation_doctor": connection.execute(
+                text("SELECT verified_by_user_id FROM observation WHERE id = :id"),
+                {"id": GRAPH_OBSERVATION},
+            ).scalar_one(),
+        }
+
+
+def _assert_graph_intact(engine: Engine, before: dict[str, object]) -> None:
+    """Assert nothing in the seeded graph changed and FK integrity holds."""
+    after = _graph_links(engine)
+    assert after == before, "a reference in the populated P3 graph was rewritten"
+    # Runtime-equivalent enforcement: the migration engine runs with FKs off, so
+    # this must be asserted on a connection that turns them back on.
+    assert _fk_violations(engine) == []
+    # The observation still points at a fact that still belongs to the document,
+    # which is the two-hop lineage the recovery link sits beside.
+    assert after["observation_source_fact"] == GRAPH_FACT_VALUE
+    assert after["verification_fact"] == GRAPH_FACT_VALUE
+    assert after["issue_document"] == GRAPH_DOCUMENT
+
+
+def test_0004_preserves_a_populated_p3_graph(tmp_path: Path) -> None:
+    """``0003 -> 0004`` keeps every P3 row, reference, decision and lineage."""
+    config, url = _config(tmp_path)
+    command.upgrade(config, P3_REVISION)
+
+    engine = create_db_engine(url)
+    try:
+        _seed_populated_p3_graph(engine)
+        counts_before = _graph_counts(engine)
+        links_before = _graph_links(engine)
+        assert counts_before["extracted_fact"] == 2
+        assert counts_before["fact_verification"] == 1
+        assert counts_before["verification_issue"] == 1
+        assert counts_before["observation"] == 1
+        assert _fk_violations(engine) == [], "the seeded graph must itself be consistent"
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, HEAD_REVISION)
+
+    engine = create_db_engine(url)
+    try:
+        assert _revision(engine) == HEAD_REVISION
+        assert _graph_counts(engine) == counts_before
+        _assert_graph_intact(engine, links_before)
+    finally:
+        engine.dispose()
+
+
+def test_0004_graph_survives_downgrade_round_trip_when_no_link_exists(tmp_path: Path) -> None:
+    """``0004 -> 0003 -> 0004`` must not disturb a populated graph or its lineage.
+
+    No recovery link exists, so the downgrade is permitted. The point is that the
+    column drop and re-add — both of which rebuild ``document`` — leave the P3
+    graph, the append-only decision and the observation lineage untouched.
+    """
+    config, url = _config(tmp_path)
+    command.upgrade(config, P3_REVISION)
+
+    engine = create_db_engine(url)
+    try:
+        _seed_populated_p3_graph(engine)
+        counts_before = _graph_counts(engine)
+        links_before = _graph_links(engine)
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, HEAD_REVISION)
+    command.downgrade(config, P3_REVISION)
+
+    engine = create_db_engine(url)
+    try:
+        # At 0003 the recovery column is gone, but nothing else moved.
+        assert RECOVERY_COLUMN not in _document_columns(engine)
+        assert _graph_counts(engine) == counts_before
+        _assert_graph_intact(engine, links_before)
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, HEAD_REVISION)
+
+    engine = create_db_engine(url)
+    try:
+        assert RECOVERY_COLUMN in _document_columns(engine)
+        assert _graph_counts(engine) == counts_before
+        _assert_graph_intact(engine, links_before)
+    finally:
+        engine.dispose()
+
+
+def test_0004_records_a_recovery_link_without_touching_the_source_graph(tmp_path: Path) -> None:
+    """A recovery link is additive: the source graph and its lineage are unchanged.
+
+    This exercises the migration's own purpose against real rows rather than a
+    synthetic insert: linking a second document to the terminal one must not
+    rewrite the source document, its decisions, its issue or its observation.
+    """
+    config, url = _config(tmp_path)
+    command.upgrade(config, P3_REVISION)
+
+    engine = create_db_engine(url)
+    try:
+        _seed_populated_p3_graph(engine)
+        counts_before = _graph_counts(engine)
+        links_before = _graph_links(engine)
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, HEAD_REVISION)
+
+    engine = create_db_engine(url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO document (id, patient_id, uploaded_by_user_id, "
+                    "original_filename, stored_path, mime_type, sha256, size_bytes, "
+                    "page_count, extraction_status, uploaded_at, "
+                    "recovered_from_document_id) VALUES (:id, :patient, :doctor, "
+                    "'recovery.pdf', 'recovery.pdf', 'application/pdf', :sha, 2048, 1, "
+                    "'pending_extraction', '2026-11-16T09:00:00Z', :source)"
+                ),
+                {
+                    "id": GRAPH_RECOVERY_DOCUMENT,
+                    "patient": GRAPH_PATIENT,
+                    "doctor": GRAPH_DOCTOR,
+                    "sha": "b" * 64,
+                    "source": GRAPH_DOCUMENT,
+                },
+            )
+        assert _fk_violations(engine) == []
+
+        # Only the new document row was added; the source graph is untouched.
+        after_counts = _graph_counts(engine)
+        assert after_counts["document"] == counts_before["document"] + 1
+        for table in (
+            "extraction_attempt",
+            "extracted_fact",
+            "fact_verification",
+            "verification_issue",
+            "observation",
+        ):
+            assert after_counts[table] == counts_before[table], table
+        _assert_graph_intact(engine, links_before)
+
+        # The source document itself must be byte-for-byte unchanged in the
+        # columns the recovery touches: status, failure code and the link.
+        with engine.connect() as connection:
+            source = connection.execute(
+                text(
+                    "SELECT extraction_status, failure_code, recovered_from_document_id "
+                    "FROM document WHERE id = :id"
+                ),
+                {"id": GRAPH_DOCUMENT},
+            ).one()
+        assert tuple(source) == ("needs_verification", None, None)
+
+        # And the link is now live provenance, so the downgrade must refuse.
+        with pytest.raises(RuntimeError) as refusal:
+            command.downgrade(config, P3_REVISION)
+        assert RECOVERY_COLUMN in str(refusal.value)
+    finally:
+        engine.dispose()
+
+    # The refusal left every row and the schema untouched.
+    engine = create_db_engine(url)
+    try:
+        assert RECOVERY_COLUMN in _document_columns(engine)
+        assert _revision(engine) == HEAD_REVISION
+        assert _graph_counts(engine)["document"] == counts_before["document"] + 1
+        _assert_graph_intact(engine, links_before)
+    finally:
+        engine.dispose()
