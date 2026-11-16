@@ -226,20 +226,20 @@ Record the per-gate summary block **and** the exit code. `SKIPPED` is never a pa
 note which gate skipped and why (the Playwright smoke legitimately skips unless
 `-IncludeE2E` is given and browser binaries are installed).
 
-Expected backend figure at this commit: **586 passed**, of which **203** are the P3
+Expected backend figure at this commit: **597 passed**, of which **214** are the P3
 suite (`backend/tests/p3`). Verified by collection on the reviewed commit, not
 estimated:
 
 | Suite | Tests |
 |---|---|
-| `backend/tests` (whole backend) | **586 passed** |
-| `backend/tests/p3` (P3 suite) | **203** |
+| `backend/tests` (whole backend) | **597 passed** |
+| `backend/tests/p3` (P3 suite) | **214** |
 | ├ `test_p3_verification.py` | 29 |
 | ├ `test_p3_extraction.py` | 26 |
 | ├ `test_p3_edge_cases.py` (R06–R09) | 24 |
 | ├ `test_p3_review_corrections.py` (R01–R05) | 21 |
 | ├ `test_p3_ocr_integration.py` (R11/R12 pytesseract + lock) | 16 |
-| ├ `test_p3_windows_findings.py` (R13/R14/R15/R16) | 36 |
+| ├ `test_p3_windows_findings.py` (R13–R16) | 47 |
 | ├ `test_windows_ocr_acceptance.py` (probe + handoff) | 17 |
 | ├ `test_p3_upload.py` | 12 |
 | ├ `test_p3_authorization.py` | 10 |

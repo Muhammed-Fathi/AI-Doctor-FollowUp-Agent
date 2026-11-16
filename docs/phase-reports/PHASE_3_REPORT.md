@@ -1539,7 +1539,7 @@ byte-identical.
    affects the exit code, and with no engine it is reported `NOT RUN` like the rest.
 
 `backend/tests/p3/test_windows_ocr_acceptance.py` grew from 7 to 15 tests
-(P3 directory: 203 collected tests; full suite 586 passed), covering
+(P3 directory: 214 collected tests; full suite 597 passed), covering
 the missing-wheel path, the `_guarded` conversion, the 07/08 accounting, the owner's
 real `E:\DEPI` paths, the detached-worktree/SHA guard, the "do not skip the
 frontend" rule and the `app.db` read-only guarantee.
@@ -1765,6 +1765,62 @@ before being fixed.
 **not** claimed as verified. `pool.checkedin() == 0` is asserted instead of `unlink()`,
 because a non-zero pool is precisely the open handle Windows refuses to delete. The owner's
 Windows re-run remains the authority.
+
+## V.14 R13 — authorized legible OCR fixture
+
+Owner Windows evidence at `448ecf7` ([review `5913621837`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#pullrequestreview-5913621837)):
+**9 PASS / 1 FAIL / 1 DERIVED**, `ING-02` PASS exactly once with HTTP 202/200 and
+`tesseract` provenance in both the response and stored rows, **no `WinError 32`** and
+**no teardown row** — R16 confirmed on real Windows. `GOLD-EX-11` remains the single
+blocker.
+
+### The gate defect that mattered
+
+The predicate was `"low_confidence" in flags or "unparseable_value" in flags`. Because
+`low_confidence` is a *review signal* that `intake` can add for any low-confidence read, a
+substituted `105` could have been reported as a demonstrated ambiguous-token case purely
+because the engine was also unsure. The gate now requires the **parser to refuse a
+preserved token**, and nothing else can pass it:
+
+| Engine output | Parser result | Gate |
+|---|---|---|
+| preserved `1O5` | `unparseable_value`, no normalized value | **PASS** |
+| substituted `105`, labels damaged | no value fact | FAIL — *not proven* |
+| substituted `105`, labels intact | `raw_text="105"` normalized | FAIL — *not proven* |
+| any read flagged only `low_confidence` | parsed value | FAIL — *not proven* |
+
+Verified both branches end-to-end by driving the gate with a scripted engine: preserved →
+`PASS / preserved_and_refused`, substituted → `FAIL / substituted`.
+
+### The fixture (authorized addition)
+
+`data/synthetic/documents/sources/report_ocr_o_confusion.txt` — one new text source plus its manifest entry. **All eleven existing sources
+and digests are byte-identical**; one entry was appended (`documents` 11 → 12).
+
+Why it works where the previous render did not: the old sample used PIL's default
+**bitmap** font at ~10 px, which is why Tesseract lost both the `O` and the `Value:` label.
+The new render uses `ImageFont.load_default(size=40)` — **Aileron Regular, bundled inside
+Pillow** since 10.1. No font binary is committed, no new dependency, no licence file: the
+font travels with Pillow. `legible_font()` raises rather than silently falling back to the
+illegible bitmap face on older Pillow.
+
+**What the fixture does and does not do.** It improves *legibility only*. Whether Tesseract
+preserves the literal `O` is still **measured, never engineered**: the source keeps `1O5`,
+there is no prompt-hinting, no font chosen because it yields `O`, and no known text fed to
+the parser. If the engine still substitutes, the gate reports **NOT PROVEN** — which is the
+honest outcome, not a failure of the fixture.
+
+### Evidence separation
+
+The gate now records three distinguishable layers, so a reviewer can never mistake one for
+another:
+
+* **OCR output** — `engine_ocr_text` (verbatim), `engine_preserved_ambiguous_token`,
+  `engine_substituted_plausible_value`
+* **Parser output** — `flags`, `normalized_values`, `raw_tokens`, `parser_refused_token`,
+  `application_substituted_value: false`
+* **Review status** — `human_review_required: true`, `human_review_reason`,
+  `clinical_accuracy_claimed: false`
 
 ## V.7 Status
 

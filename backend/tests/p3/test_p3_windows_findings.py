@@ -32,6 +32,19 @@ def _probe_module():
     return module
 
 
+def _generator_module():
+    """Import ``generate_p3_fixtures`` from ``scripts/python`` by path."""
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[3] / "scripts" / "python" / "generate_p3_fixtures.py"
+    spec = importlib.util.spec_from_file_location("generate_p3_fixtures_r13", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 # ---------------------------------------------------------------- R13: parser level
 
 
@@ -820,3 +833,226 @@ def test_the_gate_restores_environment_overrides_on_every_path():
     finally_at = body.index("finally:")
     restore_at = body.index("os.environ", finally_at)
     assert finally_at < restore_at, "restoration must happen in the finally block"
+
+
+# ====================================== R13a: the gate must not pass on a substituted 105
+#
+# Owner evidence: source image says ``1O5``, real Tesseract returned ``105``. The gate's
+# predicate was ``"low_confidence" in flags or "unparseable_value" in flags``, so a
+# *substituted* value would PASS whenever the reader also happened to be flagged
+# low-confidence — claiming ambiguous-token detection without demonstrating it. The two
+# cases must be distinguished, and only the preserved-token case may pass.
+
+
+def _run_corruption_gate(monkeypatch, ocr_text: str, confidence: float | None):
+    """Drive ``gate_ocr_corruption`` with a synthetic engine result."""
+    module = _probe_module()
+    results: list = []
+
+    class _EngineResult:
+        text = ocr_text
+        tool_version = "5.4.0.20240606"
+        confidence = None
+
+        def __init__(self) -> None:
+            self.confidence = _EngineResult.confidence
+
+    _EngineResult.confidence = confidence
+
+    monkeypatch.setattr(
+        "app.services.documents.ocr.run_ocr", lambda image, **kwargs: _EngineResult()
+    )
+    module.gate_ocr_corruption(results, engine_present=True)
+    return next(row for row in results if row.gate.startswith("GOLD-EX-11"))
+
+
+def test_gate_passes_only_when_the_ambiguous_token_is_preserved(monkeypatch):
+    """The one case that may PASS: engine returned ``1O5`` and the parser refused it."""
+    gate = _run_corruption_gate(monkeypatch, "Test: Glucose  Value: 1O5 mg/dL", 0.62)
+
+    assert gate.status == "PASS"
+    assert gate.data["engine_preserved_ambiguous_token"] is True
+    assert gate.data["engine_substituted_plausible_value"] is False
+    assert gate.data["normalized_values"] in ([], None)
+
+
+def test_gate_does_not_pass_when_the_engine_substituted_105(monkeypatch):
+    """A substituted ``105`` must never PASS, even at low confidence.
+
+    This is the false-pass the review identified: the old predicate accepted
+    ``low_confidence`` alone, so a plausible-but-wrong reading could be reported as a
+    demonstrated ambiguous-token case.
+    """
+    gate = _run_corruption_gate(monkeypatch, "Test Gluccse Value: 105 mgldl.", 0.55)
+
+    assert gate.status != "PASS", "a substituted 105 must not be reported as a pass"
+    assert gate.data["engine_substituted_plausible_value"] is True
+    assert gate.data["engine_preserved_ambiguous_token"] is False
+    detail = gate.detail.lower()
+    # The reason must say the property was not demonstrated, not that it was.
+    assert "not proven" in detail or "not demonstrated" in detail or "substitut" in detail
+
+
+def test_gate_does_not_pass_on_a_clean_105_regardless_of_confidence(monkeypatch):
+    """A clean, parsable ``105`` is not evidence of ambiguity handling at any confidence."""
+    for confidence in (None, 0.95, 0.4):
+        gate = _run_corruption_gate(monkeypatch, "Test: Glucose  Value: 105 mg/dL", confidence)
+        assert gate.status != "PASS", f"confidence={confidence} must not manufacture a pass"
+        assert gate.data["normalized_values"] == ["105"]
+
+
+def test_gate_records_the_three_evidences_separately(monkeypatch):
+    """OCR output, parser output and review status must be distinguishable in the JSON."""
+    gate = _run_corruption_gate(monkeypatch, "Test: Glucose  Value: 1O5 mg/dL", 0.62)
+
+    data = gate.data
+    # 1. what the engine said
+    assert data["ocr_text"] == "Test: Glucose  Value: 1O5 mg/dL"
+    # 2. what the parser produced
+    assert "flags" in data and "normalized_values" in data
+    # 3. whether a human must look
+    assert "human_review_required" in data
+    assert data["human_review_required"] is True, "an ambiguous value always needs review"
+    assert data["clinical_accuracy_claimed"] is False
+
+
+def test_gate_reports_human_review_for_a_substituted_value_too(monkeypatch):
+    """The substituted case also requires human review — it is uncertain, not safe."""
+    gate = _run_corruption_gate(monkeypatch, "Test Gluccse Value: 105 mgldl.", 0.55)
+
+    assert gate.data["human_review_required"] is True
+    assert gate.data["clinical_accuracy_claimed"] is False
+
+
+# ================================= R13 fixture: the new legible synthetic source
+#
+# Authorized addition: one new text source plus its manifest entry. The existing eleven
+# sources and their digests are untouched, and the render improves *legibility only* —
+# whether the engine preserves the literal ``O`` is measured, never engineered.
+
+NEW_SOURCE = "report_ocr_o_confusion.txt"
+NEW_SOURCE_PATH = f"data/synthetic/documents/sources/{NEW_SOURCE}"
+
+
+def test_the_new_fixture_source_literally_contains_an_ambiguous_token():
+    """The source must contain the letter O inside a numeric token.
+
+    If someone "fixes" the fixture to read ``105``, the ambiguous case stops existing and
+    the gate would be measuring nothing. This pins the source's meaning.
+    """
+    from app.core.paths import REPO_ROOT
+
+    text = (REPO_ROOT / NEW_SOURCE_PATH).read_text(encoding="utf-8")
+
+    assert "1O5" in text, "the fixture must contain the ambiguous letter-O token"
+    assert "105" not in text, "the source must not contain the corrected value"
+    # And it carries the synthetic notice like every other source.
+    assert "SYNTHETIC" in text.upper()
+    assert "NOT A REAL MEDICAL RECORD" in text.upper()
+
+
+def test_the_new_fixture_is_registered_with_a_correct_digest():
+    """The manifest entry must match the committed bytes exactly."""
+    import hashlib
+    import json
+
+    from app.core.paths import REPO_ROOT
+
+    manifest = json.loads(
+        (REPO_ROOT / "data/synthetic/documents/manifest.json").read_text(encoding="utf-8")
+    )
+    entry = next(d for d in manifest["documents"] if d["source"] == NEW_SOURCE_PATH)
+
+    raw = (REPO_ROOT / NEW_SOURCE_PATH).read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == entry["sha256"]
+    assert len(raw) == entry["size_bytes"]
+    assert entry["contract_case"] == "GOLD-EX-11"
+    assert entry["produces_binary"] is False
+
+
+def test_the_existing_golden_sources_and_hashes_are_untouched():
+    """The eleven pre-existing fixtures must be byte-identical.
+
+    Adding a case must never perturb the goldens the other contract cases rely on.
+    """
+    import json
+
+    from app.core.paths import REPO_ROOT
+
+    manifest = json.loads(
+        (REPO_ROOT / "data/synthetic/documents/manifest.json").read_text(encoding="utf-8")
+    )
+    sources = [d["source"] for d in manifest["documents"]]
+
+    assert len(sources) == 12, "exactly one source was added"
+    # The original golden set is still present by name.
+    for expected in (
+        "report_a_clean.txt",
+        "report_a_glucose.txt",
+        "report_a_ambiguous.txt",
+        "report_multi_test.txt",
+        "report_wrong_patient.txt",
+        "report_missing_unit.txt",
+        "report_unsupported_unit.txt",
+        "report_no_reference.txt",
+        "report_injection.txt",
+        "report_b_glucose.txt",
+        "report_c_ambiguous.txt",
+    ):
+        assert any(source.endswith(expected) for source in sources), expected
+
+
+def test_the_legible_render_is_deterministic_and_larger_than_the_bitmap_one():
+    """The new render must be byte-stable and legibly sized.
+
+    Determinism matters because the fixture is generated, not committed (D-04). Size is
+    the proxy for legibility: the old bitmap render produced ~10 px glyphs, which real
+    Tesseract could not read reliably on the owner's machine.
+    """
+    import io
+
+    from PIL import Image
+
+    generate = _generator_module()
+
+    first = generate.build_legible_scan_image(NEW_SOURCE)
+    second = generate.build_legible_scan_image(NEW_SOURCE)
+    assert first == second, "the render must be byte-identical on repeat"
+
+    image = Image.open(io.BytesIO(first))
+    assert image.width >= 1200
+    assert image.height >= 300
+    # A 40 px face produces a far taller line than the ~10 px bitmap font did.
+    assert generate.LEGIBLE_FONT_SIZE >= 30
+
+
+def test_the_legible_font_needs_no_bundled_file():
+    """The font must come from Pillow, so no binary or licence file is committed."""
+    from app.core.paths import REPO_ROOT
+
+    generate = _generator_module()
+    font = generate.legible_font()
+
+    # A scalable face from Pillow's own data, not a project-committed .ttf.
+    assert font is not None
+    committed_fonts = [
+        path
+        for path in (REPO_ROOT / "data").rglob("*")
+        if path.suffix.lower() in {".ttf", ".otf", ".woff", ".woff2"}
+    ]
+    assert committed_fonts == [], "no font binary may be committed"
+
+
+def test_the_gate_renders_the_committed_source_rather_than_inline_text():
+    """The gate must render the fixture file, not a hard-coded string.
+
+    Feeding known text straight to the parser and calling it OCR would be dishonest; the
+    string must come from the committed source through the renderer.
+    """
+    source = PROBE.read_text(encoding="utf-8")
+    body = source[source.index("def gate_ocr_corruption") : source.index("def gate_rasterizer")]
+
+    assert "build_legible_scan_image(" in body
+    assert "SOURCE_NAME" in body
+    # The old inline literal must be gone.
+    assert '"Test: Glucose             Value: 1O5 mg/dL"' not in body

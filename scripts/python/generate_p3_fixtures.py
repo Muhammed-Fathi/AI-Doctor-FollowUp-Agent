@@ -169,6 +169,87 @@ def build_scan_image(source_name: str, *, size: tuple[int, int] = (1000, 500), f
     return image
 
 
+#: Point size for the legible render. Tesseract needs roughly 30 px of glyph height to
+#: identify characters reliably; the default PIL bitmap font is ~10 px, which is why the
+#: original GOLD-EX-11 sample was unreadable in the owner's Windows run.
+LEGIBLE_FONT_SIZE = 40
+
+#: Extra whitespace between lines, in pixels, so descenders and the baseline stay clean.
+LEGIBLE_LINE_SPACING = 18
+
+
+def legible_font(size: int = LEGIBLE_FONT_SIZE):
+    """Return a scalable TrueType font for the legible OCR render.
+
+    ``PIL.ImageFont.load_default(size=...)`` loads **Aileron Regular**, which ships
+    inside Pillow itself (added in Pillow 10.1) — so this needs no bundled font file, no
+    system font, and no extra dependency. That matters for a repository that commits no
+    binaries: the licence travels with Pillow, and rendering stays byte-identical across
+    machines.
+
+    Pillow older than 10.1 would return the legacy bitmap font here, which is exactly the
+    illegible case this fixture exists to avoid — hence the explicit guard.
+    """
+    from PIL import ImageFont
+
+    try:
+        font = ImageFont.load_default(size=size)
+    except TypeError as error:  # pragma: no cover - only on Pillow < 10.1
+        raise RuntimeError(
+            "a scalable default font requires Pillow >= 10.1; the legible OCR fixture "
+            "cannot be rendered with the legacy bitmap font"
+        ) from error
+
+    if isinstance(font, ImageFont.ImageFont) and not hasattr(font, "path"):
+        # The legacy bitmap font has no scalable metrics; refusing is safer than
+        # silently producing the fixture that already failed on Windows.
+        raise RuntimeError("load_default() returned a bitmap font, not a TrueType face")
+
+    return font
+
+
+def build_legible_scan_image(source_name: str, *, fmt: str = "PNG") -> bytes:
+    """Render ``source_name`` at a size Tesseract can read reliably.
+
+    Deterministic: fixed canvas, fixed font (Pillow's bundled Aileron), fixed size and
+    no metadata. The point is legibility, **not** influencing which character the engine
+    sees — the source keeps its literal ``1O5``, and whether Tesseract preserves or
+    substitutes it is measured, never engineered.
+    """
+    from PIL import Image, ImageDraw
+
+    lines = read_source(source_name)
+    font = legible_font()
+
+    # Size the canvas from real text metrics so no line is clipped on any platform.
+    probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    line_height = LEGIBLE_FONT_SIZE + LEGIBLE_LINE_SPACING
+    widest = max(
+        (probe.textbbox((0, 0), line, font=font)[2] for line in lines),
+        default=0,
+    )
+    width = max(1200, widest + 120)
+    height = max(400, len(lines) * line_height + 120)
+
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    for index, line in enumerate(lines):
+        draw.text((60, 60 + index * line_height), line, font=font, fill="black")
+
+    if fmt == "JPEG":
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=95)
+        buffer.seek(0)
+        from PIL import Image as _Image
+
+        return _Image.open(buffer).convert("RGB")
+    if fmt == "PNG":
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG", optimize=False)
+        return buffer.getvalue()
+    raise ValueError(f"unsupported format: {fmt}")
+
+
 def image_bytes(source_name: str, *, fmt: str = "PNG") -> bytes:
     """Return deterministic PNG or JPEG bytes for a committed text source."""
     image = build_scan_image(source_name, fmt=fmt)

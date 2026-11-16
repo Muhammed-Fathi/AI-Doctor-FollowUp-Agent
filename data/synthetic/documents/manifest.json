@@ -132,6 +132,17 @@
       "encoding": "utf-8",
       "generator": "scripts/python/generate_p3_fixtures.py::build_report_pdf",
       "produces_binary": false
+    },
+    {
+      "source": "data/synthetic/documents/sources/report_ocr_o_confusion.txt",
+      "case": "OCR",
+      "contract_case": "GOLD-EX-11",
+      "purpose": "OCR ambiguity case: the source literally contains the letter O in '1O5'. A real engine either preserves the ambiguous token (parser must refuse it) or substitutes a plausible 105 (safety property NOT demonstrated). Rendered at 40px with Pillow's bundled scalable font so the labels are legible; whether the engine preserves the O is measured, never engineered.",
+      "sha256": "0f8cae895dff04f3017b32d3e2d9b5e50e75c60f2498cb188991c749732c2492",
+      "size_bytes": 200,
+      "encoding": "utf-8",
+      "generator": "scripts/python/generate_p3_fixtures.py::build_legible_scan_image",
+      "produces_binary": false
     }
   ]
 }

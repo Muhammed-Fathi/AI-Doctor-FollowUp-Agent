@@ -94,6 +94,11 @@ def _git_head() -> str | None:
     return completed.stdout.strip() or None
 
 
+#: The committed synthetic source rendered for ``GOLD-EX-11``. It contains a literal
+#: ``1O5`` and renders legibly, so a real engine can be measured rather than guessed at.
+SOURCE_NAME = "report_ocr_o_confusion.txt"
+
+
 #: Environment variables the ING-02 gate overrides; snapshotted and restored in
 #: ``finally`` so the probe never leaks its temporary configuration into the process.
 _PROBE_ENV_KEYS = ("DATABASE_URL", "APP_ENV", "UPLOAD_DIR", "DEMO_SEED_PASSWORD")
@@ -386,24 +391,24 @@ def gate_ocr_corruption(results: list[Result], *, engine_present: bool) -> None:
         _record(results, Result(gate, NOT_RUN, "no Tesseract engine available"))
         return
 
-    from PIL import Image, ImageDraw
+    from PIL import Image
 
+    # The committed source literally contains the letter O in ``1O5``. It is rendered at
+    # 40 px with Pillow's bundled scalable font: the previous 10 px bitmap render was
+    # unreadable on the owner's Windows machine, which lost both the ``O`` and the
+    # ``Value:`` label and made the gate unable to demonstrate anything.
+    #
+    # Legibility is the ONLY thing the render improves. Which character the engine sees
+    # is still measured, never engineered — the source is not changed to make the test
+    # pass, and both outcomes are reported honestly.
+    import generate_p3_fixtures as fixtures
     from app.core.enums import ExtractionPath
     from app.services.documents.field_parser import parse_pages
     from app.services.documents.ocr import run_ocr
     from app.services.documents.text_extraction import PageText
 
-    # A source whose value token is already corrupt. The engine must *see* text;
-    # the flag must come from the parser, never from the engine's opinion.
-    image = Image.new("RGB", (1000, 300), "white")
-    draw = ImageDraw.Draw(image)
-    lines = [
-        "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD",
-        "Demo Patient A            Ref: DEMO-A-001            Report date: 2026-10-20",
-        "Test: Glucose             Value: 1O5 mg/dL",
-    ]
-    for index, line in enumerate(lines):
-        draw.text((20, 20 + index * 22), line, fill="black")
+    rendered = fixtures.build_legible_scan_image(SOURCE_NAME)
+    image = Image.open(io.BytesIO(rendered))
 
     ocr = run_ocr(image, tesseract_cmd=os.environ.get("TESSERACT_CMD") or None, language="eng")
     page = PageText(
@@ -418,31 +423,62 @@ def gate_ocr_corruption(results: list[Result], *, engine_present: bool) -> None:
     flags = {flag.value for fact in value_facts for flag in fact.quality_flags}
     normalized = [fact.normalized_value for fact in value_facts if fact.normalized_value]
     raw_tokens = [fact.raw_text for fact in value_facts]
-    ambiguous = "low_confidence" in flags or "unparseable_value" in flags
 
-    # Three outcomes are possible, and they mean different things. Reporting a bare
-    # FAIL for all of them is what made this gate hard to diagnose on Windows:
+    # What the ENGINE returned, independent of what the parser made of it. The source
+    # image contains ``1O5``; the only question is whether the engine preserved it.
+    intended = "1O5"
+    preserved = intended in ocr.text
+    substituted = "105" in ocr.text and not preserved
+
+    # ``unparseable_value`` is the parser *refusing* an ambiguous token. ``low_confidence``
+    # only says the reading is uncertain — a review signal, NOT evidence that an ambiguous
+    # token was detected. Requiring the former stops a substituted ``105`` from being
+    # reported as a demonstrated corruption case merely because the engine was unsure too.
+    parser_refused = "unparseable_value" in flags
+    low_confidence_only = "low_confidence" in flags and not parser_refused
+
+    # Outcomes, which mean genuinely different things:
     #
-    #  (a) no value fact at all -> the engine lost or mangled the label, so the parser
-    #      was never shown a token. The corruption case is NOT demonstrated.
-    #  (b) a value fact that is flagged -> the documented behaviour. PASS.
-    #  (c) a value fact read as clean "105" -> the engine (or renderer) repaired it, so
-    #      again the corruption case is not demonstrated.
-    if not value_facts:
+    #  (a) engine preserved ``1O5`` and the parser refused it -> the documented
+    #      behaviour. The only case that may PASS.
+    #  (b) engine substituted a plausible ``105``, or the parser accepted a value ->
+    #      the safety property was NOT demonstrated. Never a pass.
+    #  (c) no value fact at all -> the engine lost the label. Not demonstrated.
+    if preserved and parser_refused and not normalized:
+        status = PASS
+        reason = (
+            "engine preserved the ambiguous 1O5 and the parser refused it as "
+            "unparseable; no numeric value was produced"
+        )
+    elif not value_facts:
+        status = FAIL
+        if substituted:
+            reason = (
+                "engine transcribed 1O5 as a plausible 105 and damaged the labels, so no "
+                "value fact was parsable. The ambiguous-token safety property is NOT "
+                "PROVEN by this image (the substitution was the engine's, not ours)"
+            )
+        else:
+            reason = (
+                "no value fact was parsed and the engine returned neither 1O5 nor 105, so "
+                "the ambiguous-token safety property is NOT PROVEN by this image"
+            )
+    elif substituted or normalized:
         status = FAIL
         reason = (
-            "no value fact was parsed, so the OCR-produced-token case is not proven; "
-            "the engine most likely lost or mangled the 'Value:' label. See ocr_text"
+            f"engine substituted a plausible {normalized or raw_tokens} for the rendered "
+            "1O5, so the ambiguous-token safety property is NOT PROVEN; it must not be "
+            "reported as a demonstrated case"
         )
-    elif ambiguous:
-        status = PASS
-        reason = "value token survived OCR and was flagged, not repaired"
+    elif low_confidence_only:
+        status = FAIL
+        reason = (
+            "the value was only flagged low_confidence, which is a review signal, not "
+            "evidence that an ambiguous token was preserved and refused; NOT PROVEN"
+        )
     else:
         status = FAIL
-        reason = (
-            f"a value fact was parsed as {normalized} instead of an ambiguous token, so "
-            "the original 1O5 did not survive OCR; the corruption case is not proven"
-        )
+        reason = "the OCR result did not exercise the ambiguous-token path; NOT PROVEN"
 
     _record(
         results,
@@ -451,20 +487,30 @@ def gate_ocr_corruption(results: list[Result], *, engine_present: bool) -> None:
             status,
             f"{reason}; value flags={sorted(flags)} normalized={normalized} raw={raw_tokens}",
             {
-                "diagnosis": "no_value_fact"
-                if not value_facts
-                else ("flagged" if ambiguous else "repaired"),
+                # 3. whether a human must look at this value
+                "human_review_required": True,
+                "human_review_reason": (
+                    "the OCR reading is ambiguous or substituted, so the value is never "
+                    "used without a doctor's decision"
+                ),
+                "diagnosis": (
+                    "preserved_and_refused"
+                    if parser_refused and preserved
+                    else ("substituted" if substituted else "not_proven")
+                ),
                 "flags": sorted(flags),
                 "normalized_values": normalized,
                 "raw_tokens": raw_tokens,
+                # 1. what the engine returned (kept verbatim; never paraphrased)
+                "engine_ocr_text": ocr.text,
+                "engine_preserved_ambiguous_token": preserved,
+                "engine_substituted_plausible_value": substituted,
                 "ocr_text": ocr.text,
-                # Explicit source-vs-engine split. The application never substitutes a
-                # value here; this records whether the ENGINE did, which is what the
-                # owner's Windows run showed (1O5 rendered, 105 returned).
-                "source_token": "1O5",
-                "engine_preserved_ambiguous_token": "1O5" in ocr.text,
-                "engine_substituted_plausible_value": ("105" in ocr.text and "1O5" not in ocr.text),
+                # 2. what the parser produced from it
+                "parser_refused_token": parser_refused,
+                "source_token": intended,
                 "application_substituted_value": False,
+                "clinical_accuracy_claimed": False,
                 "limitation": (
                     "the gate proves the parser flags an OCR-produced ambiguous token only "
                     "when the engine actually emits one; a low-resolution render may lose "
@@ -751,90 +797,6 @@ def gate_api_ocr_upload(results: list[Result], *, engine_present: bool) -> None:
                     {"cleanup_errors": teardown_errors},
                 ),
             )
-
-
-def main(argv: list[str]) -> int:
-    """Run every Windows-only gate and return 0 only if none is NOT RUN/FAIL."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--json", type=Path, default=None, help="write the results as JSON")
-    args = parser.parse_args(argv[1:])
-
-    if not SOURCES.is_dir():
-        print(f"FAIL: fixture sources not found at {SOURCES}", file=sys.stderr)
-        return 2
-
-    system_path = str(REPO_ROOT / "scripts" / "python")
-    if system_path not in sys.path:
-        sys.path.insert(0, system_path)
-
-    results: list[Result] = []
-    _guarded(results, "ENV-01/02 environment", lambda: gate_environment(results))
-    executable = _guarded(results, "OCR-ENGINE", lambda: gate_engine(results))
-    engine_present = executable is not None
-
-    _guarded(
-        results,
-        "GOLD-EX-05/06/OCR-LIVE-01",
-        lambda: gate_ocr_live(results, engine_present=engine_present),
-    )
-    _guarded(
-        results,
-        "GOLD-EX-11 OCR-produced 1O5",
-        lambda: gate_ocr_corruption(results, engine_present=engine_present),
-    )
-    _guarded(results, "PDFIUM-01 rasterize", lambda: gate_rasterizer(results))
-    _guarded(
-        results,
-        "ING-02 OCR upload end-to-end",
-        lambda: gate_api_ocr_upload(results, engine_present=engine_present),
-    )
-
-    print()
-    print("=" * 78)
-    for result in results:
-        print(f"{result.status:>7}  {result.gate}")
-    failures = [result for result in results if result.status not in {PASS, DERIVED}]
-    print("=" * 78)
-    if failures:
-        print(f"{len(failures)} gate(s) not passed. This is reported, not hidden.")
-    else:
-        print("All Windows-only gates passed.")
-
-    if args.json is not None:
-        payload = {
-            "generated_at_utc": datetime.now(UTC)
-            .replace(microsecond=0)
-            .isoformat()
-            .replace("+00:00", "Z"),
-            "platform": platform.platform(),
-            "python": platform.python_version(),
-            "repository_head": _git_head(),
-            "gates": [
-                {"gate": r.gate, "status": r.status, "detail": r.detail, "data": r.data}
-                for r in results
-            ],
-            "summary": {
-                PASS: sum(1 for r in results if r.status == PASS),
-                FAIL: sum(1 for r in results if r.status == FAIL),
-                NOT_RUN: sum(1 for r in results if r.status == NOT_RUN),
-                DERIVED: sum(1 for r in results if r.status == DERIVED),
-            },
-            "notice": "EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE",
-        }
-        try:
-            args.json.parent.mkdir(parents=True, exist_ok=True)
-            args.json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-            print(f"Wrote {args.json}")
-        except OSError as error:
-            # Losing the evidence file is itself a failure to report, not a crash.
-            print(f"[   FAIL] EVIDENCE: could not write {args.json}: {error}")
-            return 2
-
-    return 0 if not failures else 2
-
-
-if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
 
 
 def main(argv: list[str]) -> int:
