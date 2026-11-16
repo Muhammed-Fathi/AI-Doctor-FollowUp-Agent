@@ -491,3 +491,89 @@ Recorded because the analysis was published and should be corrected where wrong.
 The required matrix lives in `docs/phase-reports/P3_R17_TEST_MATRIX.md`, and is
 implemented by `backend/tests/p3/test_p3_r17_safety.py` (24 tests). Every row names the
 test that enforces it and the pre-fix result.
+
+---
+
+# 9. R18 — two correction defects in the R17 fallback
+
+Owner review [`5916114433`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#pullrequestreview-5916114433)
+found two defects **in R17's own new code**, not in the code it replaced. Both were
+real; both were reproduced before being fixed, and 12 of the 14 new tests were red
+against `73639d0`.
+
+## 9.1 R18-A — the span did not resolve to `raw_text`
+
+R17 computed `raw_text` from a **stripped** token but derived `char_start`/`char_end`
+from the **unstripped** source, offsetting from `label.end()`. Measured on the owner's
+real OCR line:
+
+| | Before (`73639d0`) | After |
+|---|---|---|
+| `raw_text` | `'105 mg/dL'` | `'105 mg/dL'` |
+| `page.text[char_start:char_end]` | `' 105 mg/d'` | `'105 mg/dL'` |
+| exact slice? | **no** | **yes** |
+
+The span retained the leading space and dropped the final character. With several
+leading spaces it drifted further (`'     105 '`), and a >120-char token broke in two
+ways at once: the span length came from the *unbounded* token while `raw_text` was
+truncated to 120.
+
+`EXTRACTION_PROVENANCE.md` §3/§5 requires the span to be the exact source slice, and
+`span_is_resolvable()` only checked *bounds*, so no test could have caught this. The fix
+computes the trimmed range first and derives both fields from it:
+
+```python
+raw_segment = page.text[label.end():line_end]
+segment = raw_segment.strip()
+value_start = label.end() + (len(raw_segment) - len(raw_segment.lstrip()))
+raw_text    = segment[:120]
+value_end   = value_start + len(raw_text)   # bounded to the stored text
+```
+
+The clamp is essential: bounding `raw_text` without bounding the span is what made the
+long-token case diverge.
+
+**Not fixed, and deliberately so:** `span_is_resolvable()` still checks bounds only, so
+it cannot detect a future `raw_text`/span mismatch. Asserting equality inside it would
+change validation semantics for every fact and was not authorized here. The R18 tests
+assert the equality property directly instead. Flagged for the owner as a candidate
+hardening.
+
+## 9.2 R18-B — a bare `Value:` label was dropped
+
+`if not token: continue` skipped a line ending in `Test: Glucose Value:`. The label is
+present, so this is **not** the documented destroyed-label limit: the document declares a
+measurement, nothing recorded it, and — measured — approving only the date and reference
+range reached **`verified`**. Precisely the failure R17 existed to prevent, one branch
+over.
+
+Now a bare label is preserved as literal evidence:
+
+| | Value |
+|---|---|
+| `raw_text` | `'Value:'` — the label itself, exact and non-empty |
+| span | `text[label.start():label.end()]`, resolves exactly to `raw_text` |
+| `normalized_value` | `None` |
+| flag | `page_missing` → blocking `VI-005` |
+
+No number is fabricated and a bare label is never treated as document-only. The
+distinction that still holds: a report with **no** `Value:` label at all remains
+legitimately document-only and raises no missing-measurement blocker (control test
+`test_r18_b_bare_label_is_not_treated_as_document_only`).
+
+## 9.3 Evidence
+
+* `backend/tests/p3/test_p3_r18_provenance.py` — **14 tests**; 12 red against `73639d0`,
+  including `assert 'verified' != 'verified'` for the bare-label HTTP case.
+* Full suite **635 passed**, P3 **252** (was 238).
+* `ruff` clean, 103 files formatted; OpenAPI **PASS (16 paths / 17 operations, 41
+  schemas)**; secret scan PASS (196 files); Alembic smoke PASS in `head`/`p2`/`p1`/`base`.
+* 12 fixture hashes verify, **zero** changed; no API, schema, or migration change.
+* Gate re-run (scripted engine, owner's bytes): still **FAIL** / `diagnosis=substituted`
+  / `human_review_required=True` from `['VI-005']`. `GOLD-EX-11` untouched.
+
+## 9.4 What this round did not establish
+
+Real-engine behaviour at this SHA. R17 and R18 are verified deterministically and over
+HTTP with injected OCR text; the last real Windows evidence remains `1b17a9a`. A
+real-engine re-run is the owner's.

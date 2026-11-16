@@ -368,21 +368,46 @@ def _unattributed_value_facts(
             continue
         line_end = page.text.find("\n", label.end())
         line_end = len(page.text) if line_end < 0 else line_end
-        token = page.text[label.end() : line_end].strip()
-        if not token:
-            # A bare label with nothing after it carries no value to preserve.
-            continue
+
+        # **R18-A.** The span and ``raw_text`` are computed from the *same* slice.
+        # The previous version stripped the token but offset from ``label.end()``,
+        # so the emitted span kept the leading whitespace and lost the tail: for the
+        # owner's real line the fact claimed ``'105 mg/dL'`` while its own span
+        # resolved to ``' 105 mg/d'``. ``EXTRACTION_PROVENANCE.md`` §3/§5 requires
+        # the span to be the exact source slice, and ``span_is_resolvable()`` only
+        # checked bounds, so nothing caught the drift. Compute the trimmed range
+        # first, then derive both fields from it.
+        raw_segment = page.text[label.end() : line_end]
+        segment = raw_segment.strip()
+        if segment:
+            # ``lstrip`` offset: where the token itself begins in the page text.
+            value_start = label.end() + (len(raw_segment) - len(raw_segment.lstrip()))
+            # Bounded evidence, and the span is bounded to exactly that length so a
+            # >120-char token still resolves to its own recorded ``raw_text``.
+            raw_text = segment[:120]
+            value_end = value_start + len(raw_text)
+        else:
+            # **R18-B.** A bare ``Value:`` label is a *declaration*, not an absence:
+            # the document says a measurement exists and OCR read nothing after it.
+            # Skipping the line left no evidence, so no blocker could be raised and
+            # approving only the date and reference range reached ``verified``.
+            # The label itself is preserved as the literal evidence — non-empty,
+            # exact, and it fabricates no number.
+            value_start = label.start()
+            raw_text = page.text[label.start() : label.end()]
+            value_end = label.end()
+
         facts.append(
             CandidateFact(
                 field_name=FactField.VALUE,
-                raw_text=token[:120],
+                raw_text=raw_text,
                 # Never repaired, never guessed: the page's own characters remain
                 # the only evidence and no numeric meaning is asserted.
                 normalized_value=None,
                 unit=None,
                 page_index=page.page_index,
-                char_start=label.end(),
-                char_end=min(label.end() + len(token), line_end),
+                char_start=value_start,
+                char_end=value_end,
                 quality_flags=(QualityFlag.PAGE_MISSING,),
                 confidence=page.confidence,
                 extractor=page.extractor,

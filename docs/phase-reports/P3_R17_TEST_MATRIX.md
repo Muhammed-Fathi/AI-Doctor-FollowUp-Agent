@@ -95,3 +95,52 @@ Preserved-token variant: gate **PASS** / `preserved_and_refused`.
 * `extractor: 'pypdf'` on document-level issues with no linked fact — still open, needs a
   wire-contract approval (P2 design §4).
 * Durable OCR page text — design only, needs approval (P2 design §5).
+
+---
+
+# R18 addendum — span exactness and the bare label
+
+Implemented by `backend/tests/p3/test_p3_r18_provenance.py` — **14 tests**, **12 red**
+against `73639d0`. Suite after: **635 passed**, P3 **252**.
+
+## H. Exact provenance span integrity (R18-A)
+
+Every test asserts the invariant `page.text[char_start:char_end] == raw_text` directly,
+because `span_is_resolvable()` only checks bounds and cannot catch a mismatch.
+
+| # | Input | Property asserted | Pre-fix |
+|---|---|---|---|
+| H1 | owner's real line | span resolves to `'105 mg/dL'` exactly | **FAIL** (`' 105 mg/d'`) |
+| H2–H6 | 1 space / many spaces / trailing / both / tab | span matches `raw_text`; whitespace is not part of the token | **FAIL** (all 5) |
+| H7 | 200-char token | `raw_text` bounded to 120 **and** span length equals it | **FAIL** |
+| H8 | any line | `0 <= char_start < char_end <= len(text)` | pass (guard) |
+
+## I. Bare `Value:` label (R18-B)
+
+| # | Property asserted | Pre-fix |
+|---|---|---|
+| I1 | bare label yields one preserved fact, `normalized_value=None`, `page_missing`, exact span | **FAIL** (no fact) |
+| I2 | the evidence is the label text itself (`'Value:'`), not an invented placeholder | **FAIL** |
+| I3 | label followed only by spaces is still empty → same treatment | **FAIL** |
+| I4 | HTTP: `VI-005` raised, zero observations | **FAIL** |
+| I5 | HTTP: approving every **non-measurement** fact never reaches `verified`; `VI-005` stays open; zero observations | **FAIL** (`assert 'verified' != 'verified'`) |
+| I6 | control: a report with **no** `Value:` label stays document-only, no `VI-005` | pass (control) |
+
+## J. Preservation checks re-run this round
+
+| Check | Result |
+|---|---|
+| R17 suite (24 tests) unchanged and green | green |
+| Golden fixtures parse unchanged; 12 hashes verify | green, zero changed |
+| Append-only correction lineage (R17 D3) still green | green |
+| Wrong-patient precedence `409 E_VI_004_UNRESOLVED` (R02) | green |
+| OpenAPI 16 paths / 17 operations | unchanged |
+| Alembic smoke `head`/`p2`/`p1`/`base` | PASS |
+| No automatic Observation in any missing-value scenario | asserted in A/B tests |
+
+## Not covered, still
+
+Real Tesseract (NOT RUN); `preserve_interword_spaces` (unmeasured); P2 durable OCR text
+(design only, unauthorized); `span_is_resolvable()` equality hardening (proposed, not
+authorized); document-level issues claiming `extractor: 'pypdf'`; zero-fact documents
+reporting an empty issue list.

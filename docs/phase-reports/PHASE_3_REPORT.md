@@ -1889,6 +1889,26 @@ hiding the real refusal reason. The existing R02 test caught that in my first at
   label, so `page_missing` cannot fire). Needs a governance decision.
 * A destroyed `Value:` label remains undetectable. Stated, not hidden.
 
+### R18 — corrections to R17's own fallback
+
+Owner review [`5916114433`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#pullrequestreview-5916114433)
+found two defects in the *new* R17 code. Both reproduced, both fixed, 12 of 14 new tests
+red against `73639d0`.
+
+| Defect | Measured before | After |
+|---|---|---|
+| Fallback span did not resolve to `raw_text` | `raw_text='105 mg/dL'`, span `' 105 mg/d'` | exact slice; also exact for many-spaces, trailing-space, tab and 200-char inputs |
+| Bare `Value:` label dropped (`if not token: continue`) | no fact, no `VI-005`; approving only date/reference reached **`verified`** | label preserved as literal evidence (`'Value:'`), `normalized_value=None`, `page_missing`, blocking `VI-005` |
+
+The span fix computes the trimmed range first and bounds the span to the *stored*
+`raw_text` length, so the >120-char truncation can no longer make the two diverge.
+A bare label is a *declaration*, not an absence, so it is never treated as
+document-only; a report with no `Value:` label at all still is (control test).
+
+Not fixed, and flagged rather than changed: `span_is_resolvable()` still checks bounds
+only and cannot detect a future `raw_text`/span mismatch. Asserting equality inside it
+would change validation semantics for every fact, which was not authorized.
+
 ## V.7 Status
 
 **P3 remains `IN_REVIEW`.** No PASS, no self-approval, no merge, no P4/P5. One
