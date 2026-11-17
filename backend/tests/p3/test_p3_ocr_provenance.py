@@ -1092,6 +1092,102 @@ def test_stage1_unparseable_1o5_ocr_value_cannot_be_verified_as_is(
     assert _document_observations(db, document_id) == []
 
 
+def test_stage1_max_page_text_chars_config_matches_db_limit_and_rejects_over_20000(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Config validation must reject MAX_PAGE_TEXT_CHARS above the 20,000 DB limit."""
+    from pydantic import ValidationError
+
+    from app.core.config import Settings
+
+    # Default preserved at 20,000.
+    monkeypatch.delenv("MAX_PAGE_TEXT_CHARS", raising=False)
+    assert Settings(_env_file=None).max_page_text_chars == 20_000
+
+    # Valid lower & upper boundary values succeed.
+    assert Settings(_env_file=None, max_page_text_chars=100).max_page_text_chars == 100
+    assert Settings(_env_file=None, max_page_text_chars=20_000).max_page_text_chars == 20_000
+
+    # Below 100 or above 20,000 must fail validation before extraction can run.
+    for invalid in (99, 20_001, 200_000):
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None, max_page_text_chars=invalid)
+
+    monkeypatch.setenv("MAX_PAGE_TEXT_CHARS", "20001")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_stage1_page_text_boundary_values_persist_within_schema_bounds(
+    api, p3_settings, patient_headers, doctor_headers, fixtures, monkeypatch
+):
+    """Exact 20,000-char pages persist intact; 20,001 truncates; 100-char cap persists cleanly."""
+    from app.core.config import get_settings
+
+    # 1) Exact 20,000 characters: retained in full without truncation or DB CHECK failure.
+    pad_exact = 20_000 - len(CLEAN_GLUCOSE_OCR)
+    exact_ocr = ("A" * pad_exact) + CLEAN_GLUCOSE_OCR
+    assert len(exact_ocr) == 20_000
+    _inject_ocr(monkeypatch, exact_ocr, confidence=0.95)
+    exact_doc_id = _upload_scan(api, patient_headers, fixtures, filename="exact-20k.png")
+
+    exact_text = api.get(f"/api/v1/documents/{exact_doc_id}/text", headers=doctor_headers).json()
+    exact_ext = _extraction(api, doctor_headers, exact_doc_id)
+    persisted_exact = exact_text["pages"][0]["text"]
+    assert exact_text["pages"][0]["text_length"] == 20_000
+    assert len(persisted_exact) == 20_000
+    assert persisted_exact == exact_ocr
+    for fact in exact_ext["facts"]:
+        assert persisted_exact[fact["char_start"] : fact["char_end"]] == fact["raw_text"]
+
+    # 2) 20,001 characters: truncated to 20,000 before span parsing and persistence.
+    over_ocr = exact_ocr + "X"
+    assert len(over_ocr) == 20_001
+    _inject_ocr(monkeypatch, over_ocr, confidence=0.95)
+    over_doc_id = _upload_scan(
+        api,
+        patient_headers,
+        fixtures,
+        filename="over-20k.png",
+        source_name="report_a_ambiguous.txt",
+    )
+
+    over_text = api.get(f"/api/v1/documents/{over_doc_id}/text", headers=doctor_headers).json()
+    assert over_text["pages"][0]["text_length"] == 20_000
+    assert len(over_text["pages"][0]["text"]) == 20_000
+
+    # 3) Lower boundary config (max_page_text_chars=100): truncates cleanly to 100 chars.
+    min_settings = p3_settings.model_copy(update={"max_page_text_chars": 100})
+    min_ocr = "Test: Fasting glucose     Value: 104 mg/dL\n" + ("B" * 80)
+    assert len(min_ocr) > 100
+    _inject_ocr(monkeypatch, min_ocr, confidence=0.95)
+    previous_override = api.app.dependency_overrides.get(get_settings)
+    api.app.dependency_overrides[get_settings] = lambda: min_settings
+    try:
+        min_doc_id = _upload_scan(
+            api,
+            patient_headers,
+            fixtures,
+            filename="min-100.png",
+            source_name="report_a_clean.txt",
+        )
+        min_text = api.get(f"/api/v1/documents/{min_doc_id}/text", headers=doctor_headers).json()
+        min_ext = _extraction(api, doctor_headers, min_doc_id)
+        persisted_min = min_text["pages"][0]["text"]
+        assert min_text["pages"][0]["text_length"] == 100
+        assert len(persisted_min) == 100
+        assert persisted_min == min_ocr[:100]
+        assert min_ext["facts"]
+        for fact in min_ext["facts"]:
+            assert 0 <= fact["char_start"] < fact["char_end"] <= 100
+            assert persisted_min[fact["char_start"] : fact["char_end"]] == fact["raw_text"]
+    finally:
+        if previous_override is not None:
+            api.app.dependency_overrides[get_settings] = previous_override
+        else:
+            api.app.dependency_overrides.pop(get_settings, None)
+
+
 def test_stage1_long_page_text_truncated_before_parsing_keeps_spans_in_bounds(
     api, patient_headers, doctor_headers, fixtures, monkeypatch
 ):

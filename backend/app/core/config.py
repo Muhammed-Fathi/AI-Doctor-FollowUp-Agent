@@ -171,10 +171,11 @@ class Settings(BaseSettings):
     max_page_text_chars: int = Field(
         default=20_000,
         ge=100,
-        le=200_000,
+        le=20_000,
         description=(
-            "Per-page extracted text cap before span parsing and durable persistence "
-            "(EXTRACTION_PROVENANCE.md §5a)."
+            "Per-page extracted text cap before span parsing and durable persistence; "
+            "bounded to match document_page_text's 20000-character schema limit "
+            "(DATA_DICTIONARY.md §2.6a, EXTRACTION_PROVENANCE.md §5)."
         ),
     )
     tesseract_cmd: str | None = Field(

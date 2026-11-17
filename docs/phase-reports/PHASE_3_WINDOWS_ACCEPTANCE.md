@@ -97,9 +97,9 @@ The expected test count travels with the commit. The count has moved across
 revisions: `e7d73b5` (Stages 3-5) expects **663** (P3: 275); Stage 5.1 expects
 **666** (P3: 275); Stage 5.2 expects **688** (P3: 297); Stage 5.2a
 (`e3a4698`) expects **702** (P3: 311); Stage 6a (`4f0862f`) expects **708**
-(P3: 314); and this Stage 6b.2 Stage 1 revision expects **737** (P3: **343**),
-adding 29 Stage 1 OCR confirmation, `/text`, `0005` safety, and synthetic
-retention tests.
+(P3: 314); and this Stage 6b.2 Stage 1 revision expects **739** (P3: **345**),
+adding 31 Stage 1 OCR confirmation, `/text`, `0005` safety, config-bound, and
+synthetic retention tests.
 Pinning an older SHA while reading a newer table — or the reverse — reports a
 false FAIL on a run that actually succeeded, which is why the check below reads
 the figure from the pinned checkout rather than from whatever copy of this file
@@ -497,21 +497,21 @@ Record the per-gate summary block **and** the exit code. `SKIPPED` is never a pa
 note which gate skipped and why (the Playwright smoke legitimately skips unless
 `-IncludeE2E` is given and browser binaries are installed).
 
-Expected backend figure at this commit: **737 passed**, of which **343** are the P3
+Expected backend figure at this commit: **739 passed**, of which **345** are the P3
 suite (`backend/tests/p3`). Verified by collection and by a full run on the
 reviewed commit, not estimated:
 
 | Suite | Tests |
 |---|---|
-| `backend/tests` (whole backend) | **737 passed** |
-| `backend/tests/p3` (P3 suite) | **343** |
+| `backend/tests` (whole backend) | **739 passed** |
+| `backend/tests/p3` (P3 suite) | **345** |
 | ├ `test_p3_verification.py` | 29 |
 | ├ `test_p3_extraction.py` | 26 |
 | ├ `test_p3_edge_cases.py` (R06–R09) | 24 |
 | ├ `test_p3_review_corrections.py` (R01–R05) | 21 |
 | ├ `test_p3_rejection_recovery.py` (R21 rejection/recovery) | 21 |
 | ├ `test_p3_ocr_integration.py` (R11/R12 pytesseract + lock) | 17 |
-| ├ `test_p3_ocr_provenance.py` (Stage 1 OCR confirmation, `/text`, `0005` safety) | 29 |
+| ├ `test_p3_ocr_provenance.py` (Stage 1 OCR confirmation, `/text`, `0005` safety) | 31 |
 | ├ `test_p3_r17_safety.py` (R17 OCR substitution + fail-closed) | 24 |
 | ├ `test_p3_r18_provenance.py` (R18 span exactness + bare label) | 14 |
 | ├ `test_p3_windows_findings.py` (R13–R16) | 49 |
