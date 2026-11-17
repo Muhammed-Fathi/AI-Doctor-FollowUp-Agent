@@ -46,6 +46,12 @@ MAX_LINKED_ITEMS = 8
 #: Fixed disclaimer text for extraction payloads (``API_CONTRACT.md`` §3).
 EXTRACTION_DISCLAIMER = "EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE"
 
+#: Fixed notice marking persisted OCR/text output as untrusted engine data.
+SOURCE_TRUTH_NOTICE = (
+    "OCR-transcribed text is engine output (untrusted data), not original source "
+    "truth. Compare against GET /file before verifying measurements."
+)
+
 
 class DocumentUploadResponse(ApiModel):
     """``202`` body for an accepted upload.
@@ -141,6 +147,7 @@ class ExtractedFact(ApiModel):
     quality_flags: list[QualityFlag] = Field(default_factory=list, max_length=6)
     confidence: float | None = Field(default=None, ge=0, le=1)
     verification_status: FactVerificationStatus
+    requires_source_confirmation: bool = False
     evidence: EvidenceRef
 
     @field_validator("char_end")
@@ -228,6 +235,11 @@ class VerifyRequest(ApiModel):
     ``decision='corrected'`` requires the replacement value, because a correction
     with no replacement is a rejection in disguise and would silently change what
     the doctor recorded. The validator enforces that pairing.
+
+    For OCR-derived measurement/unit facts (``extractor='tesseract'``),
+    ``source_image_compared=True``, prior doctor access to ``GET /file``, and
+    explicit value/unit confirmation are required before verification or
+    correction can succeed.
     """
 
     fact_id: str
@@ -235,6 +247,9 @@ class VerifyRequest(ApiModel):
     corrected_value: str | None = Field(default=None, max_length=120)
     corrected_unit: str | None = Field(default=None, max_length=32)
     reason: str | None = Field(default=None, max_length=300)
+    source_image_compared: bool = False
+    confirmed_value: str | None = Field(default=None, max_length=120)
+    confirmed_unit: str | None = Field(default=None, max_length=32)
 
     @field_validator("corrected_unit")
     @classmethod
@@ -242,6 +257,22 @@ class VerifyRequest(ApiModel):
         """Keep the unit a short bounded token, exactly as stored."""
         if value is not None and not value.strip():
             raise ValueError("corrected_unit must not be blank")
+        return value
+
+    @field_validator("confirmed_value")
+    @classmethod
+    def _confirmed_value_shape(cls, value: str | None) -> str | None:
+        """Reject a whitespace-only confirmed_value."""
+        if value is not None and not value.strip():
+            raise ValueError("confirmed_value must not be blank")
+        return value
+
+    @field_validator("confirmed_unit")
+    @classmethod
+    def _confirmed_unit_shape(cls, value: str | None) -> str | None:
+        """Reject a whitespace-only confirmed_unit."""
+        if value is not None and not value.strip():
+            raise ValueError("confirmed_unit must not be blank")
         return value
 
     @field_validator("reason")
@@ -271,6 +302,9 @@ class VerificationRecord(ApiModel):
     new_value: str | None = Field(default=None, max_length=120)
     new_unit: str | None = Field(default=None, max_length=32)
     superseded_fact_id: str | None = None
+    source_image_compared: bool = False
+    confirmed_value: str | None = Field(default=None, max_length=120)
+    confirmed_unit: str | None = Field(default=None, max_length=32)
 
 
 class VerifyResponse(ApiModel):
@@ -281,11 +315,37 @@ class VerifyResponse(ApiModel):
     document_status: DocumentStatus
 
 
+class DocumentPageTextItem(ApiModel):
+    """Persisted extracted/OCR text for one page (doctor provenance view)."""
+
+    page_index: int = Field(ge=0)
+    extractor: Literal["pypdf", "tesseract"]
+    tool_version: str | None = Field(default=None, max_length=64)
+    text: str
+    text_length: int = Field(ge=0, le=20_000)
+    non_whitespace_chars: int = Field(ge=0)
+    text_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    created_at: UtcDatetime
+
+
+class DocumentTextResponse(ApiModel):
+    """Doctor-only persisted per-page transcription payload (`GET /text`)."""
+
+    document_id: str
+    document_status: DocumentStatus
+    source_truth_notice: str = Field(default=SOURCE_TRUTH_NOTICE)
+    disclaimer: str = Field(default=EXTRACTION_DISCLAIMER)
+    pages: list[DocumentPageTextItem]
+
+
 __all__ = [
     "EXTRACTION_DISCLAIMER",
     "MAX_LINKED_ITEMS",
     "MAX_RAW_TEXT",
+    "SOURCE_TRUTH_NOTICE",
     "DocumentMeta",
+    "DocumentPageTextItem",
+    "DocumentTextResponse",
     "DocumentUploadResponse",
     "EvidenceRef",
     "ExtractedFact",

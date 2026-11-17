@@ -168,6 +168,15 @@ class Settings(BaseSettings):
         le=400,
         description="Fact cap per document (EXTRACTION_PROVENANCE.md §2 bounds).",
     )
+    max_page_text_chars: int = Field(
+        default=20_000,
+        ge=100,
+        le=200_000,
+        description=(
+            "Per-page extracted text cap before span parsing and durable persistence "
+            "(EXTRACTION_PROVENANCE.md §5a)."
+        ),
+    )
     tesseract_cmd: str | None = Field(
         default=None,
         description=(

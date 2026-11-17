@@ -14,6 +14,7 @@ The intake order is fixed and each step is a separate, testable function.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 import uuid
@@ -40,7 +41,7 @@ from app.core.errors import (
     ErrorCode,
     document_error,
 )
-from app.db.models import Document, ExtractedFact, ExtractionAttempt
+from app.db.models import Document, DocumentPageText, ExtractedFact, ExtractionAttempt
 from app.services.documents.field_parser import (
     ParseResult,
     parse_pages,
@@ -366,6 +367,50 @@ def select_path(
     return TriagePath.FLAG_FOR_HUMAN, "no_pages"
 
 
+def _bound_pages(pages: list[PageText], *, max_chars: int) -> list[PageText]:
+    """Truncate every page's text to ``max_chars`` before parsing and storage.
+
+    Guarantees ``ExtractedFact`` spans index the exact string saved in
+    ``document_page_text``.
+    """
+    bounded: list[PageText] = []
+    for page in pages:
+        text = page.text[:max_chars]
+        bounded.append(
+            PageText(
+                page_index=page.page_index,
+                text=text,
+                extractor=page.extractor,
+                confidence=page.confidence,
+                tool_version=page.tool_version,
+            )
+        )
+    return bounded
+
+
+def _persist_page_texts(
+    db: Session, *, document: Document, pages: list[PageText]
+) -> list[DocumentPageText]:
+    """Persist one ``DocumentPageText`` row per extracted page."""
+    stored: list[DocumentPageText] = []
+    now = format_utc(utc_now())
+    for page in pages:
+        row = DocumentPageText(
+            document_id=document.id,
+            page_index=page.page_index,
+            extractor=page.extractor.value,
+            tool_version=page.tool_version,
+            text=page.text,
+            text_length=len(page.text),
+            non_whitespace_chars=page.char_count,
+            text_sha256=hashlib.sha256(page.text.encode("utf-8")).hexdigest(),
+            created_at=now,
+        )
+        db.add(row)
+        stored.append(row)
+    return stored
+
+
 def run_extraction(db: Session, *, document: Document, settings: Settings) -> ExtractionOutcome:
     """Extract a document, recording attempts and candidate facts.
 
@@ -447,6 +492,8 @@ def run_extraction(db: Session, *, document: Document, settings: Settings) -> Ex
             return ExtractionOutcome(document=document, untrusted_content_detected=False)
         pages = ocr_pages
 
+    pages = _bound_pages(pages, max_chars=settings.max_page_text_chars)
+    _persist_page_texts(db, document=document, pages=pages)
     parse_result = parse_pages(pages)
 
     # The document's own identity claim, stored once so ``VI-004`` can be
@@ -569,6 +616,7 @@ def _ocr_pages(
                         text=ocr.text,
                         extractor=ExtractionPath.TESSERACT,
                         confidence=ocr.confidence,
+                        tool_version=ocr.tool_version,
                     )
                 )
                 succeeded = True
@@ -649,6 +697,7 @@ def _ocr_image_document(
             text=ocr.text,
             extractor=ExtractionPath.TESSERACT,
             confidence=ocr.confidence,
+            tool_version=ocr.tool_version,
         )
     ], None
 

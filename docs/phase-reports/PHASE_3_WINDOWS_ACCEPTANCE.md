@@ -96,8 +96,10 @@ Do **not** paste `18a53b2` (PR #10) or `867ab12` (`main`); neither contains R21.
 The expected test count travels with the commit. The count has moved across
 revisions: `e7d73b5` (Stages 3-5) expects **663** (P3: 275); Stage 5.1 expects
 **666** (P3: 275); Stage 5.2 expects **688** (P3: 297); Stage 5.2a
-(`e3a4698`) expects **702** (P3: 311); and this Stage 6a revision expects
-**708** (P3: **314**), adding 6 Windows portability and isolation regressions.
+(`e3a4698`) expects **702** (P3: 311); Stage 6a (`4f0862f`) expects **708**
+(P3: 314); and this Stage 6b.2 Stage 1 revision expects **737** (P3: **343**),
+adding 29 Stage 1 OCR confirmation, `/text`, `0005` safety, and synthetic
+retention tests.
 Pinning an older SHA while reading a newer table — or the reverse — reports a
 false FAIL on a run that actually succeeded, which is why the check below reads
 the figure from the pinned checkout rather than from whatever copy of this file
@@ -321,12 +323,14 @@ A `deterministic=False` line is a FAIL.
 
 ---
 
-## 5. Alembic round trip on a disposable database
+## 5. Alembic round trip on a disposable database (`IMP-07`)
 
-The head revision below is **`0004_p3_rejection_recovery`**. R21 added it after
-`0003_p3_documents`, and `check_alembic_smoke.py` now knows a real `p3` state, so
-the sequence visits every state the checker can assert rather than only `head` and
-`p2`.
+The head revision below is **`0005_p3_ocr_provenance`** (Stage 1 OCR provenance:
+`document_page_text` + `fact_verification` confirmation columns, added without
+rebuilding `fact_verification` so `trg_fact_verification_doctor_only` remains
+intact across both upgrade and downgrade). `check_alembic_smoke.py` verifies
+`head` (`0005`), `p3_recovery` (`0004`), `p3` (`0003`), `p2` (`0002`), `p1`,
+and `base` cleanly on a disposable database.
 
 The database URL is derived from `$env:P3_ACCEPT`; nothing points at
 `data\runtime`.
@@ -366,16 +370,20 @@ final check at `head` would not prove the intermediate downgrades left anything
 correct:
 
 ```powershell
-Invoke-Alembic 'upgrade' 'head'                           # -> 0004
+Invoke-Alembic 'upgrade' 'head'                           # -> 0005
 Assert-Smoke 'head'
-# expect: PASS (state head, revision ['0004_p3_rejection_recovery'], …)
+# expect: PASS (state head, revision ['0005_p3_ocr_provenance'], …)
+
+Invoke-Alembic 'downgrade' '0004_p3_rejection_recovery'   # -> 0004 (empty provenance)
+Assert-Smoke 'p3_recovery'
+# expect: PASS (state p3_recovery, revision ['0004_p3_rejection_recovery'], …)
 
 Invoke-Alembic 'downgrade' '0003_p3_documents'            # -> 0003
 Assert-Smoke 'p3'
 # expect: PASS (state p3, revision ['0003_p3_documents'], …)
-# At 0003 the recovery column/index/self-FK must be ABSENT; the checker asserts it.
+# At 0003 the recovery and Stage 1 columns/tables must be ABSENT; the trigger must survive.
 
-Invoke-Alembic 'upgrade' 'head'                           # -> 0004 again
+Invoke-Alembic 'upgrade' 'head'                           # -> 0005 again
 Assert-Smoke 'head'
 
 Invoke-Alembic 'downgrade' '0002_p2_patient_domain'       # D-05: P2 schema intact
@@ -384,13 +392,12 @@ Assert-Smoke 'p2'
 Invoke-Alembic 'downgrade' 'base'
 Assert-Smoke 'base'
 
-Invoke-Alembic 'upgrade' 'head'                           # -> 0004 from scratch
+Invoke-Alembic 'upgrade' 'head'                           # -> 0005 from scratch
 Assert-Smoke 'head'
 ```
 
-Then assert foreign-key integrity on a **runtime-equivalent** connection, i.e. with
-`PRAGMA foreign_keys=ON`. The migration engine intentionally runs DDL with foreign
-keys off, so a plain `sqlite3.connect` would not reproduce the runtime setting:
+Then assert foreign-key integrity, trigger survival, and Stage 1 provenance
+objects on a **runtime-equivalent** connection (`PRAGMA foreign_keys=ON`):
 
 ```powershell
 & $Py -c @"
@@ -401,13 +408,20 @@ print('foreign_keys =', c.execute('PRAGMA foreign_keys').fetchone()[0])
 print('foreign_key_check =', c.execute('PRAGMA foreign_key_check').fetchall())
 print('document.recovered_from_document_id present =',
       any(r[1] == 'recovered_from_document_id' for r in c.execute('PRAGMA table_info(document)')))
+print('document_page_text present =',
+      any(r[0] == 'document_page_text' for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")))
+print('fact_verification stage1 cols =',
+      sorted({r[1] for r in c.execute('PRAGMA table_info(fact_verification)')}
+             & {'source_image_compared', 'confirmed_value', 'confirmed_unit'}))
+print('trigger present =',
+      any(r[0] == 'trg_fact_verification_doctor_only'
+          for r in c.execute("SELECT name FROM sqlite_master WHERE type='trigger'")))
 print('self-FK =', [r for r in c.execute('PRAGMA foreign_key_list(document)')
                     if r[3] == 'recovered_from_document_id'])
 "@ $DbFile
 ```
 
-Expect `foreign_keys = 1`, `foreign_key_check = []`, present `= True`, and exactly
-one self-FK row whose delete action is `RESTRICT`.
+Expect `foreign_keys = 1`, `foreign_key_check = []`, `document.recovered_from_document_id present = True`, `document_page_text present = True`, `fact_verification stage1 cols = ['confirmed_unit', 'confirmed_value', 'source_image_compared']`, `trigger present = True`, and exactly one self-FK row whose delete action is `RESTRICT`.
 
 > **This is the round trip, not the populated-graph test.** The row-preservation
 > assertions here run on an *empty* schema. The populated P3 dependency graph
@@ -483,20 +497,21 @@ Record the per-gate summary block **and** the exit code. `SKIPPED` is never a pa
 note which gate skipped and why (the Playwright smoke legitimately skips unless
 `-IncludeE2E` is given and browser binaries are installed).
 
-Expected backend figure at this commit: **708 passed**, of which **314** are the P3
+Expected backend figure at this commit: **737 passed**, of which **343** are the P3
 suite (`backend/tests/p3`). Verified by collection and by a full run on the
 reviewed commit, not estimated:
 
 | Suite | Tests |
 |---|---|
-| `backend/tests` (whole backend) | **708 passed** |
-| `backend/tests/p3` (P3 suite) | **314** |
+| `backend/tests` (whole backend) | **737 passed** |
+| `backend/tests/p3` (P3 suite) | **343** |
 | ├ `test_p3_verification.py` | 29 |
 | ├ `test_p3_extraction.py` | 26 |
 | ├ `test_p3_edge_cases.py` (R06–R09) | 24 |
 | ├ `test_p3_review_corrections.py` (R01–R05) | 21 |
 | ├ `test_p3_rejection_recovery.py` (R21 rejection/recovery) | 21 |
 | ├ `test_p3_ocr_integration.py` (R11/R12 pytesseract + lock) | 17 |
+| ├ `test_p3_ocr_provenance.py` (Stage 1 OCR confirmation, `/text`, `0005` safety) | 29 |
 | ├ `test_p3_r17_safety.py` (R17 OCR substitution + fail-closed) | 24 |
 | ├ `test_p3_r18_provenance.py` (R18 span exactness + bare label) | 14 |
 | ├ `test_p3_windows_findings.py` (R13–R16) | 49 |

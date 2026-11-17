@@ -35,9 +35,10 @@ P2_TABLES = {
     "audit_event",
 }
 
-#: The five tables P3 was authorized to add (owner decision D-05).
+#: The six tables P3 owns (five from ``0003`` + ``document_page_text`` from Stage 1 ``0005``).
 P3_TABLES = {
     "document",
+    "document_page_text",
     "extraction_attempt",
     "extracted_fact",
     "fact_verification",

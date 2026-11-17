@@ -138,6 +138,7 @@ P3_ROUTES = {
     "/api/v1/documents/upload",
     "/api/v1/documents/{document_id}",
     "/api/v1/documents/{document_id}/extraction",
+    "/api/v1/documents/{document_id}/text",
     "/api/v1/documents/{document_id}/verify",
     "/api/v1/documents/{document_id}/file",
 }

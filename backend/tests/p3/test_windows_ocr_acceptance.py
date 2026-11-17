@@ -770,15 +770,29 @@ def test_w1_positive_mapping_control_verifies_same_fixture_creates_observation(
             assert eligible is True, reason
             assert module._w1_candidate(body["facts"]) is not None
 
+            file_resp = http.get(
+                f"/api/v1/documents/{document_id}/file",
+                headers=doctor_headers,
+            )
+            assert file_resp.status_code == 200, file_resp.text
+
             for fact in body["facts"]:
+                verify_body: dict[str, object] = {
+                    "fact_id": fact["fact_id"],
+                    "decision": "verified",
+                    "reason": "control confirms glucose report promotes when verified",
+                }
+                if fact["field_name"] == "value":
+                    verify_body["source_image_compared"] = True
+                    verify_body["confirmed_value"] = fact["normalized_value"]
+                    verify_body["confirmed_unit"] = fact["unit"]
+                elif fact["field_name"] == "unit":
+                    verify_body["source_image_compared"] = True
+                    verify_body["confirmed_unit"] = fact["normalized_value"]
                 verify = http.post(
                     f"/api/v1/documents/{document_id}/verify",
                     headers=doctor_headers,
-                    json={
-                        "fact_id": fact["fact_id"],
-                        "decision": "verified",
-                        "reason": "control confirms glucose report promotes when verified",
-                    },
+                    json=verify_body,
                 )
                 assert verify.status_code == 200, verify.text
 

@@ -19,7 +19,7 @@ from app.db.models import SchemaMeta
 from app.db.session import create_db_engine, ensure_sqlite_directory
 
 BASELINE_REVISION = "0001_p1_baseline"
-HEAD_REVISION = "0004_p3_rejection_recovery"
+HEAD_REVISION = "0005_p3_ocr_provenance"
 
 #: The seven tables the P2 revision owns. Equality is asserted below, so a P4+
 #: table created early fails just as loudly as a missing one.
@@ -33,10 +33,11 @@ P2_TABLES = {
     "user",
 }
 
-#: The five tables the P3 revision owns (``0003``). Equality against
-#: ``P1 + P2 + P3`` is asserted at ``head``, so a P4+ table still fails.
+#: The six tables the P3 revisions own (``0003`` + Stage 1 ``0005``). Equality
+#: against ``P1 + P2 + P3`` is asserted at ``head``, so a P4+ table still fails.
 P3_TABLES = {
     "document",
+    "document_page_text",
     "extraction_attempt",
     "extracted_fact",
     "fact_verification",

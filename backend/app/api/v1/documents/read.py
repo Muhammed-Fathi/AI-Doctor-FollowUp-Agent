@@ -32,11 +32,13 @@ from app.api.v1.auth.dependencies import (
     RequestId,
     bearer_scheme,
 )
-from app.core.enums import AuditOutcome, DocumentStatus
+from app.core.enums import AuditOutcome, DocumentStatus, ExtractionPath, FactField
 from app.core.errors import EXTRACTION_PENDING_DETAIL, ApiError, ErrorCode, document_error
-from app.db.models import ExtractedFact, ExtractionAttempt
+from app.db.models import DocumentPageText, ExtractedFact, ExtractionAttempt
 from app.schemas.document import (
     DocumentMeta,
+    DocumentPageTextItem,
+    DocumentTextResponse,
     EvidenceRef,
     ExtractionAttemptSummary,
     ExtractionResponse,
@@ -46,7 +48,11 @@ from app.schemas.document import (
     ExtractedFact as ExtractedFactSchema,
 )
 from app.services.audit import append_audit_event
-from app.services.documents import EVENT_EXTRACTION_READ
+from app.services.documents import (
+    EVENT_DOCUMENT_FILE_READ,
+    EVENT_DOCUMENT_TEXT_READ,
+    EVENT_EXTRACTION_READ,
+)
 from app.services.documents.access import (
     load_document,
     require_doctor_document_scope,
@@ -70,6 +76,7 @@ router = APIRouter(
 ROUTE_READ_META = "GET /api/v1/documents/{document_id}"
 ROUTE_READ_EXTRACTION = "GET /api/v1/documents/{document_id}/extraction"
 ROUTE_READ_FILE = "GET /api/v1/documents/{document_id}/file"
+ROUTE_READ_TEXT = "GET /api/v1/documents/{document_id}/text"
 
 #: Neutral wording for an absent *or* out-of-scope document.
 NOT_FOUND_DETAIL = "This document is not available."
@@ -126,6 +133,14 @@ def _evidence_for(fact: ExtractedFact) -> EvidenceRef:
     )
 
 
+def _requires_source_confirmation(fact: ExtractedFact) -> bool:
+    """Return True when an OCR measurement or unit requires source-image review."""
+    return fact.extractor == ExtractionPath.TESSERACT.value and fact.field_name in {
+        FactField.VALUE.value,
+        FactField.UNIT.value,
+    }
+
+
 def _fact_schema(fact: ExtractedFact) -> ExtractedFactSchema:
     """Project a stored ``ExtractedFact`` row into the response schema."""
     return ExtractedFactSchema(
@@ -141,6 +156,7 @@ def _fact_schema(fact: ExtractedFact) -> ExtractedFactSchema:
         quality_flags=list(decode_flags(fact.quality_flags)),
         confidence=fact.confidence,
         verification_status=fact.verification_status,
+        requires_source_confirmation=_requires_source_confirmation(fact),
         evidence=_evidence_for(fact),
     )
 
@@ -176,8 +192,31 @@ def _attempt_summaries(db: DbSession, *, document_id: str) -> list[ExtractionAtt
     ]
 
 
+def _default_document_extractor(
+    attempts: list[ExtractionAttemptSummary], facts: list[ExtractedFact]
+) -> str:
+    """Resolve the fallback extractor when a document-level issue has no linked facts."""
+    for fact in facts:
+        if fact.extractor in {ExtractionPath.PYPDF.value, ExtractionPath.TESSERACT.value}:
+            return fact.extractor
+    for attempt in reversed(attempts):
+        if attempt.succeeded and attempt.path in {
+            ExtractionPath.PYPDF,
+            ExtractionPath.TESSERACT,
+        }:
+            return attempt.path.value
+    for attempt in reversed(attempts):
+        if attempt.path in {ExtractionPath.PYPDF, ExtractionPath.TESSERACT}:
+            return attempt.path.value
+    return ExtractionPath.PYPDF.value
+
+
 def _issue_schemas(
-    summary: QualitySummary, *, document_id: str, facts: list[ExtractedFact]
+    summary: QualitySummary,
+    *,
+    document_id: str,
+    facts: list[ExtractedFact],
+    attempts: list[ExtractionAttemptSummary],
 ) -> list[VerificationIssue]:
     """Project the **persisted** blocker rows into the response schema.
 
@@ -187,6 +226,7 @@ def _issue_schemas(
     recomputed per request.
     """
     by_id = {fact.id: fact for fact in facts}
+    fallback_extractor = _default_document_extractor(attempts, facts)
     issues: list[VerificationIssue] = []
     for row in summary.issues:
         linked_ids = [fact_id for fact_id in decode_fact_ids(row.fact_ids) if fact_id in by_id][:8]
@@ -196,7 +236,11 @@ def _issue_schemas(
             # document itself rather than emitting an empty evidence array, which
             # the contract forbids (minItems: 1).
             evidence = [
-                EvidenceRef(kind="document_span", document_id=document_id, extractor="pypdf")
+                EvidenceRef(
+                    kind="document_span",
+                    document_id=document_id,
+                    extractor=fallback_extractor,
+                )
             ]
         issues.append(
             VerificationIssue(
@@ -314,14 +358,95 @@ def read_extraction(
         detail_fragments=(ROUTE_READ_EXTRACTION, f"status={status}"),
     )
 
+    attempts = _attempt_summaries(db, document_id=document.id)
     return ExtractionResponse(
         document_id=document.id,
         document_status=status,
         facts=[_fact_schema(fact) for fact in facts],
-        attempts=_attempt_summaries(db, document_id=document.id),
-        verification_issues=_issue_schemas(summary, document_id=document.id, facts=facts),
+        attempts=attempts,
+        verification_issues=_issue_schemas(
+            summary, document_id=document.id, facts=facts, attempts=attempts
+        ),
         failure_code=document.failure_code,
         recovered_from_document_id=document.recovered_from_document_id,
+    )
+
+
+@router.get(
+    "/{document_id}/text",
+    response_model=DocumentTextResponse,
+    summary="Persisted per-page extracted/OCR text (assigned doctor only)",
+    description=(
+        "Returns the bounded per-page text-layer or OCR transcriptions stored at "
+        "extraction time. OCR text is untrusted engine output, not original source "
+        "truth; doctors must still compare against GET /file."
+    ),
+    responses={
+        401: {"description": "Not authenticated (uniform body)"},
+        403: {"description": "Caller is not the assigned doctor"},
+        404: {"description": "No such document in the caller's scope"},
+        409: {"description": "Extraction is still pending"},
+    },
+)
+def read_document_text(
+    document_id: str,
+    principal: PrincipalDep,
+    db: DbSession,
+    now: Now,
+    request_id: RequestId,
+) -> DocumentTextResponse:
+    """Return persisted extracted/OCR page text for the assigned doctor only."""
+    document = load_document(db, document_id)
+    if document is None:
+        raise _not_found()
+    require_doctor_document_scope(db, principal, document)
+
+    status = document.extraction_status
+    if status == DocumentStatus.PENDING_EXTRACTION.value:
+        raise document_error(ErrorCode.EXTRACTION_PENDING, EXTRACTION_PENDING_DETAIL)
+
+    rows = list(
+        db.execute(
+            select(DocumentPageText)
+            .where(DocumentPageText.document_id == document.id)
+            .order_by(DocumentPageText.page_index)
+        ).scalars()
+    )
+
+    append_audit_event(
+        db,
+        event_type=EVENT_DOCUMENT_TEXT_READ,
+        actor_type=principal.actor_type,
+        actor_id=principal.user_id,
+        outcome=AuditOutcome.OK,
+        request_id=request_id,
+        now=now,
+        patient_id=document.patient_id,
+        subject_type="document",
+        subject_id=document.id,
+        detail_fragments=(
+            ROUTE_READ_TEXT,
+            f"page_count={len(rows)}",
+            f"status={status}",
+        ),
+    )
+
+    return DocumentTextResponse(
+        document_id=document.id,
+        document_status=status,
+        pages=[
+            DocumentPageTextItem(
+                page_index=row.page_index,
+                extractor=row.extractor,
+                tool_version=row.tool_version,
+                text=row.text,
+                text_length=row.text_length,
+                non_whitespace_chars=row.non_whitespace_chars,
+                text_sha256=row.text_sha256,
+                created_at=row.created_at,
+            )
+            for row in rows
+        ],
     )
 
 
@@ -349,6 +474,8 @@ def read_file(
     principal: PrincipalDep,
     db: DbSession,
     settings: AppSettings,
+    now: Now,
+    request_id: RequestId,
 ) -> Response:
     """Stream the original upload, scope-checked first."""
     document = load_document(db, document_id)
@@ -365,6 +492,20 @@ def read_file(
         # same neutral 404 rather than leaking a filesystem detail.
         raise _not_found() from None
 
+    append_audit_event(
+        db,
+        event_type=EVENT_DOCUMENT_FILE_READ,
+        actor_type=principal.actor_type,
+        actor_id=principal.user_id,
+        outcome=AuditOutcome.OK,
+        request_id=request_id,
+        now=now,
+        patient_id=document.patient_id,
+        subject_type="document",
+        subject_id=document.id,
+        detail_fragments=(ROUTE_READ_FILE, f"mime_type={document.mime_type}"),
+    )
+
     return Response(
         content=payload,
         media_type=document.mime_type,
@@ -380,5 +521,6 @@ __all__ = [
     "ROUTE_READ_EXTRACTION",
     "ROUTE_READ_FILE",
     "ROUTE_READ_META",
+    "ROUTE_READ_TEXT",
     "router",
 ]

@@ -39,15 +39,18 @@ P2_TABLES = {
     "session",
     "user",
 }
-HEAD_REVISION = "0004_p3_rejection_recovery"
+HEAD_REVISION = "0005_p3_ocr_provenance"
+P4_REVISION = "0004_p3_rejection_recovery"
 P2_REVISION = "0002_p2_patient_domain"
 P1_REVISION = "0001_p1_baseline"
 
-#: Tables owned by P3 (``0003``). The exact P2 assertions below are kept by
-#: migrating to ``P2_REVISION`` rather than to ``head``, so "0002 creates exactly
-#: the seven P2 tables" is still proven after P3 exists (owner decision D-05).
+#: Tables owned by P3 (``0003`` + Stage 1 ``0005``). The exact P2 assertions
+#: below are kept by migrating to ``P2_REVISION`` rather than to ``head``, so
+#: "0002 creates exactly the seven P2 tables" is still proven after P3 exists
+#: (owner decision D-05).
 P3_TABLES = {
     "document",
+    "document_page_text",
     "extraction_attempt",
     "extracted_fact",
     "fact_verification",
@@ -397,13 +400,13 @@ def _seed_two_documents(engine: Engine) -> tuple[str, str]:
 
 
 def test_0004_adds_the_recovery_column_index_and_restrict_self_fk(tmp_path: Path) -> None:
-    """At ``head`` the column, its index and a RESTRICT self-FK are all present."""
+    """At ``0004`` the column, its index and a RESTRICT self-FK are all present."""
     config, url = _config(tmp_path)
-    command.upgrade(config, HEAD_REVISION)
+    command.upgrade(config, P4_REVISION)
 
     engine = create_db_engine(url)
     try:
-        assert _revision(engine) == HEAD_REVISION
+        assert _revision(engine) == P4_REVISION
         assert RECOVERY_COLUMN in _document_columns(engine)
         assert RECOVERY_INDEX in _document_indexes(engine)
         # The pre-existing indexes must not have been lost in the rebuild.
@@ -430,7 +433,7 @@ def test_0004_adds_the_recovery_column_index_and_restrict_self_fk(tmp_path: Path
 def test_0004_rebuild_preserves_the_document_check_constraints(tmp_path: Path) -> None:
     """A batch rebuild must not silently drop ``0003``'s CHECK constraints."""
     config, url = _config(tmp_path)
-    command.upgrade(config, HEAD_REVISION)
+    command.upgrade(config, P4_REVISION)
 
     engine = create_db_engine(url)
     try:
@@ -467,7 +470,7 @@ def test_0004_preserves_existing_rows_through_the_rebuild(tmp_path: Path) -> Non
     finally:
         engine.dispose()
 
-    command.upgrade(config, HEAD_REVISION)
+    command.upgrade(config, P4_REVISION)
 
     engine = create_db_engine(url)
     try:
@@ -498,7 +501,7 @@ def test_0004_downgrade_refuses_and_changes_nothing_when_links_exist(tmp_path: P
     finally:
         engine.dispose()
 
-    command.upgrade(config, HEAD_REVISION)
+    command.upgrade(config, P4_REVISION)
 
     engine = create_db_engine(url)
     try:
@@ -520,7 +523,7 @@ def test_0004_downgrade_refuses_and_changes_nothing_when_links_exist(tmp_path: P
         # Nothing was dropped and no row was changed.
         assert RECOVERY_COLUMN in _document_columns(engine)
         assert RECOVERY_INDEX in _document_indexes(engine)
-        assert _revision(engine) == HEAD_REVISION
+        assert _revision(engine) == P4_REVISION
         with engine.connect() as connection:
             link = connection.execute(
                 text(f"SELECT {RECOVERY_COLUMN} FROM document WHERE id = :child"),
@@ -544,7 +547,7 @@ def test_0004_downgrade_round_trips_when_no_links_exist(tmp_path: Path) -> None:
     finally:
         engine.dispose()
 
-    command.upgrade(config, HEAD_REVISION)
+    command.upgrade(config, P4_REVISION)
     command.downgrade(config, P3_REVISION)
 
     engine = create_db_engine(url)
@@ -558,12 +561,12 @@ def test_0004_downgrade_round_trips_when_no_links_exist(tmp_path: Path) -> None:
     finally:
         engine.dispose()
 
-    command.upgrade(config, HEAD_REVISION)
+    command.upgrade(config, P4_REVISION)
 
     engine = create_db_engine(url)
     try:
         assert RECOVERY_COLUMN in _document_columns(engine)
-        assert _revision(engine) == HEAD_REVISION
+        assert _revision(engine) == P4_REVISION
         assert _fk_violations(engine) == []
     finally:
         engine.dispose()
@@ -840,11 +843,11 @@ def test_0004_preserves_a_populated_p3_graph(tmp_path: Path) -> None:
     finally:
         engine.dispose()
 
-    command.upgrade(config, HEAD_REVISION)
+    command.upgrade(config, P4_REVISION)
 
     engine = create_db_engine(url)
     try:
-        assert _revision(engine) == HEAD_REVISION
+        assert _revision(engine) == P4_REVISION
         assert _graph_counts(engine) == counts_before
         _assert_graph_intact(engine, links_before)
     finally:
@@ -869,7 +872,7 @@ def test_0004_graph_survives_downgrade_round_trip_when_no_link_exists(tmp_path: 
     finally:
         engine.dispose()
 
-    command.upgrade(config, HEAD_REVISION)
+    command.upgrade(config, P4_REVISION)
     command.downgrade(config, P3_REVISION)
 
     engine = create_db_engine(url)
@@ -881,7 +884,7 @@ def test_0004_graph_survives_downgrade_round_trip_when_no_link_exists(tmp_path: 
     finally:
         engine.dispose()
 
-    command.upgrade(config, HEAD_REVISION)
+    command.upgrade(config, P4_REVISION)
 
     engine = create_db_engine(url)
     try:
@@ -910,7 +913,7 @@ def test_0004_records_a_recovery_link_without_touching_the_source_graph(tmp_path
     finally:
         engine.dispose()
 
-    command.upgrade(config, HEAD_REVISION)
+    command.upgrade(config, P4_REVISION)
 
     engine = create_db_engine(url)
     try:
@@ -970,7 +973,7 @@ def test_0004_records_a_recovery_link_without_touching_the_source_graph(tmp_path
     engine = create_db_engine(url)
     try:
         assert RECOVERY_COLUMN in _document_columns(engine)
-        assert _revision(engine) == HEAD_REVISION
+        assert _revision(engine) == P4_REVISION
         assert _graph_counts(engine)["document"] == counts_before["document"] + 1
         _assert_graph_intact(engine, links_before)
     finally:

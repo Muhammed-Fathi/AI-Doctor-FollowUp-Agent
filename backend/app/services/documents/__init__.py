@@ -37,6 +37,13 @@ EVENT_DOCUMENT_DUPLICATE = "document.duplicate"
 #: Extraction completed, wholly or with a recorded terminal failure.
 EVENT_DOCUMENT_EXTRACTED = "document.extracted"
 
+#: An extracted document's binary bytes were served via GET /file.
+#: Records server-side access only — never implies genuine visual review.
+EVENT_DOCUMENT_FILE_READ = "document.file_read"
+
+#: A doctor-visible read of persisted OCR/text-layer page transcriptions.
+EVENT_DOCUMENT_TEXT_READ = "document.text_read"
+
 #: A doctor recorded a decision on one extracted fact.
 EVENT_FACT_VERIFIED = "fact.verified"
 
@@ -56,7 +63,9 @@ EVENT_DOCUMENT_RECOVERED = "document.recovered"
 __all__ = [
     "EVENT_DOCUMENT_DUPLICATE",
     "EVENT_DOCUMENT_EXTRACTED",
+    "EVENT_DOCUMENT_FILE_READ",
     "EVENT_DOCUMENT_RECOVERED",
+    "EVENT_DOCUMENT_TEXT_READ",
     "EVENT_DOCUMENT_UPLOADED",
     "EVENT_EXTRACTION_READ",
     "EVENT_FACT_VERIFIED",

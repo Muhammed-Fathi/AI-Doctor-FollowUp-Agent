@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -28,7 +29,9 @@ from sqlalchemy.orm import Session
 from app.core.clock import format_utc, utc_now
 from app.core.config import get_settings
 from app.core.enums import (
+    AuditOutcome,
     DocumentStatus,
+    ExtractionPath,
     FactField,
     FactVerificationStatus,
     QualityFlag,
@@ -42,8 +45,14 @@ from app.core.errors import (
     ErrorCode,
     document_error,
 )
-from app.db.models import Document, ExtractedFact, FactVerification, Observation
-from app.services.documents import quality
+from app.db.models import (
+    AuditEvent,
+    Document,
+    ExtractedFact,
+    FactVerification,
+    Observation,
+)
+from app.services.documents import EVENT_DOCUMENT_FILE_READ, quality
 from app.services.documents.field_parser import normalize_corrected_value
 from app.services.documents.mapping import (
     MappingDecision,
@@ -178,7 +187,10 @@ def _unread_measurement_blocks_verification(db: Session, document_id: str) -> bo
         for fact in facts
         if fact.field_name == FactField.VALUE.value
         and fact.id not in superseded
-        and QualityFlag.PAGE_MISSING.value in quality.decode_flags(fact.quality_flags)
+        and bool(
+            {QualityFlag.PAGE_MISSING.value, QualityFlag.UNPARSEABLE_VALUE.value}
+            & set(quality.decode_flags(fact.quality_flags))
+        )
     ]
     if not declared:
         return False
@@ -409,6 +421,37 @@ def _create_observation_from_mapping(
         return False, "already_mapped"
 
     candidate = decision.mapped
+    if source_fact.unit is not None and source_fact.unit != candidate.unit:
+        return False, "unit_mismatch_between_facts"
+
+    if source_fact.extractor == ExtractionPath.TESSERACT.value:
+        deciding_fact_id = source_fact.corrected_from_fact_id or source_fact.id
+        deciding_ver = _existing_decision(db, deciding_fact_id)
+        if (
+            deciding_ver is None
+            or deciding_ver.source_image_compared != 1
+            or deciding_ver.confirmed_unit != candidate.unit
+            or not _doctor_accessed_source_file(
+                db, document_id=document.id, doctor_user_id=doctor_user_id
+            )
+        ):
+            return False, "ocr_source_review_required"
+        unit_facts = list(
+            db.execute(
+                select(ExtractedFact).where(
+                    ExtractedFact.document_id == document.id,
+                    ExtractedFact.field_name == FactField.UNIT.value,
+                    ExtractedFact.extractor == ExtractionPath.TESSERACT.value,
+                    ExtractedFact.verification_status == FactVerificationStatus.VERIFIED.value,
+                )
+            ).scalars()
+        )
+        for ufact in unit_facts:
+            u_deciding_id = ufact.corrected_from_fact_id or ufact.id
+            u_ver = _existing_decision(db, u_deciding_id)
+            if u_ver is None or u_ver.source_image_compared != 1:
+                return False, "ocr_source_review_required"
+
     measured_at = measured_at_for(candidate.measured_at[:10])
     if measured_at is None:  # pragma: no cover - mapping already validated it
         return False, "unmapped_test_name"
@@ -438,6 +481,287 @@ def _create_observation_from_mapping(
     return True, None
 
 
+def _doctor_accessed_source_file(db: Session, *, document_id: str, doctor_user_id: str) -> bool:
+    """Return True if the deciding doctor fetched GET /file for ``document_id``."""
+    row = db.execute(
+        select(AuditEvent.id)
+        .where(
+            AuditEvent.event_type == EVENT_DOCUMENT_FILE_READ,
+            AuditEvent.subject_type == "document",
+            AuditEvent.subject_id == document_id,
+            AuditEvent.actor_id == doctor_user_id,
+            AuditEvent.outcome == AuditOutcome.OK.value,
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+    return row is not None
+
+
+def _numeric_equal(left: str, right: str) -> bool:
+    """Return True when two canonical numeric tokens have equal Decimal value."""
+    try:
+        return Decimal(left) == Decimal(right)
+    except (InvalidOperation, ValueError):
+        return False
+
+
+def _active_verified_sibling_units(
+    db: Session, *, document_id: str, field_name: str, exclude_fact_id: str
+) -> set[str]:
+    """Return unit tokens already verified on active sibling facts."""
+    rows = db.execute(
+        select(ExtractedFact).where(
+            ExtractedFact.document_id == document_id,
+            ExtractedFact.field_name == field_name,
+            ExtractedFact.id != exclude_fact_id,
+            ExtractedFact.verification_status == FactVerificationStatus.VERIFIED.value,
+        )
+    ).scalars()
+    units: set[str] = set()
+    for row in rows:
+        token = row.normalized_value if field_name == FactField.UNIT.value else row.unit
+        if token is not None:
+            units.add(token)
+    return units
+
+
+def _validate_ocr_confirmation(
+    db: Session,
+    *,
+    document: Document,
+    fact: ExtractedFact,
+    decision: VerificationDecision,
+    doctor_user_id: str,
+    corrected_value: str | None,
+    corrected_unit: str | None,
+    source_image_compared: bool,
+    confirmed_value: str | None,
+    confirmed_unit: str | None,
+) -> tuple[str | None, str | None]:
+    """Enforce Stage 1 source-comparison rules on OCR measurement/unit facts.
+
+    Returns ``(normalized_confirmed_value, effective_confirmed_unit)`` to
+    persist on ``FactVerification``. Non-OCR facts and rejections return
+    ``(None, None)``.
+    """
+    if (
+        decision is VerificationDecision.REJECTED
+        or fact.extractor != ExtractionPath.TESSERACT.value
+        or fact.field_name not in {FactField.VALUE.value, FactField.UNIT.value}
+    ):
+        return None, None
+
+    if fact.field_name == FactField.VALUE.value and decision is VerificationDecision.VERIFIED:
+        if fact.normalized_value is None:
+            flags = set(quality.decode_flags(fact.quality_flags))
+            if QualityFlag.UNPARSEABLE_VALUE.value in flags:
+                raise ApiError(
+                    400,
+                    ErrorCode.VALIDATION,
+                    "An unparseable OCR measurement cannot be verified as-is; "
+                    "submit decision='corrected' or decision='rejected'.",
+                )
+            # Preserves R17 PAGE_MISSING behavior: returns 200 while
+            # _unread_measurement_blocks_verification keeps document needs_verification.
+            return None, None
+
+        if not _doctor_accessed_source_file(
+            db, document_id=document.id, doctor_user_id=doctor_user_id
+        ):
+            raise ApiError(
+                400,
+                ErrorCode.VALIDATION,
+                "Inspect the source document via GET /file before confirming an OCR measurement.",
+            )
+        if not source_image_compared:
+            raise ApiError(
+                400,
+                ErrorCode.VALIDATION,
+                "OCR measurement verification requires source_image_compared=true.",
+            )
+        norm_confirmed_val = (
+            normalize_corrected_value(FactField.VALUE.value, confirmed_value)
+            if confirmed_value is not None
+            else None
+        )
+        if norm_confirmed_val is None or not _numeric_equal(
+            norm_confirmed_val, fact.normalized_value
+        ):
+            raise ApiError(
+                400,
+                ErrorCode.VALIDATION,
+                "confirmed_value must match the extracted OCR measurement numerically.",
+            )
+        if fact.unit is None:
+            raise ApiError(
+                400,
+                ErrorCode.VALIDATION,
+                "Cannot verify an OCR measurement with a missing or unrecognized unit; "
+                "submit decision='corrected' with corrected_unit or decision='rejected'.",
+            )
+        norm_confirmed_unit = (
+            normalize_corrected_value(FactField.UNIT.value, confirmed_unit)
+            if confirmed_unit is not None
+            else None
+        )
+        if norm_confirmed_unit is None or norm_confirmed_unit != fact.unit:
+            raise ApiError(
+                400,
+                ErrorCode.VALIDATION,
+                "confirmed_unit must match a recognized unit equal to the extracted unit.",
+            )
+        verified_unit_siblings = _active_verified_sibling_units(
+            db,
+            document_id=document.id,
+            field_name=FactField.UNIT.value,
+            exclude_fact_id=fact.id,
+        )
+        if verified_unit_siblings and norm_confirmed_unit not in verified_unit_siblings:
+            raise ApiError(
+                400,
+                ErrorCode.VALIDATION,
+                "confirmed_unit conflicts with a verified unit fact on this document.",
+            )
+        return norm_confirmed_val, norm_confirmed_unit
+
+    if fact.field_name == FactField.UNIT.value and decision is VerificationDecision.VERIFIED:
+        if not _doctor_accessed_source_file(
+            db, document_id=document.id, doctor_user_id=doctor_user_id
+        ):
+            raise ApiError(
+                400,
+                ErrorCode.VALIDATION,
+                "Inspect the source document via GET /file before confirming an OCR unit.",
+            )
+        if not source_image_compared:
+            raise ApiError(
+                400,
+                ErrorCode.VALIDATION,
+                "OCR unit verification requires source_image_compared=true.",
+            )
+        norm_confirmed_unit = (
+            normalize_corrected_value(FactField.UNIT.value, confirmed_unit)
+            if confirmed_unit is not None
+            else None
+        )
+        if (
+            norm_confirmed_unit is None
+            or fact.normalized_value is None
+            or norm_confirmed_unit != fact.normalized_value
+        ):
+            raise ApiError(
+                400,
+                ErrorCode.VALIDATION,
+                "confirmed_unit must match a recognized unit equal to the extracted unit.",
+            )
+        verified_value_siblings = _active_verified_sibling_units(
+            db,
+            document_id=document.id,
+            field_name=FactField.VALUE.value,
+            exclude_fact_id=fact.id,
+        )
+        if verified_value_siblings and norm_confirmed_unit not in verified_value_siblings:
+            raise ApiError(
+                400,
+                ErrorCode.VALIDATION,
+                "confirmed_unit conflicts with a verified measurement unit on this document.",
+            )
+        return None, norm_confirmed_unit
+
+    # decision is CORRECTED for OCR value or OCR unit
+    if not _doctor_accessed_source_file(db, document_id=document.id, doctor_user_id=doctor_user_id):
+        raise ApiError(
+            400,
+            ErrorCode.VALIDATION,
+            "Inspect the source document via GET /file before correcting an OCR reading.",
+        )
+    if not source_image_compared:
+        raise ApiError(
+            400,
+            ErrorCode.VALIDATION,
+            "OCR correction requires source_image_compared=true.",
+        )
+
+    if fact.field_name == FactField.VALUE.value:
+        if confirmed_value is not None:
+            norm_confirmed_val = normalize_corrected_value(FactField.VALUE.value, confirmed_value)
+            if (
+                norm_confirmed_val is None
+                or corrected_value is None
+                or not _numeric_equal(norm_confirmed_val, corrected_value)
+            ):
+                raise ApiError(
+                    400,
+                    ErrorCode.VALIDATION,
+                    "confirmed_value must match corrected_value numerically.",
+                )
+        if corrected_unit is not None:
+            if confirmed_unit is not None:
+                norm_conf_u = normalize_corrected_value(FactField.UNIT.value, confirmed_unit)
+                if norm_conf_u != corrected_unit:
+                    raise ApiError(
+                        400,
+                        ErrorCode.VALIDATION,
+                        "confirmed_unit must match corrected_unit when both are supplied.",
+                    )
+            effective_unit = corrected_unit
+        else:
+            norm_conf_u = (
+                normalize_corrected_value(FactField.UNIT.value, confirmed_unit)
+                if confirmed_unit is not None
+                else None
+            )
+            if norm_conf_u is None or fact.unit is None or norm_conf_u != fact.unit:
+                raise ApiError(
+                    400,
+                    ErrorCode.VALIDATION,
+                    "OCR value correction requires confirmed_unit matching the extracted "
+                    "unit or an explicit corrected_unit.",
+                )
+            effective_unit = fact.unit
+
+        verified_unit_siblings = _active_verified_sibling_units(
+            db,
+            document_id=document.id,
+            field_name=FactField.UNIT.value,
+            exclude_fact_id=fact.id,
+        )
+        if verified_unit_siblings and effective_unit not in verified_unit_siblings:
+            raise ApiError(
+                400,
+                ErrorCode.VALIDATION,
+                "The confirmed or corrected unit conflicts with a verified unit fact on this document.",
+            )
+        return None, effective_unit
+
+    # fact.field_name == FactField.UNIT.value and decision is CORRECTED
+    if confirmed_unit is not None:
+        norm_conf_u = normalize_corrected_value(FactField.UNIT.value, confirmed_unit)
+        if norm_conf_u != corrected_value:
+            raise ApiError(
+                400,
+                ErrorCode.VALIDATION,
+                "confirmed_unit must match the corrected unit when both are supplied.",
+            )
+    verified_value_siblings = _active_verified_sibling_units(
+        db,
+        document_id=document.id,
+        field_name=FactField.VALUE.value,
+        exclude_fact_id=fact.id,
+    )
+    if (
+        verified_value_siblings
+        and corrected_value is not None
+        and corrected_value not in verified_value_siblings
+    ):
+        raise ApiError(
+            400,
+            ErrorCode.VALIDATION,
+            "The corrected unit conflicts with a verified measurement unit on this document.",
+        )
+    return None, corrected_value
+
+
 def record_decision(
     db: Session,
     *,
@@ -449,6 +773,9 @@ def record_decision(
     corrected_unit: str | None = None,
     reason: str | None = None,
     conflict_tolerance: float | None = None,
+    source_image_compared: bool = False,
+    confirmed_value: str | None = None,
+    confirmed_unit: str | None = None,
 ) -> VerificationOutcome:
     """Record one doctor decision and, if warranted, the derived observation.
 
@@ -500,6 +827,19 @@ def record_decision(
             raise ApiError(400, ErrorCode.VALIDATION, _INADMISSIBLE_CORRECTION)
         corrected_value = normalized
 
+    stored_confirmed_value, stored_confirmed_unit = _validate_ocr_confirmation(
+        db,
+        document=document,
+        fact=fact,
+        decision=decision,
+        doctor_user_id=doctor_user_id,
+        corrected_value=corrected_value,
+        corrected_unit=corrected_unit,
+        source_image_compared=source_image_compared,
+        confirmed_value=confirmed_value,
+        confirmed_unit=confirmed_unit,
+    )
+
     decided_at = format_utc(utc_now())
     previous_value = fact.normalized_value
 
@@ -512,6 +852,9 @@ def record_decision(
         reason=reason,
         verified_by_user_id=doctor_user_id,
         decided_at=decided_at,
+        source_image_compared=1 if source_image_compared else 0,
+        confirmed_value=stored_confirmed_value,
+        confirmed_unit=stored_confirmed_unit,
     )
     db.add(verification)
 

@@ -65,6 +65,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     text,
 )
@@ -646,6 +647,46 @@ class ExtractedFact(Base):
         return f"ExtractedFact(field={self.field_name!r}, status={self.verification_status!r})"
 
 
+class DocumentPageText(Base):
+    """Durable per-page extracted/OCR text for provenance & doctor comparison.
+
+    Stores the bounded page string actually parsed into ``extracted_fact`` rows
+    so ``char_start:char_end`` spans remain auditable against persisted text.
+    OCR output here is engine output (untrusted data), never original source truth.
+    """
+
+    __tablename__ = "document_page_text"
+    __table_args__ = (
+        CheckConstraint("page_index >= 0", name="page_index_non_negative"),
+        CheckConstraint(
+            f"extractor IN ('{ExtractionPath.PYPDF.value}', '{ExtractionPath.TESSERACT.value}')",
+            name="extractor_allowed",
+        ),
+        CheckConstraint("text_length >= 0 AND text_length <= 20000", name="text_length_bounded"),
+        CheckConstraint("length(text) <= 20000", name="text_bounded"),
+        CheckConstraint("non_whitespace_chars >= 0", name="non_whitespace_non_negative"),
+        CheckConstraint("length(text_sha256) = 64", name="sha256_hex_length"),
+        Index("ux_page_text_doc_page", "document_id", "page_index", unique=True),
+        Index("ix_page_text_document", "document_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    document_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("document.id", ondelete="CASCADE"), nullable=False
+    )
+    page_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    extractor: Mapped[str] = mapped_column(String(16), nullable=False)
+    tool_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    text_length: Mapped[int] = mapped_column(Integer, nullable=False)
+    non_whitespace_chars: Mapped[int] = mapped_column(Integer, nullable=False)
+    text_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging helper
+        return f"DocumentPageText(doc={self.document_id!r}, page={self.page_index!r})"
+
+
 class FactVerification(Base):
     """Append-only human decision log (``DATA_DICTIONARY.md`` §2.7).
 
@@ -658,6 +699,7 @@ class FactVerification(Base):
     __tablename__ = "fact_verification"
     __table_args__ = (
         CheckConstraint(f"decision IN ({_in_list(VerificationDecision)})", name="decision_allowed"),
+        CheckConstraint("source_image_compared IN (0, 1)", name="source_compared_bool"),
         Index("ix_factver_fact", "fact_id", "decided_at"),
     )
 
@@ -674,6 +716,13 @@ class FactVerification(Base):
         String(36), ForeignKey("user.id", ondelete="RESTRICT"), nullable=False
     )
     decided_at: Mapped[str] = mapped_column(String(20), nullable=False)
+    #: Explicit attestation submitted by the deciding doctor; records attestation,
+    #: not independent proof of visual inspection.
+    source_image_compared: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    confirmed_value: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    confirmed_unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return f"FactVerification(decision={self.decision!r})"
@@ -733,6 +782,7 @@ __all__ = [
     "AuditEvent",
     "CheckinIdempotency",
     "Document",
+    "DocumentPageText",
     "Encounter",
     "ExtractedFact",
     "ExtractionAttempt",

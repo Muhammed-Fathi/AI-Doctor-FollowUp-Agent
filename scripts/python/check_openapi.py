@@ -55,13 +55,14 @@ P2_PATHS: dict[str, set[str]] = {
     "/api/v1/demo/reset": {"post"},
 }
 
-#: Phase 3 document allowlist: 5 paths / 5 operations. Every route is reachable
+#: Phase 3 document allowlist: 6 paths / 6 operations. Every route is reachable
 #: only through ``app.api.v1.documents``; the shapes are fixed by
 #: ``API_CONTRACT.md`` §2.4 and there is no P3 route outside this set.
 P3_PATHS: dict[str, set[str]] = {
     "/api/v1/documents/upload": {"post"},
     "/api/v1/documents/{document_id}": {"get"},
     "/api/v1/documents/{document_id}/extraction": {"get"},
+    "/api/v1/documents/{document_id}/text": {"get"},
     "/api/v1/documents/{document_id}/verify": {"post"},
     "/api/v1/documents/{document_id}/file": {"get"},
 }
@@ -118,6 +119,8 @@ EXPECTED_SCHEMAS: set[str] = {
     "ValidationState",
     # P3 — documents (``API_CONTRACT.md`` §3)
     "DocumentMeta",
+    "DocumentPageTextItem",
+    "DocumentTextResponse",
     "DocumentUploadResponse",
     "EvidenceRef",
     "ExtractedFact",

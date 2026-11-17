@@ -111,7 +111,8 @@ Login is rate-limited and constant-time-ish in failure messaging (details at P2)
 | POST | `/api/v1/documents/upload` | patient (self) | `multipart/form-data`: `file`, `declared_type?`, `recovery_of?` | `202 {document_id, status:"pending_extraction", sha256, page_count}` | `400 E_VALIDATION`, `413 E_FILE_TOO_LARGE`, `415 E_UNSUPPORTED_MEDIA`, `422 E_PAGE_LIMIT_EXCEEDED`, `409 E_DUPLICATE_DOCUMENT`, `404 E_NOT_FOUND` (`recovery_of` refusals) |
 | GET | `/api/v1/documents/{document_id}` | patient (self) / doctor (assigned) | – | `200 {document metadata, extraction_status}` | `403`, `404` |
 | GET | `/api/v1/documents/{document_id}/extraction` | doctor (assigned) | – | `200 {facts[], attempts[], verification_issues[], document_status}` | `403`, `404`, `409 E_EXTRACTION_PENDING` |
-| POST | `/api/v1/documents/{document_id}/verify` | doctor (assigned) | `{fact_id, decision:"verified"\|"rejected"\|"corrected", corrected_value?, corrected_unit?, reason?}` | `200 {fact, verification, document_status}` | `400 E_VALIDATION`, `403`, `404`, `409 E_FACT_ALREADY_DECIDED` |
+| GET | `/api/v1/documents/{document_id}/text` | doctor (assigned) | – | `200 {document_id, document_status, source_truth_notice, disclaimer, pages[]}` | `403`, `404`, `409 E_EXTRACTION_PENDING` |
+| POST | `/api/v1/documents/{document_id}/verify` | doctor (assigned) | `{fact_id, decision:"verified"\|"rejected"\|"corrected", corrected_value?, corrected_unit?, reason?, source_image_compared?, confirmed_value?, confirmed_unit?}` | `200 {fact, verification, document_status}` | `400 E_VALIDATION`, `403`, `404`, `409 E_FACT_ALREADY_DECIDED` |
 | GET | `/api/v1/documents/{document_id}/file` | doctor (assigned) / patient (self) | – | `200` binary | `403`, `404` |
 
 Patient responses intentionally exclude extracted values, review items, drafts, and tasks (`US-05`, `US-11`). The patient view shows status strings only.
@@ -130,6 +131,18 @@ Upload validation order (fixed): declared size → magic bytes → allowed MIME 
 **Recovery metadata on reads (R21 §4.9).** `GET /documents/{document_id}` (`DocumentMeta`) exposes three non-clinical fields to the owner and the assigned doctor: `failure_code` (nullable reason token), `recovery_eligible` (derived boolean — `failed` **and** a rejection code; false for every extraction failure and for a non-terminal document) and `recovered_from_document_id` (nullable). No clinical value, fact text, span, unit, `quality_flags` or `confidence` is added to the patient view. `GET /documents/{document_id}/extraction` (`ExtractionResponse`, doctor-only) carries `failure_code` and `recovered_from_document_id`; it does not carry `recovery_eligible`, so the patient-facing affordance has exactly one source.
 
 **Terminal rejection codes (R21 §4.1).** `measurement_rejected` (an active rejected `value` fact) and `fact_rejected` (an active rejected non-measurement fact) join the existing `all_facts_rejected`. Any active rejected fact makes the document terminally `failed` regardless of decision order, and no Observation may be promoted unless the document is `verified`.
+
+**Stage 1 OCR source confirmation & persisted page text (IMP-01 / IMP-02 / IMP-03).**
+
+* `GET /api/v1/documents/{document_id}/text` is assigned-doctor-only and returns the bounded extracted/OCR text stored in `document_page_text` (`pages[]`) together with `source_truth_notice` labelling OCR text as untrusted engine output rather than original source truth. Patients and unassigned doctors receive `403`.
+* `GET /api/v1/documents/{document_id}/file` appends a `document.file_read` audit event (`actor_id`, `subject_id=document_id`, zero document text) as defense-in-depth access evidence. Access records prove file retrieval only — never genuine human visual comprehension.
+* For OCR-origin measurement and unit facts (`extractor='tesseract'`, `field_name ∈ {'value', 'unit'}`), both `decision='verified'` and `decision='corrected'` enforce:
+  1. prior `document.file_read` audit event for the deciding doctor on that document;
+  2. `source_image_compared=true` (explicit attestation — recorded as an attestation, never claimed to guarantee human inspection);
+  3. for `verified` `value` (when numeric): exact `Decimal` match on `confirmed_value` plus exact closed-allowlist match on `confirmed_unit` (refusing missing/unrecognized units or `unparseable_value` tokens);
+  4. for `verified` `unit`: exact closed-allowlist match on `confirmed_unit`;
+  5. for `corrected` `value`/`unit`: valid closed-unit confirmation (`corrected_unit` or matching `confirmed_unit`) and sibling consistency between active `value` and `unit` facts.
+* `decision='rejected'` requires no confirmation fields and stays immediately available for R21 rejection-first handling. Existing `pypdf` verification and correction semantics are unchanged.
 
 ### 2.5 Workflows
 
@@ -192,7 +205,8 @@ Full JSON Schemas live in `openapi.phase0.yaml`. Field-level meaning lives in `D
 | `User` | `id, username, display_name, role, patient_id?, timezone` |
 | `Observation` | `id, patient_id, measure_type, value, unit, measured_at, source, validation, trust_level, verification (nullable object: `verified_by`, `verified_at`)` |
 | `DocumentMeta` | `id, patient_id, filename, mime_type, sha256, size_bytes, page_count, extraction_status, uploaded_at` |
-| `ExtractedFact` | `fact_id, document_id, field_name, raw_text, normalized_value, unit, page_index, char_start, char_end, quality_flags, confidence, verification_status, evidence` |
+| `DocumentTextResponse` | `document_id, document_status, source_truth_notice, disclaimer, pages[]` (`DocumentPageTextItem`: `page_index, extractor, tool_version, text, text_length, non_whitespace_chars, text_sha256, created_at`) |
+| `ExtractedFact` | `fact_id, document_id, field_name, raw_text, normalized_value, unit, page_index, char_start, char_end, quality_flags, confidence, verification_status, requires_source_confirmation, evidence` |
 | `VerificationIssue` | `issue_id, issue_type (VI-001…VI-006), reason_code, blocking:true, message, document_id, fact_ids[], evidence[]` — never has a `rule_id` |
 | `ReviewItem` | `review_item_id, rule_id (DR-001/003/005/006/008/009), reason_code, workflow_hint, message, trust_basis, evidence[], policy_version, demo_only:true, state` |
 | `DraftSummary` | `draft_id, provider, model, execution_status, prompt_version, latency_ms, body, claims[], uncertainties[], not_asserted[], disclaimer` |

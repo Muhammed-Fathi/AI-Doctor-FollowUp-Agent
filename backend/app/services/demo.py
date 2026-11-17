@@ -13,8 +13,9 @@ of silently inventing a table. The guard is wired now so P5 only has to replace
 one function body, and the limitation is reported rather than glossed over.
 
 What a reset removes: synthetic accounts, patients, encounters, observations,
-sessions and check-in replay records. What it keeps: the audit trail (the
-evidence of what the demo did) and every file on disk. It never deletes a
+sessions, check-in replay records, and synthetic document/extraction/page-text/
+verification rows (when P3 tables are migrated). What it keeps: the audit trail
+(the evidence of what the demo did) and every file on disk. It never deletes a
 database file, an upload, a log or an unrelated path.
 """
 

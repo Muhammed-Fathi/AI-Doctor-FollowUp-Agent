@@ -36,6 +36,7 @@ class PageText:
     text: str
     extractor: ExtractionPath
     confidence: float | None = None
+    tool_version: str | None = None
 
     @property
     def char_count(self) -> int:

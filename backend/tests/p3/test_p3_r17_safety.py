@@ -413,9 +413,12 @@ def test_r17_measurement_correction_rejects_inadmissible_values(
 def test_r17_measurement_correction_accepts_a_valid_number(
     api, patient_headers, doctor_headers, fixtures, db: Session, monkeypatch
 ):
-    """Control: the validation must not block a legitimate correction."""
+    """Control: the validation must not block a legitimate source-reviewed correction."""
     _inject_ocr(monkeypatch, PARSEABLE_PRESERVED_TEXT)
     document_id = _upload_scan(api, patient_headers, fixtures)
+    assert (
+        api.get(f"/api/v1/documents/{document_id}/file", headers=doctor_headers).status_code == 200
+    )
     body = _extraction(api, doctor_headers, document_id)
     value = _facts_by_field(body)["value"][0]
 
@@ -426,6 +429,8 @@ def test_r17_measurement_correction_accepts_a_valid_number(
             "fact_id": value["fact_id"],
             "decision": "corrected",
             "corrected_value": "105",
+            "confirmed_unit": "mg/dL",
+            "source_image_compared": True,
             "reason": "checked source image",
         },
     )
@@ -441,6 +446,9 @@ def test_r17_correction_keeps_the_original_ocr_evidence(
     """P1: lineage must keep `raw_text='1O5'` beside the accepted `105`."""
     _inject_ocr(monkeypatch, PARSEABLE_PRESERVED_TEXT)
     document_id = _upload_scan(api, patient_headers, fixtures)
+    assert (
+        api.get(f"/api/v1/documents/{document_id}/file", headers=doctor_headers).status_code == 200
+    )
     body = _extraction(api, doctor_headers, document_id)
     original = _facts_by_field(body)["value"][0]
 
@@ -451,6 +459,8 @@ def test_r17_correction_keeps_the_original_ocr_evidence(
             "fact_id": original["fact_id"],
             "decision": "corrected",
             "corrected_value": "105",
+            "confirmed_unit": "mg/dL",
+            "source_image_compared": True,
             "reason": "checked source image",
         },
     )
@@ -492,6 +502,9 @@ def test_r17_valid_correction_resolves_vi_005(
     """P1: a corrected value must clear the unreadable-value blocker it fixed."""
     _inject_ocr(monkeypatch, PARSEABLE_PRESERVED_TEXT)
     document_id = _upload_scan(api, patient_headers, fixtures)
+    assert (
+        api.get(f"/api/v1/documents/{document_id}/file", headers=doctor_headers).status_code == 200
+    )
     body = _extraction(api, doctor_headers, document_id)
     assert IssueType.VI_005.value in _issue_types(body)
 
@@ -503,6 +516,8 @@ def test_r17_valid_correction_resolves_vi_005(
             "fact_id": value["fact_id"],
             "decision": "corrected",
             "corrected_value": "105",
+            "confirmed_unit": "mg/dL",
+            "source_image_compared": True,
             "reason": "checked source image",
         },
     )
@@ -601,9 +616,12 @@ def test_r17_correction_rejects_an_unsupported_unit(
 def test_r17_correction_accepts_a_supported_unit(
     api, patient_headers, doctor_headers, fixtures, db: Session, monkeypatch
 ):
-    """Control: an allowlisted unit is accepted."""
+    """Control: an allowlisted unit is accepted when source-reviewed."""
     _inject_ocr(monkeypatch, PARSEABLE_PRESERVED_TEXT)
     document_id = _upload_scan(api, patient_headers, fixtures)
+    assert (
+        api.get(f"/api/v1/documents/{document_id}/file", headers=doctor_headers).status_code == 200
+    )
     body = _extraction(api, doctor_headers, document_id)
     value = _facts_by_field(body)["value"][0]
 
@@ -615,6 +633,7 @@ def test_r17_correction_accepts_a_supported_unit(
             "decision": "corrected",
             "corrected_value": "105",
             "corrected_unit": "mg/dL",
+            "source_image_compared": True,
             "reason": "ocr check",
         },
     )

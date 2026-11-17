@@ -235,19 +235,37 @@ def _date_fact(page: PageText) -> list[CandidateFact]:
     return facts
 
 
+def _trimmed_bounded_span(
+    raw_segment: str, group_start: int, *, max_len: int = 300
+) -> tuple[str, int, int]:
+    """Return ``(trimmed_text, char_start, char_end)`` anchored to the same slice."""
+    stripped = raw_segment.strip()
+    if not stripped:
+        return "", group_start, group_start
+    leading = len(raw_segment) - len(raw_segment.lstrip())
+    bounded = stripped[:max_len]
+    start = group_start + leading
+    return bounded, start, start + len(bounded)
+
+
 def _test_value_facts(page: PageText) -> list[CandidateFact]:
     """Return the test-name, value and unit candidates for ``page``."""
     facts: list[CandidateFact] = []
 
     for match in _TEST_VALUE.finditer(page.text):
-        test_name = match.group("test").strip()
-        raw_value = match.group("value").strip()
+        test_raw = match.group("test")
+        value_raw = match.group("value")
+        test_name, test_start, test_end = _trimmed_bounded_span(test_raw, match.start("test"))
+        raw_value, val_group_start, _ = _trimmed_bounded_span(
+            value_raw, match.start("value"), max_len=len(value_raw)
+        )
         if not test_name or not raw_value:
             continue
 
         # Some layouts put the value and unit on a following line; the regex is
         # deliberately conservative and simply skips what it cannot attribute.
         value_token, unit = _split_value_and_unit(raw_value)
+        bounded_value = value_token[:300]
         normalized = _normalize_number(value_token)
 
         flags: list[QualityFlag] = []
@@ -265,8 +283,8 @@ def _test_value_facts(page: PageText) -> list[CandidateFact]:
                 normalized_value=test_name,
                 unit=None,
                 page_index=page.page_index,
-                char_start=match.start("test"),
-                char_end=match.end("test"),
+                char_start=test_start,
+                char_end=test_end,
                 quality_flags=(QualityFlag.CLEAN,),
                 confidence=page.confidence,
                 extractor=page.extractor,
@@ -275,12 +293,12 @@ def _test_value_facts(page: PageText) -> list[CandidateFact]:
         facts.append(
             CandidateFact(
                 field_name=FactField.VALUE,
-                raw_text=value_token,
+                raw_text=bounded_value,
                 normalized_value=normalized,
                 unit=unit.value if unit is not None else None,
                 page_index=page.page_index,
-                char_start=match.start("value"),
-                char_end=match.start("value") + len(value_token),
+                char_start=val_group_start,
+                char_end=val_group_start + len(bounded_value),
                 quality_flags=tuple(flags),
                 confidence=page.confidence,
                 extractor=page.extractor,
@@ -296,8 +314,8 @@ def _test_value_facts(page: PageText) -> list[CandidateFact]:
                         normalized_value=unit.value,
                         unit=unit.value,
                         page_index=page.page_index,
-                        char_start=match.start("value") + unit_offset,
-                        char_end=match.start("value") + unit_offset + len(unit.value),
+                        char_start=val_group_start + unit_offset,
+                        char_end=val_group_start + unit_offset + len(unit.value),
                         quality_flags=(QualityFlag.CLEAN,),
                         confidence=page.confidence,
                         extractor=page.extractor,
@@ -312,7 +330,9 @@ def _reference_fact(page: PageText) -> list[CandidateFact]:
     match = _REFERENCE.search(page.text)
     if match is None:
         return []
-    reference = match.group("reference").strip()
+    reference, ref_start, ref_end = _trimmed_bounded_span(
+        match.group("reference"), match.start("reference")
+    )
     if not reference:
         return []
     return [
@@ -322,8 +342,8 @@ def _reference_fact(page: PageText) -> list[CandidateFact]:
             normalized_value=reference,
             unit=None,
             page_index=page.page_index,
-            char_start=match.start("reference"),
-            char_end=match.end("reference"),
+            char_start=ref_start,
+            char_end=ref_end,
             quality_flags=(QualityFlag.CLEAN,),
             confidence=page.confidence,
             extractor=page.extractor,
@@ -533,12 +553,16 @@ def page_text_for_span(pages: list[PageText], page_index: int) -> str:
 
 
 def span_is_resolvable(pages: list[PageText], fact: CandidateFact) -> bool:
-    """Return ``True`` when ``fact``'s span lies inside its page's stored text."""
+    """Return ``True`` when ``fact``'s span matches the exact page substring."""
     try:
         text = page_text_for_span(pages, fact.page_index)
     except KeyError:
         return False
-    return 0 <= fact.char_start < fact.char_end <= len(text)
+    bounded_raw = fact.raw_text[:300]
+    return (
+        0 <= fact.char_start < fact.char_end <= len(text)
+        and text[fact.char_start : fact.char_end] == bounded_raw
+    )
 
 
 __all__ = [

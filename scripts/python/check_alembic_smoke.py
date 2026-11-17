@@ -13,16 +13,20 @@ Usage::
 ``--state`` (default ``head``):
 
 ``head``
-    revision ``0004_p3_rejection_recovery``; tables = P1 + the seven P2 tables +
-    the five P3 tables; ``user.patient_id`` foreign key present;
-    ``observation.source_fact_id`` + ``ux_obs_source_fact`` present; the
-    ``trg_fact_verification_doctor_only`` trigger present;
-    ``document.recovered_from_document_id`` + ``ix_document_recovered_from`` +
-    the ``ON DELETE RESTRICT`` self-FK present; ``PRAGMA foreign_key_check``
-    empty.
+    revision ``0005_p3_ocr_provenance``; tables = P1 + the seven P2 tables +
+    the six Stage 1 P3 tables (including ``document_page_text``);
+    ``user.patient_id`` foreign key present; ``observation.source_fact_id`` +
+    ``ux_obs_source_fact`` present; the ``trg_fact_verification_doctor_only``
+    trigger present; ``document.recovered_from_document_id`` +
+    ``ix_document_recovered_from`` + the ``ON DELETE RESTRICT`` self-FK present;
+    ``fact_verification`` Stage 1 confirmation columns present;
+    ``document_page_text`` indexes present; ``PRAGMA foreign_key_check`` empty.
+``p3_recovery``
+    revision ``0004_p3_rejection_recovery``; everything ``head`` asserts **except**
+    the Stage 1 ``0005`` provenance table/columns, which must be **absent**.
 ``p3``
-    revision ``0003_p3_documents``; everything ``head`` asserts **except** the
-    three recovery objects, which must be **absent**. This is what
+    revision ``0003_p3_documents``; everything ``p3_recovery`` asserts **except**
+    the three recovery objects, which must be **absent**. This is what
     ``0004 -> 0003`` must leave behind, and the only way to prove the recovery
     revision is additive and cleanly reversible.
 ``p2``
@@ -62,9 +66,19 @@ DOCTOR_TRIGGER_NAME = "trg_fact_verification_doctor_only"
 #: Recovery objects owned by ``0004`` (``DATA_DICTIONARY.md`` §2.4, R21 §4.10).
 RECOVERY_COLUMN = "recovered_from_document_id"
 RECOVERY_INDEX = "ix_document_recovered_from"
-HEAD_REVISION = "0004_p3_rejection_recovery"
+HEAD_REVISION = "0005_p3_ocr_provenance"
+P4_REVISION = "0004_p3_rejection_recovery"
 P3_REVISION = "0003_p3_documents"
 P2_REVISION = "0002_p2_patient_domain"
+
+#: Stage 1 provenance objects owned by ``0005``.
+PAGE_TEXT_TABLE = "document_page_text"
+PAGE_TEXT_INDEXES = {"ux_page_text_doc_page", "ix_page_text_document"}
+FACT_VERIFICATION_STAGE1_COLUMNS = {
+    "source_image_compared",
+    "confirmed_value",
+    "confirmed_unit",
+}
 
 P1_TABLES = {"schema_meta", "alembic_version"}
 
@@ -99,7 +113,7 @@ P4_PLUS_TABLES = {
     "evidence_link",
 }
 
-VALID_STATES = {"head", "p3", "p2", "p1", "base"}
+VALID_STATES = {"head", "p3_recovery", "p3", "p2", "p1", "base"}
 
 
 def _parse_args(argv: list[str]) -> tuple[Path, str] | None:
@@ -120,8 +134,8 @@ def _parse_args(argv: list[str]) -> tuple[Path, str] | None:
 
 def _expected_tables(state: str) -> set[str]:
     if state == "head":
-        return P1_TABLES | P2_TABLES | P3_TABLES
-    if state == "p3":
+        return P1_TABLES | P2_TABLES | P3_TABLES | {PAGE_TEXT_TABLE}
+    if state in {"p3_recovery", "p3"}:
         return P1_TABLES | P2_TABLES | P3_TABLES
     if state == "p2":
         return P1_TABLES | P2_TABLES
@@ -133,6 +147,8 @@ def _expected_tables(state: str) -> set[str]:
 def _expected_revisions(state: str) -> list[str]:
     if state == "head":
         return [HEAD_REVISION]
+    if state == "p3_recovery":
+        return [P4_REVISION]
     if state == "p3":
         return [P3_REVISION]
     if state == "p2":
@@ -147,7 +163,8 @@ def main(argv: list[str]) -> int:
     parsed = _parse_args(argv)
     if parsed is None:
         print(
-            "usage: check_alembic_smoke.py <path-to-sqlite-db> [--state head|p3|p2|p1|base]",
+            "usage: check_alembic_smoke.py <path-to-sqlite-db> "
+            "[--state head|p3_recovery|p3|p2|p1|base]",
             file=sys.stderr,
         )
         return 1
@@ -214,6 +231,22 @@ def main(argv: list[str]) -> int:
             if "document" in tables
             else []
         )
+        fact_verification_columns = (
+            {row[1] for row in connection.execute("PRAGMA table_info('fact_verification')")}
+            if "fact_verification" in tables
+            else set()
+        )
+        page_text_indexes = (
+            {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index' "
+                    f"AND tbl_name='{PAGE_TEXT_TABLE}'"
+                )
+            }
+            if PAGE_TEXT_TABLE in tables
+            else set()
+        )
         foreign_key_violations = (
             connection.execute("PRAGMA foreign_key_check").fetchall() if tables else []
         )
@@ -236,7 +269,7 @@ def main(argv: list[str]) -> int:
     # At ``head``/``p3``: the deferred P2 column, its unique index and the
     # doctor-only trigger must all exist. A "later-phase" table check alone
     # would not catch a P3 revision that forgot one of them.
-    if state in {"head", "p3"}:
+    if state in {"head", "p3_recovery", "p3"}:
         if "source_fact_id" not in observation_columns:
             problems.append("observation.source_fact_id must exist after 0003")
         if "ux_obs_source_fact" not in observation_indexes:
@@ -245,16 +278,14 @@ def main(argv: list[str]) -> int:
             problems.append(f"migration 0003 must install the trigger {DOCTOR_TRIGGER_NAME}")
 
     # --- 0004 recovery self-reference (R21 §4.10) ---------------------------
-    # At ``head`` the column, its index and its RESTRICT self-FK must all exist.
-    # At ``p3`` the same three must be absent, so ``0004 -> 0003`` is proven to
-    # leave no residue — and, because the table is rebuilt in batch mode, that
-    # the rebuild did not add something extra either.
+    # At ``head`` and ``p3_recovery`` the column, its index and its RESTRICT
+    # self-FK must all exist. At ``p3`` the same three must be absent.
     recovery_fk = [
         row
         for row in document_foreign_keys
         if row[3] == RECOVERY_COLUMN and row[2] == "document" and row[6] == "RESTRICT"
     ]
-    if state == "head":
+    if state in {"head", "p3_recovery"}:
         if RECOVERY_COLUMN not in document_columns:
             problems.append(f"document.{RECOVERY_COLUMN} must exist after 0004")
         if RECOVERY_INDEX not in document_indexes:
@@ -270,6 +301,21 @@ def main(argv: list[str]) -> int:
             problems.append(f"index {RECOVERY_INDEX} must not exist below 0004")
         if recovery_fk:
             problems.append(f"the {RECOVERY_COLUMN} self-FK must not exist below 0004")
+
+    # --- 0005 Stage 1 OCR provenance ----------------------------------------
+    if state == "head":
+        missing_fv_cols = FACT_VERIFICATION_STAGE1_COLUMNS - fact_verification_columns
+        if missing_fv_cols:
+            problems.append(f"fact_verification missing Stage 1 columns: {sorted(missing_fv_cols)}")
+        missing_pt_idx = PAGE_TEXT_INDEXES - page_text_indexes
+        if missing_pt_idx:
+            problems.append(f"{PAGE_TEXT_TABLE} missing expected indexes: {sorted(missing_pt_idx)}")
+    if state in {"p3_recovery", "p3", "p2", "p1", "base"}:
+        leaked_fv_cols = FACT_VERIFICATION_STAGE1_COLUMNS & fact_verification_columns
+        if leaked_fv_cols:
+            problems.append(
+                f"fact_verification Stage 1 columns must not exist below 0005: {sorted(leaked_fv_cols)}"
+            )
 
     # At ``p2`` the exact P2 schema must be intact: the P3 column and trigger
     # must be gone, which is what ``0003 -> 0002`` has to leave behind.

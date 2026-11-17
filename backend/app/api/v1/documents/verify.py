@@ -122,6 +122,9 @@ def verify_fact(
         corrected_unit=payload.corrected_unit,
         reason=payload.reason,
         conflict_tolerance=settings.conflict_tolerance,
+        source_image_compared=payload.source_image_compared,
+        confirmed_value=payload.confirmed_value,
+        confirmed_unit=payload.confirmed_unit,
     )
 
     append_audit_event(
@@ -139,6 +142,7 @@ def verify_fact(
             ROUTE_VERIFY,
             f"decision={payload.decision.value}",
             f"document_status={outcome.document_status}",
+            f"source_image_compared={bool(outcome.verification.source_image_compared)}",
         ),
     )
 
@@ -153,6 +157,9 @@ def verify_fact(
             new_value=outcome.verification.new_value,
             new_unit=outcome.verification.new_unit,
             superseded_fact_id=outcome.superseded_fact_id,
+            source_image_compared=bool(outcome.verification.source_image_compared),
+            confirmed_value=outcome.verification.confirmed_value,
+            confirmed_unit=outcome.verification.confirmed_unit,
         ),
         document_status=outcome.document_status,
     )

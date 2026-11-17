@@ -172,6 +172,23 @@ document text to decide a path (`P0-R08`).
 Indexes: `ix_fact_document (document_id)`; `ix_fact_status (patient_id, verification_status)`;
 CHECK `raw_text <> ''`; CHECK `char_start >= 0`.
 
+### 2.6a `document_page_text` (Stage 1 durable per-page transcription)
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | TEXT(36) | PK | |
+| `document_id` | TEXT(36) | NOT NULL, FK `document.id` ON DELETE CASCADE | |
+| `page_index` | INTEGER | NOT NULL, CHECK `page_index >= 0` | Unique with `document_id` (`ux_page_text_doc_page`) |
+| `extractor` | TEXT(16) | NOT NULL, CHECK in (`pypdf`,`tesseract`) | Engine output only, never `'manual'` |
+| `tool_version` | TEXT(64) | NULL | Version from winning `extraction_attempt` |
+| `text` | TEXT | NOT NULL, CHECK `length(text) <= 20000` | Bounded before span parsing; untrusted engine data, never source truth |
+| `text_length` | INTEGER | NOT NULL, CHECK `0 <= text_length <= 20000` | Character count of persisted `text` |
+| `non_whitespace_chars` | INTEGER | NOT NULL, CHECK `>= 0` | |
+| `text_sha256` | TEXT(64) | NOT NULL, CHECK `length(text_sha256) = 64` | SHA-256 of UTF-8 `text` |
+| `created_at` | TEXT(20) | NOT NULL | |
+
+Indexes: `ux_page_text_doc_page (document_id, page_index)` UNIQUE; `ix_page_text_document (document_id)`.
+
 ### 2.7 `fact_verification` (append-only human decision log)
 
 | Column | Type | Constraints | Notes |
@@ -183,10 +200,13 @@ CHECK `raw_text <> ''`; CHECK `char_start >= 0`.
 | `new_value` | TEXT(120) | NULL | |
 | `new_unit` | TEXT(32) | NULL | |
 | `reason` | TEXT(300) | NULL | |
-| `verified_by_user_id` | TEXT(36) | NOT NULL, FK `user.id` | Must be `role='doctor'` (service + CHECK trigger) |
+| `verified_by_user_id` | TEXT(36) | NOT NULL, FK `user.id` | Must be `role='doctor'` (service + `trg_fact_verification_doctor_only` trigger) |
 | `decided_at` | TEXT(20) | NOT NULL | |
+| `source_image_compared` | INTEGER | NOT NULL DEFAULT 0, CHECK in (`0`,`1`) | Stage 1 attestation flag; records attestation, not proof of visual review |
+| `confirmed_value` | TEXT(120) | NULL | Stage 1 numeric confirmation on `verified` OCR values |
+| `confirmed_unit` | TEXT(32) | NULL | Stage 1 closed-allowlist unit confirmation on OCR value/unit |
 
-Index: `ix_factver_fact (fact_id, decided_at DESC)`. No UPDATE/DELETE path — append only.
+Index: `ix_factver_fact (fact_id, decided_at DESC)`. No UPDATE/DELETE path — append only. `0005_p3_ocr_provenance` adds the Stage 1 columns with plain `ALTER TABLE` so `trg_fact_verification_doctor_only` is preserved across both upgrade and downgrade.
 
 ### 2.8 `observation`
 
@@ -539,9 +559,16 @@ Per-fixture expectation (`MAP-01`):
 
 - No real identifiers, no contact details, no national IDs, no addresses. Names are obviously fictional (`Demo Patient A — Sara`).
 - The `external_ref` is a synthetic demo reference and must be prefixed `DEMO-`.
-- Logs contain IDs and codes, never document text or free-form patient notes.
+- Logs and audit `safe_detail` contain IDs, route names, outcomes, and status codes only — never OCR text, document contents, or sensitive measurement values (`document.file_read`, `document.text_read`, `fact.verified`).
 - Every runtime artifact is disposable; backup/restore is out of scope for the MVP.
+
+### 5.1 Synthetic Document-Lifecycle Retention Policy (`IMP-04` — Educational / Synthetic Data Only)
+
+> **Scope notice:** This repository holds **educational/synthetic demo fixtures only**. Nothing below constitutes or replaces a clinical, legal, HIPAA/GDPR, or production healthcare records retention policy.
+
+- **Synthetic database provenance (`document`, `document_page_text`, `extraction_attempt`, `extracted_fact`, `verification_issue`, `fact_verification`):** retained across verification, correction, and `failed` recovery states for local provenance inspection so `GET /file`, `GET /text`, and append-only `fact_verification` history remain auditable after decisions; wiped cleanly in FK-safe order by `POST /api/v1/demo/reset` (`DEMO_MODE=true`) while preserving `audit_event`.
+- **Synthetic runtime files (`data/runtime/uploads/*`, logs, `data/runtime/*.db`):** `POST /api/v1/demo/reset` intentionally never deletes files on disk (`demo.py`); operators dispose of these gitignored local artifacts manually between test runs; `0004` and `0005` migrations refuse destructive downgrades whenever recovery lineage or OCR provenance rows exist unless an operator explicitly clears or archives them first.
 
 ## 6. Not defined here
 
-Physical index tuning, query plans, partitioning, retention jobs, encryption at rest, multitenancy, and audit export formats — all post-MVP or P7 hardening decisions.
+Physical index tuning, query plans, partitioning, automated retention cron jobs, encryption at rest, multitenancy, and audit export formats — all post-MVP or P7 hardening decisions.

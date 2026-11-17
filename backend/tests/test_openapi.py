@@ -31,12 +31,13 @@ P2_PATHS = {
     "/api/v1/demo/reset",
 }
 
-#: Phase 3 document allowlist: 5 paths / 5 operations. Fixed by
+#: Phase 3 document allowlist: 6 paths / 6 operations. Fixed by
 #: ``API_CONTRACT.md`` §2.4; there is no P3 route outside this set.
 P3_PATHS = {
     "/api/v1/documents/upload",
     "/api/v1/documents/{document_id}",
     "/api/v1/documents/{document_id}/extraction",
+    "/api/v1/documents/{document_id}/text",
     "/api/v1/documents/{document_id}/verify",
     "/api/v1/documents/{document_id}/file",
 }
@@ -61,6 +62,7 @@ EXPECTED_METHODS = {
     "/api/v1/documents/upload": {"post"},
     "/api/v1/documents/{document_id}": {"get"},
     "/api/v1/documents/{document_id}/extraction": {"get"},
+    "/api/v1/documents/{document_id}/text": {"get"},
     "/api/v1/documents/{document_id}/verify": {"post"},
     "/api/v1/documents/{document_id}/file": {"get"},
 }
@@ -197,6 +199,8 @@ def test_p3_document_schemas_are_exactly_the_contract_set() -> None:
 
     assert {
         "DocumentMeta",
+        "DocumentPageTextItem",
+        "DocumentTextResponse",
         "DocumentUploadResponse",
         "EvidenceRef",
         "ExtractedFact",

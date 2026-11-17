@@ -111,18 +111,19 @@ Every fact, review item, and draft claim stores evidence as `ProvenanceRef`:
 
 Rules:
 
-1. `char_end > char_start`; spans are bounded by the stored page text length.
-2. A draft claim with **zero** evidence references is invalid and must be dropped before persistence (`REQ-LLM-02`).
-3. Evidence references are immutable; a correction produces a new fact version rather than mutating an old span.
-4. The UI must be able to render the source page/snippet for any cited claim (read-only viewer), so the doctor can audit the extraction (`US-09`).
+1. `char_end > char_start`; spans are bounded by the stored page text length (`max_page_text_chars`, default 20,000), and `span_is_resolvable` requires exact substring equality `page_text[char_start:char_end] == raw_text[:300]` against the persisted `document_page_text` row.
+2. Persisted OCR text in `document_page_text` (and returned by doctor-only `GET /api/v1/documents/{document_id}/text`) is **untrusted engine output**, never original source truth; doctors must inspect original document bytes via `GET /file`.
+3. A draft claim with **zero** evidence references is invalid and must be dropped before persistence (`REQ-LLM-02`).
+4. Evidence references are immutable; a correction produces a new fact version rather than mutating an old span (`raw_text` and span remain immutable on both original and corrected rows).
+5. The UI must be able to render the source page/snippet for any cited claim (read-only viewer), so the doctor can audit the extraction (`US-09`).
 
 ## 6. Verification workflow (human)
 
 | Action | Effect |
 |---|---|
-| `verified` | Accept normalized value/unit as-is; the fact becomes admissible |
-| `corrected` | Store `previous_value`/`new_value`/`new_unit`, mark the original `rejected` and create a corrected fact marked `verified` |
-| `rejected` | Fact is never used; a review item is retained if it existed |
+| `verified` | Accept normalized value/unit as-is; the fact becomes admissible. For `extractor='tesseract'` `value`/`unit` facts (when numeric), requires prior doctor `GET /file` access (`document.file_read`), `source_image_compared=true`, and exact `confirmed_value` + closed `confirmed_unit` match |
+| `corrected` | Store `previous_value`/`new_value`/`new_unit`, mark the original `rejected` and create a corrected fact marked `verified`. For `extractor='tesseract'` `value`/`unit` facts, also requires prior doctor `GET /file` access, `source_image_compared=true`, and valid unit confirmation (`corrected_unit` or matching `confirmed_unit`) |
+| `rejected` | Fact is never used; requires no confirmation fields and triggers R21 rejection-first terminal `failed` status |
 
 Rules:
 

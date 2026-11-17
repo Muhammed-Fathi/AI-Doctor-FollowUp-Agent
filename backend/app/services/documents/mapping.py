@@ -187,6 +187,7 @@ def decide_mapping(
         for fact in verified
         if fact.field_name == FactField.UNIT.value and fact.normalized_value
     }
+    has_unit_fact = any(fact.field_name == FactField.UNIT.value for fact in facts)
     report_dates = [
         fact.normalized_value
         for fact in verified
@@ -230,7 +231,12 @@ def decide_mapping(
 
     measure_type, required_unit = entry
 
-    # The unit gates separately from the name.
+    # The unit gates separately from the name. When no separate ``unit`` fact
+    # was emitted at intake (e.g. a missing or malformed OCR unit later supplied
+    # explicitly via ``corrected_unit`` on the verified ``value`` fact), fall
+    # back to that verified value's validated unit.
+    if not has_unit_fact and not units and values[0].unit:
+        units = {values[0].unit}
     if len(units) != 1:
         return MappingDecision(
             mapped=None,
