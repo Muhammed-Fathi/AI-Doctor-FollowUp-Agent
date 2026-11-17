@@ -684,7 +684,7 @@ def _isolated_app(tmp: str) -> dict:
             "session_factory": lambda: Session(engine),
             "patient_token": patient_token,
             "doctor_token": doctor_token,
-            "image_bytes": fixtures.image_bytes(W1_SOURCE_NAME, fmt="PNG"),
+            "image_bytes": fixtures.build_legible_scan_image(W1_SOURCE_NAME, fmt="PNG"),
         }
     except Exception:
         engine.dispose()
@@ -928,6 +928,9 @@ class W1Evidence:
     redecision_code: str | None = None
     #: Decision rows on the fact after the refused attempt.
     decision_count_after_refusal: int = 0
+    #: Stage 2 persisted OCR text, exact span equality, extractor & audit safety check.
+    provenance_verified: bool | None = None
+    provenance_detail: dict = field(default_factory=dict)
 
 
 def _w1_open_vi002(issues) -> list[dict]:
@@ -993,14 +996,24 @@ def assess_w1(evidence: W1Evidence) -> list[Result]:
     candidate = evidence.candidate
     results: list[Result] = []
 
+    provenance_ok = evidence.provenance_verified is not False
+    prov_suffix = f" provenance_error={evidence.provenance_detail}" if not provenance_ok else ""
     results.append(
         Result(
             f"{gate}: OCR value fact",
-            PASS,
+            PASS if provenance_ok else FAIL,
             f"tesseract value={candidate.get('raw_text')!r} "
             f"unit={candidate.get('unit')!r} confidence={candidate.get('confidence')} "
-            f"attempts={list(evidence.attempts)}",
-            {"candidate": candidate, "attempts": list(evidence.attempts)},
+            f"attempts={list(evidence.attempts)}{prov_suffix}",
+            {
+                "candidate": candidate,
+                "attempts": list(evidence.attempts),
+                **(
+                    {"provenance": dict(evidence.provenance_detail)}
+                    if evidence.provenance_detail
+                    else {}
+                ),
+            },
         )
     )
 
@@ -1436,7 +1449,555 @@ def gate_r21_rejection(results: list[Result], objects: dict | None) -> None:
         settled = _w1_read(session_factory, models, document_id, candidate["fact_id"])
         evidence.decision_count_after_refusal = settled["snapshot"]["decision_count"]
 
+        prov_ok, prov_detail = _w1_check_provenance_and_audit(
+            session_factory,
+            models,
+            http=http,
+            doctor_headers=doctor_headers,
+            document_id=document_id,
+        )
+        evidence.provenance_verified = prov_ok
+        evidence.provenance_detail = prov_detail
+
         for row in assess_w1(evidence):
+            _record(results, row)
+
+
+def _w1_check_provenance_and_audit(
+    session_factory,
+    models,
+    *,
+    http=None,
+    doctor_headers: dict[str, str] | None = None,
+    document_id: str,
+) -> tuple[bool, dict]:
+    """Validate persisted OCR page text, exact span equality, extractor, & audit safety."""
+    import hashlib
+
+    from sqlalchemy import select
+
+    text_read_status: int | None = None
+    source_truth_notice_present = False
+    http_text_matches = True
+    if http is not None and doctor_headers is not None:
+        text_resp = http.get(f"/api/v1/documents/{document_id}/text", headers=doctor_headers)
+        text_read_status = text_resp.status_code
+        if text_read_status == 200:
+            payload = text_resp.json()
+            source_truth_notice_present = bool(payload.get("source_truth_notice"))
+            http_pages = payload.get("pages") or []
+        else:
+            http_pages = []
+    else:
+        http_pages = None
+
+    with session_factory() as session:
+        page_rows = list(
+            session.execute(
+                select(models.DocumentPageText)
+                .where(models.DocumentPageText.document_id == document_id)
+                .order_by(models.DocumentPageText.page_index)
+            ).scalars()
+        )
+        fact_rows = list(
+            session.execute(
+                select(models.ExtractedFact).where(models.ExtractedFact.document_id == document_id)
+            ).scalars()
+        )
+        audit_rows = list(session.execute(select(models.AuditEvent)).scalars())
+
+    page_by_index = {row.page_index: row for row in page_rows}
+    hash_matches = bool(page_rows) and all(
+        row.text_length == len(row.text)
+        and row.text_sha256 == hashlib.sha256(row.text.encode("utf-8")).hexdigest()
+        for row in page_rows
+    )
+    page_extractor = page_rows[0].extractor if page_rows else None
+    fact_extractors = {row.extractor for row in fact_rows}
+
+    spans_match = bool(fact_rows) and all(
+        row.page_index in page_by_index
+        and 0 <= row.char_start < row.char_end <= len(page_by_index[row.page_index].text)
+        and page_by_index[row.page_index].text[row.char_start : row.char_end] == row.raw_text
+        for row in fact_rows
+    )
+
+    if http_pages is not None:
+        http_text_matches = (
+            text_read_status == 200
+            and source_truth_notice_present
+            and len(http_pages) == len(page_rows)
+            and all(
+                hp.get("text") == pr.text and hp.get("extractor") == "tesseract"
+                for hp, pr in zip(http_pages, page_rows, strict=True)
+            )
+        )
+
+    sensitive_tokens = ("104", "Fasting glucose", "Reference range", "mg/dL")
+    audit_safe = True
+    file_read_audits = 0
+    text_read_audits = 0
+    for audit in audit_rows:
+        detail = audit.safe_detail or ""
+        if any(tok in detail for tok in sensitive_tokens):
+            audit_safe = False
+        for pr in page_rows:
+            if pr.text and pr.text in detail:
+                audit_safe = False
+        if audit.event_type == "document.file_read" and audit.subject_id == document_id:
+            if audit.outcome == "ok":
+                file_read_audits += 1
+            else:
+                audit_safe = False
+        if audit.event_type == "document.text_read" and audit.subject_id == document_id:
+            if audit.outcome == "ok":
+                text_read_audits += 1
+            else:
+                audit_safe = False
+
+    ok = (
+        len(page_rows) >= 1
+        and page_extractor == "tesseract"
+        and fact_extractors == {"tesseract"}
+        and hash_matches
+        and spans_match
+        and http_text_matches
+        and audit_safe
+    )
+    return ok, {
+        "page_text_count": len(page_rows),
+        "page_text_extractor": page_extractor,
+        "fact_extractors": sorted(fact_extractors),
+        "page_text_hash_matches": hash_matches,
+        "spans_match_exactly": spans_match,
+        "text_read_status": text_read_status,
+        "source_truth_notice_present": source_truth_notice_present,
+        "http_text_matches": http_text_matches,
+        "file_read_audit_count": file_read_audits,
+        "text_read_audit_count": text_read_audits,
+        "audit_events_safe": audit_safe,
+    }
+
+
+#: Requirements reported individually by the W1 positive source-confirmation gate.
+W1_POSITIVE_CASES = (
+    "OCR mappable candidate",
+    "bare verify refused",
+    "source retrieved and audited",
+    "source-confirmed verification",
+    "verified Observation created",
+    "persisted provenance and audit safety",
+)
+
+
+@dataclass
+class W1PositiveEvidence:
+    """Measured evidence for the W1 positive source-confirmation control."""
+
+    candidate: dict | None = None
+    candidate_absence: str = ""
+    non_value_fact_count: int = 0
+    extracted_fields: tuple[str, ...] = ()
+    extracted_facts: tuple[dict, ...] = ()
+    verification_issues: tuple[dict, ...] = ()
+    mapping_eligible: bool = True
+    mapping_reason: str = ""
+    attempts: tuple[dict, ...] = ()
+    bare_verify_status: int | None = None
+    bare_verify_code: str | None = None
+    file_read_status: int | None = None
+    file_read_audit_count: int = 0
+    text_read_status: int | None = None
+    text_read_audit_count: int = 0
+    document_status: str | None = None
+    value_verification_status: str | None = None
+    value_source_image_compared: bool = False
+    value_confirmed_value: str | None = None
+    value_confirmed_unit: str | None = None
+    promoted_observations: tuple[dict, ...] = ()
+    page_text_count: int = 0
+    page_text_extractor: str | None = None
+    page_text_hash_matches: bool = False
+    spans_match_exactly: bool = False
+    source_truth_notice_present: bool = False
+    audit_events_safe: bool = False
+
+
+def assess_w1_positive(evidence: W1PositiveEvidence) -> list[Result]:
+    """Turn measured W1 positive source-confirmation evidence into per-case verdicts."""
+    gate = "W1 source confirmation"
+
+    def rows(status: str, detail: str, data: dict | None = None) -> list[Result]:
+        return [
+            Result(f"{gate}: {name}", status, detail, dict(data or {}))
+            for name in W1_POSITIVE_CASES
+        ]
+
+    extracted_summary = {
+        "extracted_fields": list(evidence.extracted_fields),
+        "extracted_facts": list(evidence.extracted_facts),
+        "verification_issues": list(evidence.verification_issues),
+        "attempts": list(evidence.attempts),
+        **({"mapping_reason": evidence.mapping_reason} if evidence.mapping_reason else {}),
+    }
+
+    if evidence.candidate is None:
+        return rows(
+            NOT_RUN,
+            evidence.candidate_absence or "no usable OCR value fact",
+            extracted_summary,
+        )
+
+    if evidence.non_value_fact_count == 0:
+        return rows(
+            NOT_RUN,
+            "the engine produced only a `value` fact; full source-confirmation "
+            "promotion requires parsed sibling report fields",
+            extracted_summary,
+        )
+
+    if not evidence.mapping_eligible or (
+        "normalized_value" in evidence.candidate and not evidence.candidate.get("normalized_value")
+    ):
+        return rows(
+            NOT_RUN,
+            evidence.mapping_reason or "the extracted OCR value is not mappable to an Observation",
+            {"candidate": evidence.candidate, **extracted_summary},
+        )
+
+    candidate = evidence.candidate
+    results: list[Result] = []
+
+    results.append(
+        Result(
+            f"{gate}: OCR mappable candidate",
+            PASS,
+            f"tesseract value={candidate.get('raw_text')!r} "
+            f"unit={candidate.get('unit')!r} "
+            f"requires_source_confirmation={candidate.get('requires_source_confirmation')}",
+            {"candidate": candidate, "attempts": list(evidence.attempts)},
+        )
+    )
+
+    bare_refused = (
+        evidence.bare_verify_status == 400 and evidence.bare_verify_code == "E_VALIDATION"
+    )
+    results.append(
+        Result(
+            f"{gate}: bare verify refused",
+            PASS if bare_refused else FAIL,
+            f"status={evidence.bare_verify_status} code={evidence.bare_verify_code!r}",
+        )
+    )
+
+    source_audited = (
+        evidence.file_read_status == 200
+        and evidence.file_read_audit_count >= 1
+        and evidence.text_read_status == 200
+        and evidence.text_read_audit_count >= 1
+    )
+    results.append(
+        Result(
+            f"{gate}: source retrieved and audited",
+            PASS if source_audited else FAIL,
+            f"file_status={evidence.file_read_status} "
+            f"file_audits={evidence.file_read_audit_count} "
+            f"text_status={evidence.text_read_status} "
+            f"text_audits={evidence.text_read_audit_count}",
+        )
+    )
+
+    confirmed = (
+        evidence.document_status == "verified"
+        and evidence.value_verification_status == "verified"
+        and evidence.value_source_image_compared is True
+        and evidence.value_confirmed_value == candidate.get("normalized_value")
+        and evidence.value_confirmed_unit == candidate.get("unit")
+    )
+    results.append(
+        Result(
+            f"{gate}: source-confirmed verification",
+            PASS if confirmed else FAIL,
+            f"doc_status={evidence.document_status!r} "
+            f"value_status={evidence.value_verification_status!r} "
+            f"source_image_compared={evidence.value_source_image_compared} "
+            f"confirmed_value={evidence.value_confirmed_value!r} "
+            f"confirmed_unit={evidence.value_confirmed_unit!r}",
+        )
+    )
+
+    obs = evidence.promoted_observations
+    obs_ok = (
+        len(obs) == 1
+        and obs[0].get("source") == "verified_document"
+        and obs[0].get("trust_level") == "doctor_verified"
+        and obs[0].get("measure_type") == "glucose"
+        and obs[0].get("unit") == "mg/dL"
+        and obs[0].get("value") == 104.0
+        and obs[0].get("source_fact_id") == candidate.get("fact_id")
+    )
+    results.append(
+        Result(
+            f"{gate}: verified Observation created",
+            PASS if obs_ok else FAIL,
+            f"observations={list(obs)}",
+            {"observations": list(obs)},
+        )
+    )
+
+    provenance_ok = (
+        evidence.page_text_count >= 1
+        and evidence.page_text_extractor == "tesseract"
+        and evidence.page_text_hash_matches is True
+        and evidence.spans_match_exactly is True
+        and evidence.source_truth_notice_present is True
+        and evidence.audit_events_safe is True
+    )
+    results.append(
+        Result(
+            f"{gate}: persisted provenance and audit safety",
+            PASS if provenance_ok else FAIL,
+            f"page_texts={evidence.page_text_count} "
+            f"extractor={evidence.page_text_extractor!r} "
+            f"hash_ok={evidence.page_text_hash_matches} "
+            f"spans_ok={evidence.spans_match_exactly} "
+            f"notice={evidence.source_truth_notice_present} "
+            f"audit_safe={evidence.audit_events_safe}",
+        )
+    )
+
+    return results
+
+
+def gate_source_confirmation(results: list[Result], objects: dict | None) -> None:
+    """W1 positive control: bare verify refused -> source read -> confirmed -> Observation."""
+    if objects is None:
+        for name in W1_POSITIVE_CASES:
+            _record(
+                results,
+                Result(f"W1 source confirmation: {name}", NOT_RUN, "no Tesseract engine available"),
+            )
+        return
+
+    from fastapi.testclient import TestClient
+    from sqlalchemy import select
+
+    from app.db import models as db_models
+
+    evidence = W1PositiveEvidence()
+    client = objects["test_client"] if "test_client" in objects else TestClient(objects["app"])
+    doctor_headers = {"Authorization": f"Bearer {objects['doctor_token']}"}
+    patient_headers = {"Authorization": f"Bearer {objects['patient_token']}"}
+    models = objects.get("models", db_models)
+    session_factory = objects["session_factory"]
+
+    with client as http:
+        upload = http.post(
+            "/api/v1/documents/upload",
+            headers=patient_headers,
+            files={"file": ("glucose.png", objects["image_bytes"], "image/png")},
+        )
+        if upload.status_code != 202:
+            for name in W1_POSITIVE_CASES:
+                _record(
+                    results,
+                    Result(
+                        f"W1 source confirmation: {name}",
+                        FAIL,
+                        f"upload answered {upload.status_code}: {upload.text[:300]}",
+                    ),
+                )
+            return
+        document_id = upload.json()["document_id"]
+
+        extraction = http.get(
+            f"/api/v1/documents/{document_id}/extraction",
+            headers=doctor_headers,
+        )
+        if extraction.status_code != 200:
+            for name in W1_POSITIVE_CASES:
+                _record(
+                    results,
+                    Result(
+                        f"W1 source confirmation: {name}",
+                        FAIL,
+                        f"extraction answered {extraction.status_code}: {extraction.text[:300]}",
+                    ),
+                )
+            return
+
+        body = extraction.json()
+        evidence.attempts = tuple(
+            {"path": a["path"], "succeeded": a["succeeded"]} for a in body["attempts"]
+        )
+        evidence.extracted_fields = tuple(sorted(f["field_name"] for f in body["facts"]))
+        evidence.extracted_facts = tuple(
+            {
+                "field_name": f.get("field_name"),
+                "raw_text": f.get("raw_text"),
+                "normalized_value": f.get("normalized_value"),
+                "unit": f.get("unit"),
+                "quality_flags": list(f.get("quality_flags") or ()),
+                "extractor": (f.get("evidence") or {}).get("extractor"),
+            }
+            for f in body["facts"]
+        )
+        evidence.verification_issues = tuple(
+            {
+                "issue_type": issue.get("issue_type"),
+                "reason_code": issue.get("reason_code"),
+            }
+            for issue in body.get("verification_issues", ())
+        )
+        evidence.non_value_fact_count = sum(
+            1 for f in body["facts"] if f.get("field_name") != "value"
+        )
+        candidate = _w1_candidate(body["facts"])
+        eligible, mapping_detail = _w1_mapping_eligibility(body)
+        evidence.mapping_eligible = eligible
+        evidence.mapping_reason = mapping_detail
+
+        if candidate is None:
+            evidence.candidate_absence = (
+                "the real engine produced no mappable `value` fact "
+                f"({mapping_detail}); fields={list(evidence.extracted_fields)} "
+                f"facts={list(evidence.extracted_facts)} attempts={list(evidence.attempts)}"
+            )
+            for row in assess_w1_positive(evidence):
+                _record(results, row)
+            return
+
+        evidence.candidate = {
+            "fact_id": candidate["fact_id"],
+            "raw_text": candidate["raw_text"],
+            "normalized_value": candidate.get("normalized_value"),
+            "unit": candidate.get("unit"),
+            "confidence": candidate.get("confidence"),
+            "verification_status": candidate["verification_status"],
+            "extractor": (candidate.get("evidence") or {}).get("extractor"),
+            "requires_source_confirmation": candidate.get("requires_source_confirmation"),
+        }
+
+        if not eligible or evidence.non_value_fact_count == 0:
+            for row in assess_w1_positive(evidence):
+                _record(results, row)
+            return
+
+        # 1. Bare `verified` request without source review or confirmations must be refused.
+        bare = http.post(
+            f"/api/v1/documents/{document_id}/verify",
+            headers=doctor_headers,
+            json={"fact_id": candidate["fact_id"], "decision": "verified"},
+        )
+        evidence.bare_verify_status = bare.status_code
+        try:
+            evidence.bare_verify_code = bare.json().get("code")
+        except ValueError:
+            evidence.bare_verify_code = None
+
+        # 2. Doctor retrieves original image (`GET /file`) and OCR page text (`GET /text`).
+        file_resp = http.get(
+            f"/api/v1/documents/{document_id}/file",
+            headers=doctor_headers,
+        )
+        evidence.file_read_status = file_resp.status_code
+
+        prov_ok, prov_detail = _w1_check_provenance_and_audit(
+            session_factory,
+            models,
+            http=http,
+            doctor_headers=doctor_headers,
+            document_id=document_id,
+        )
+
+        # 3. Doctor explicitly confirms numeric value and unit after source comparison.
+        for fact in body["facts"]:
+            verify_body: dict[str, object] = {
+                "fact_id": fact["fact_id"],
+                "decision": "verified",
+                "reason": "doctor confirmed reading against original source scan",
+            }
+            if fact["field_name"] == "value":
+                verify_body["source_image_compared"] = True
+                verify_body["confirmed_value"] = fact["normalized_value"]
+                verify_body["confirmed_unit"] = fact["unit"]
+            elif fact["field_name"] == "unit":
+                verify_body["source_image_compared"] = True
+                verify_body["confirmed_unit"] = fact["normalized_value"]
+            verify = http.post(
+                f"/api/v1/documents/{document_id}/verify",
+                headers=doctor_headers,
+                json=verify_body,
+            )
+            if verify.status_code != 200:
+                break
+
+        with session_factory() as session:
+            doc = session.execute(
+                select(models.Document).where(models.Document.id == document_id)
+            ).scalar_one()
+            val_fact = session.execute(
+                select(models.ExtractedFact).where(models.ExtractedFact.id == candidate["fact_id"])
+            ).scalar_one()
+            val_decisions = list(
+                session.execute(
+                    select(models.FactVerification).where(
+                        models.FactVerification.fact_id == candidate["fact_id"]
+                    )
+                ).scalars()
+            )
+            fact_ids = [f["fact_id"] for f in body["facts"]]
+            obs_rows = list(
+                session.execute(
+                    select(models.Observation).where(
+                        models.Observation.source_fact_id.in_(fact_ids)
+                    )
+                ).scalars()
+            )
+            evidence.document_status = doc.extraction_status
+            evidence.value_verification_status = val_fact.verification_status
+            if val_decisions:
+                evidence.value_source_image_compared = bool(val_decisions[0].source_image_compared)
+                evidence.value_confirmed_value = val_decisions[0].confirmed_value
+                evidence.value_confirmed_unit = val_decisions[0].confirmed_unit
+            evidence.promoted_observations = tuple(
+                {
+                    "id": o.id,
+                    "source": o.source,
+                    "trust_level": o.trust_level,
+                    "measure_type": o.measure_type,
+                    "value": o.value,
+                    "unit": o.unit,
+                    "source_fact_id": o.source_fact_id,
+                }
+                for o in obs_rows
+            )
+
+        # Re-evaluate provenance & audit safety after all verification calls completed.
+        prov_ok_after, prov_detail_after = _w1_check_provenance_and_audit(
+            session_factory,
+            models,
+            http=http,
+            doctor_headers=doctor_headers,
+            document_id=document_id,
+        )
+        evidence.text_read_status = prov_detail.get("text_read_status")
+        evidence.file_read_audit_count = int(prov_detail_after.get("file_read_audit_count", 0))
+        evidence.text_read_audit_count = int(prov_detail_after.get("text_read_audit_count", 0))
+        evidence.page_text_count = int(prov_detail_after.get("page_text_count", 0))
+        evidence.page_text_extractor = prov_detail_after.get("page_text_extractor")
+        evidence.page_text_hash_matches = bool(
+            prov_detail_after.get("page_text_hash_matches", False)
+        )
+        evidence.spans_match_exactly = bool(prov_detail_after.get("spans_match_exactly", False))
+        evidence.source_truth_notice_present = bool(
+            prov_detail_after.get("source_truth_notice_present", False)
+        )
+        evidence.audit_events_safe = bool(
+            prov_ok and prov_ok_after and prov_detail_after.get("audit_events_safe", False)
+        )
+
+        for row in assess_w1_positive(evidence):
             _record(results, row)
 
 
@@ -1575,6 +2136,52 @@ def _w1_run(results: list[Result], *, engine_present: bool) -> None:
             )
 
 
+def _w1_positive_run(results: list[Result], *, engine_present: bool) -> None:
+    """Own the W1 positive source-confirmation control end to end in a fresh DB."""
+    if not engine_present:
+        gate_source_confirmation(results, None)
+        return
+
+    tmp = tempfile.mkdtemp(prefix="p3-w1-pos-")
+    saved_env = {name: os.environ.get(name) for name in _PROBE_ENV_KEYS}
+    seam = None
+    try:
+        seam = _isolated_app(tmp)
+        gate_source_confirmation(results, seam)
+    except Exception as error:
+        detail = f"unexpected {type(error).__name__}: {error}\n{traceback.format_exc(limit=3)}"
+        recorded_any = False
+        for name in W1_POSITIVE_CASES:
+            gate = f"W1 source confirmation: {name}"
+            if not _verdicts_for(results, gate):
+                _record(results, Result(gate, FAIL, detail))
+                recorded_any = True
+        if not recorded_any:
+            _record(results, Result("W1 source confirmation error", FAIL, detail))
+    finally:
+        teardown_seam = (
+            dict(seam)
+            if seam is not None
+            else {
+                "engine": None,
+                "database_url": f"sqlite:///{(Path(tmp) / 'accept.db').as_posix()}",
+            }
+        )
+        teardown_seam["saved_env"] = saved_env
+        teardown_seam["tmp"] = tmp
+        problems = _w1_teardown(teardown_seam)
+        if problems:
+            _record(
+                results,
+                Result(
+                    "W1 source confirmation cleanup",
+                    FAIL,
+                    "; ".join(problems),
+                    {"cleanup_errors": problems},
+                ),
+            )
+
+
 def main(argv: list[str]) -> int:
     """Run every Windows-only gate and return 0 only if none is NOT RUN/FAIL."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -1610,9 +2217,9 @@ def main(argv: list[str]) -> int:
         "ING-02 OCR upload end-to-end",
         lambda: gate_api_ocr_upload(results, engine_present=engine_present),
     )
-    # W1 is the R21 rejection gate. The fixture guard runs first: if the source is
-    # not the mappable glucose report, W1's "no Observation" assertion would be
-    # vacuous, so it fails loudly instead of passing hollowly.
+    # W1 is the R21 rejection + positive source-confirmation gate pair. The fixture guard
+    # runs first: if the source is not the mappable glucose report, W1's assertions would
+    # be vacuous, so it fails loudly instead of passing hollowly.
     mappable_ok = _guarded(
         results,
         "W1 R21 rejection: OCR value fact",
@@ -1624,6 +2231,11 @@ def main(argv: list[str]) -> int:
             "W1 R21 rejection",
             lambda: _w1_run(results, engine_present=engine_present),
         )
+        _guarded(
+            results,
+            "W1 source confirmation",
+            lambda: _w1_positive_run(results, engine_present=engine_present),
+        )
     else:
         detail = (
             _verdicts_for(results, "W1 R21 rejection: OCR value fact")[-1].detail
@@ -1632,6 +2244,10 @@ def main(argv: list[str]) -> int:
         )
         for name in W1_CASES:
             gate = f"W1 R21 rejection: {name}"
+            if not _verdicts_for(results, gate):
+                _record(results, Result(gate, FAIL, detail))
+        for name in W1_POSITIVE_CASES:
+            gate = f"W1 source confirmation: {name}"
             if not _verdicts_for(results, gate):
                 _record(results, Result(gate, FAIL, detail))
 

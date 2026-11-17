@@ -623,3 +623,387 @@ def test_run_ocr_holds_the_selection_across_its_engine_calls(monkeypatch, tmp_pa
     assert len(seen) == 1
     _assert_same_executable(seen[0], engine.path)
     assert intruded.is_set(), "the intruder should proceed once run_ocr releases"
+
+
+# ------------------------------------- Stage 2: TSV bounding-box layout reconstruction
+
+
+def _tsv_dict_from_lines(
+    line_boxes: list[list[tuple[int, int, int, int, str]]],
+    *,
+    conf: str = "95",
+    cross_block_on_col_gap: bool = False,
+) -> dict[str, list]:
+    """Build a pytesseract ``Output.DICT`` TSV table from measured word boxes."""
+    out: dict[str, list] = {
+        "level": [],
+        "page_num": [],
+        "block_num": [],
+        "par_num": [],
+        "line_num": [],
+        "word_num": [],
+        "left": [],
+        "top": [],
+        "width": [],
+        "height": [],
+        "conf": [],
+        "text": [],
+    }
+    block = 1
+    for line_idx, words in enumerate(line_boxes, start=1):
+        # Emit a Tesseract level=4 line row (conf=-1, empty text) just like real TSV.
+        min_l = min(w[0] for w in words)
+        min_t = min(w[1] for w in words)
+        max_r = max(w[0] + w[2] for w in words)
+        max_b = max(w[1] + w[3] for w in words)
+        out["level"].append(4)
+        out["page_num"].append(1)
+        out["block_num"].append(block)
+        out["par_num"].append(1)
+        out["line_num"].append(line_idx)
+        out["word_num"].append(0)
+        out["left"].append(min_l)
+        out["top"].append(min_t)
+        out["width"].append(max_r - min_l)
+        out["height"].append(max_b - min_t)
+        out["conf"].append("-1")
+        out["text"].append("")
+
+        prev_right: int | None = None
+        active_block = block
+        word_num = 1
+        for left, top, width, height, token in words:
+            if cross_block_on_col_gap and prev_right is not None and (left - prev_right) >= 40:
+                active_block += 1
+                word_num = 1
+            out["level"].append(5)
+            out["page_num"].append(1)
+            out["block_num"].append(active_block)
+            out["par_num"].append(1)
+            out["line_num"].append(line_idx)
+            out["word_num"].append(word_num)
+            out["left"].append(left)
+            out["top"].append(top)
+            out["width"].append(width)
+            out["height"].append(height)
+            out["conf"].append(conf)
+            out["text"].append(token)
+            prev_right = left + width
+            word_num += 1
+    return out
+
+
+def _measured_40px_boxes() -> dict[str, list[list[tuple[int, int, int, int, str]]]]:
+    """Exact Pillow 40px Aileron Regular boxes for the three Stage 2 calibration sources.
+
+    Note: ``-`` uses a tight ink height of ``5`` px (matching Tesseract tight glyph boxes)
+    to verify reference ranges (``70 - 99``, ``12.0 - 15.5``, ``70 - 110``) never
+    trigger false double spaces when punctuation height is small.
+    """
+    header_top = [
+        (60, 74, 216, 30, "SYNTHETIC"),
+        (285, 74, 117, 30, "DEMO"),
+        (411, 75, 104, 28, "DATA"),
+        (524, 94, 10, 5, "-"),
+        (543, 74, 83, 30, "NOT"),
+        (635, 75, 26, 28, "A"),
+        (670, 75, 98, 28, "REAL"),
+        (777, 74, 175, 30, "MEDICAL"),
+        (961, 74, 160, 30, "RECORD"),
+    ]
+    patient_base = [
+        (60, 133, 107, 29, "Demo"),
+        (176, 132, 124, 30, "Patient"),
+        (309, 133, 26, 28, "A"),
+        (443, 130, 67, 32, "Ref:"),
+        (519, 132, 232, 30, "DEMO-A-001"),
+        (859, 133, 120, 36, "Report"),
+        (988, 131, 88, 31, "date:"),
+    ]
+    return {
+        "report_a_glucose.txt": [
+            header_top,
+            [*patient_base, (1085, 132, 204, 30, "2026-11-02")],
+            [
+                (60, 191, 85, 29, "Test:"),
+                (154, 190, 132, 38, "Fasting"),
+                (295, 189, 143, 39, "glucose"),
+                (483, 189, 110, 31, "Value:"),
+                (602, 190, 69, 30, "104"),
+                (680, 189, 118, 39, "mg/dL"),
+            ],
+            [
+                (60, 246, 184, 32, "Reference"),
+                (253, 255, 113, 31, "range:"),
+                (375, 248, 46, 30, "70"),
+                (430, 268, 10, 5, "-"),
+                (449, 248, 46, 30, "99"),
+                (504, 247, 118, 39, "mg/dL"),
+            ],
+        ],
+        "report_a_clean.txt": [
+            header_top,
+            [*patient_base, (1085, 132, 204, 30, "2026-10-20")],
+            [
+                (60, 191, 85, 29, "Test:"),
+                (154, 189, 222, 39, "Hemoglobin"),
+                (466, 189, 110, 31, "Value:"),
+                (585, 190, 77, 30, "13.4"),
+                (671, 189, 84, 39, "g/dL"),
+            ],
+            [
+                (60, 246, 184, 32, "Reference"),
+                (253, 255, 113, 31, "range:"),
+                (375, 248, 77, 30, "12.0"),
+                (461, 268, 10, 5, "-"),
+                (480, 249, 77, 29, "15.5"),
+                (566, 247, 84, 39, "g/dL"),
+            ],
+        ],
+        "report_ocr_o_confusion.txt": [
+            header_top,
+            [*patient_base, (1085, 132, 204, 30, "2026-10-20")],
+            [
+                (60, 191, 85, 29, "Test:"),
+                (154, 189, 148, 31, "Glucose"),
+                (419, 189, 110, 31, "Value:"),
+                (538, 190, 76, 30, "1O5"),
+                (623, 189, 118, 39, "mg/dL"),
+            ],
+            [
+                (60, 246, 184, 32, "Reference"),
+                (253, 255, 113, 31, "range:"),
+                (375, 248, 46, 30, "70"),
+                (430, 268, 10, 5, "-"),
+                (449, 248, 69, 30, "110"),
+                (527, 247, 118, 39, "mg/dL"),
+            ],
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "source_name,expected_test,expected_value,expected_unit,expected_ref,expect_flags",
+    [
+        (
+            "report_a_glucose.txt",
+            "Fasting glucose",
+            "104",
+            "mg/dL",
+            "70 - 99 mg/dL",
+            ("clean",),
+        ),
+        (
+            "report_a_clean.txt",
+            "Hemoglobin",
+            "13.4",
+            "g/dL",
+            "12.0 - 15.5 g/dL",
+            ("clean",),
+        ),
+        (
+            "report_ocr_o_confusion.txt",
+            "Glucose",
+            None,
+            "mg/dL",
+            "70 - 110 mg/dL",
+            ("unparseable_value",),
+        ),
+    ],
+)
+def test_stage2_tsv_layout_recovers_40px_column_gaps_without_reference_double_spaces(
+    monkeypatch,
+    tmp_path,
+    source_name: str,
+    expected_test: str,
+    expected_value: str | None,
+    expected_unit: str,
+    expected_ref: str,
+    expect_flags: tuple[str, ...],
+):
+    """Stage 2: TSV bounding boxes recover Test/Value separation without ``  `` in ranges."""
+    from PIL import Image
+
+    from app.core.enums import ExtractionPath, FactField
+    from app.services.documents.field_parser import parse_pages
+    from app.services.documents.text_extraction import PageText
+
+    engine = _FakeEngine(tmp_path / "explicit" / "tesseract")
+    _isolate_pytesseract_global(monkeypatch)
+    import pytesseract
+
+    tsv = _tsv_dict_from_lines(_measured_40px_boxes()[source_name], conf="95")
+    collapsed_plain = (
+        "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD\n"
+        "Demo Patient A Ref: DEMO-A-001 Report date: 2026-11-02\n"
+        f"Test: {expected_test} Value: 104 {expected_unit}\n"
+        f"Reference range: {expected_ref}\n"
+    )
+
+    monkeypatch.setattr(pytesseract, "image_to_string", lambda image, **kw: collapsed_plain)
+    monkeypatch.setattr(pytesseract, "image_to_data", lambda image, **kw: tsv)
+    monkeypatch.setattr(ocr_module, "engine_version", lambda cmd: "5.4.0.20240606")
+
+    result = ocr_module.run_ocr(
+        Image.new("RGB", (1349, 400), "white"),
+        tesseract_cmd=str(engine.path),
+        language="eng",
+        preprocessing=Preprocessing.NONE,
+    )
+
+    lines = result.text.splitlines()
+    assert len(lines) == 4
+    assert f"Reference range: {expected_ref}" == lines[3], (
+        f"unexpected spacing in reference range: {lines[3]!r}"
+    )
+    assert "  " not in lines[0]
+    assert "  " not in lines[3]
+    assert "  Value:" in lines[2]
+
+    parsed = parse_pages(
+        [
+            PageText(
+                page_index=0,
+                text=result.text,
+                extractor=ExtractionPath.TESSERACT,
+                confidence=result.confidence,
+            )
+        ]
+    )
+    by_field = {fact.field_name: fact for fact in parsed.facts}
+    assert set(by_field) == {
+        FactField.REPORT_DATE,
+        FactField.TEST_NAME,
+        FactField.VALUE,
+        FactField.UNIT,
+        FactField.REFERENCE_TEXT,
+    }
+    assert by_field[FactField.TEST_NAME].normalized_value == expected_test
+    assert by_field[FactField.VALUE].normalized_value == expected_value
+    assert by_field[FactField.UNIT].normalized_value == expected_unit
+    assert by_field[FactField.REFERENCE_TEXT].normalized_value == expected_ref
+    assert tuple(flag.value for flag in by_field[FactField.VALUE].quality_flags) == expect_flags
+
+
+def test_stage2_tsv_layout_merges_same_row_across_blocks_and_is_2x_scale_invariant():
+    """Stage 2: split Tesseract blocks on one visual row merge; 2x scale keeps spacing."""
+    boxes = _measured_40px_boxes()["report_a_glucose.txt"]
+    tsv_1x = _tsv_dict_from_lines(boxes, conf="94", cross_block_on_col_gap=True)
+    scaled_boxes = [
+        [(left * 2, t * 2, w * 2, h * 2, tok) for (left, t, w, h, tok) in row] for row in boxes
+    ]
+    tsv_2x = _tsv_dict_from_lines(scaled_boxes, conf="94", cross_block_on_col_gap=True)
+
+    text_1x = ocr_module.reconstruct_layout_from_tsv(tsv_1x)
+    text_2x = ocr_module.reconstruct_layout_from_tsv(tsv_2x)
+
+    assert text_1x is not None
+    assert text_1x == text_2x
+    lines = text_1x.splitlines()
+    assert len(lines) == 4
+    assert "Test: Fasting glucose" in lines[2] and "Value: 104 mg/dL" in lines[2]
+    assert "  Value:" in lines[2]
+    assert lines[3] == "Reference range: 70 - 99 mg/dL"
+
+
+def test_stage2_tsv_layout_falls_back_when_tsv_lacks_word_boxes(monkeypatch, tmp_path):
+    """Legacy TSV stubs without box geometry fall back to ``image_to_string`` cleanly."""
+    from PIL import Image
+
+    engine = _FakeEngine(tmp_path / "explicit" / "tesseract")
+    _isolate_pytesseract_global(monkeypatch)
+    import pytesseract
+
+    monkeypatch.setattr(pytesseract, "image_to_string", lambda image, **kw: "Fallback text")
+    monkeypatch.setattr(pytesseract, "image_to_data", lambda image, **kw: {"conf": ["91"]})
+    monkeypatch.setattr(ocr_module, "engine_version", lambda cmd: "5.4.0.20240606")
+
+    result = ocr_module.run_ocr(
+        Image.new("RGB", (20, 20), "white"),
+        tesseract_cmd=str(engine.path),
+        language="eng",
+    )
+
+    assert result.text == "Fallback text"
+    assert result.confidence == pytest.approx(0.91)
+    assert ocr_module.reconstruct_layout_from_tsv({"conf": ["91"]}) is None
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the fake engine is a POSIX shell script; Windows uses the real Tesseract",
+)
+def test_stage2_real_subprocess_tsv_reconstructs_glucose_columns(monkeypatch, tmp_path):
+    """Real subprocess TSV output recovers column spacing even if stdout .txt collapses it."""
+    from PIL import Image
+
+    from app.core.enums import ExtractionPath, FactField
+    from app.services.documents.field_parser import parse_pages
+    from app.services.documents.text_extraction import PageText
+
+    boxes = _measured_40px_boxes()["report_a_glucose.txt"]
+    tsv_rows = [
+        "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext"
+    ]
+    for line_idx, row in enumerate(boxes, start=1):
+        for word_idx, (left, t, w, h, tok) in enumerate(row, start=1):
+            tsv_rows.append(f"5\t1\t1\t1\t{line_idx}\t{word_idx}\t{left}\t{t}\t{w}\t{h}\t94\t{tok}")
+    # Write via POSIX shell builtin `printf` so the test works even when PATH is empty.
+    tsv_writes = "\n".join(f"  printf '%s\\n' '{line}' >> \"$base.tsv\"" for line in tsv_rows)
+
+    fake_script = f"""#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "tesseract 5.4.0.20240606"
+  exit 0
+fi
+base="$2"
+shift 2
+want_tsv="no"
+for arg in "$@"; do
+  case "$arg" in
+    tessedit_create_tsv=1) want_tsv="yes" ;;
+  esac
+done
+if [ "$want_tsv" = "yes" ]; then
+  : > "$base.tsv"
+{tsv_writes}
+else
+  printf 'Test: Fasting glucose Value: 104 mg/dL\\n' > "$base.txt"
+fi
+exit 0
+"""
+    engine = tmp_path / "explicit" / "tesseract-stage2"
+    engine.parent.mkdir(parents=True)
+    engine.write_text(fake_script, encoding="utf-8")
+    engine.chmod(0o755)
+
+    _isolate_pytesseract_global(monkeypatch)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+
+    result = ocr_module.run_ocr(
+        Image.new("RGB", (1349, 400), "white"),
+        tesseract_cmd=str(engine),
+        language="eng",
+        preprocessing=Preprocessing.NONE,
+    )
+
+    assert "Test: Fasting glucose     Value: 104 mg/dL" in result.text
+    assert "Reference range: 70 - 99 mg/dL" in result.text
+    parsed = parse_pages(
+        [
+            PageText(
+                page_index=0,
+                text=result.text,
+                extractor=ExtractionPath.TESSERACT,
+                confidence=result.confidence,
+            )
+        ]
+    )
+    fields = {f.field_name: f.normalized_value for f in parsed.facts}
+    assert fields == {
+        FactField.REPORT_DATE: "2026-11-02",
+        FactField.TEST_NAME: "Fasting glucose",
+        FactField.VALUE: "104",
+        FactField.UNIT: "mg/dL",
+        FactField.REFERENCE_TEXT: "70 - 99 mg/dL",
+    }

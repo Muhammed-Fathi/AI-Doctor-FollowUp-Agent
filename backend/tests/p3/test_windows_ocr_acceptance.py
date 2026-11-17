@@ -978,14 +978,14 @@ def test_w1_runner_disposes_partial_engine_and_reports_all_cases_on_seam_failure
 
 
 def test_main_emits_unique_w1_verdicts_when_fixture_is_unmappable(monkeypatch, capsys, tmp_path):
-    """Failing the W1 fixture guard skips ``_w1_run`` and emits each W1 case once."""
+    """Failing the W1 fixture guard skips ``_w1_run``/``_w1_positive_run`` and fails once each."""
     module = _module()
     fake_sources = tmp_path / "sources"
     fake_sources.mkdir()
     for name in ("report_a_glucose.txt", "report_b_bp_hr.txt", "report_ocr_o_confusion.txt"):
         (fake_sources / name).write_text("SYNTHETIC\nTest: Hemoglobin\n", encoding="utf-8")
 
-    called = {"w1_run": False}
+    called = {"w1_run": False, "w1_positive_run": False}
     monkeypatch.setattr(module, "SOURCES", fake_sources)
     monkeypatch.setattr(module, "gate_environment", lambda r: None)
     monkeypatch.setattr(module, "gate_engine", lambda r: None)
@@ -998,6 +998,12 @@ def test_main_emits_unique_w1_verdicts_when_fixture_is_unmappable(monkeypatch, c
         "_w1_run",
         lambda r, engine_present: called.__setitem__("w1_run", True),
     )
+    monkeypatch.setattr(
+        module,
+        "_w1_positive_run",
+        lambda r, engine_present: called.__setitem__("w1_positive_run", True),
+        raising=False,
+    )
 
     out_json = tmp_path / "out.json"
     exit_code = module.main(["windows_ocr_acceptance.py", "--json", str(out_json)])
@@ -1005,19 +1011,30 @@ def test_main_emits_unique_w1_verdicts_when_fixture_is_unmappable(monkeypatch, c
 
     assert exit_code == 2
     assert called["w1_run"] is False
+    assert called["w1_positive_run"] is False
     import json
 
     payload = json.loads(out_json.read_text(encoding="utf-8"))
     gates = [row["gate"] for row in payload["gates"]]
-    assert gates == [f"W1 R21 rejection: {name}" for name in module.W1_CASES]
+    assert gates == [f"W1 R21 rejection: {name}" for name in module.W1_CASES] + [
+        f"W1 source confirmation: {name}" for name in module.W1_POSITIVE_CASES
+    ]
     assert len(gates) == len(set(gates))
     assert all(row["status"] == module.FAIL for row in payload["gates"])
 
 
 def test_the_probe_registers_w1_as_a_gate():
-    """W1 must be wired into the probe, not merely defined beside it."""
+    """W1 (R21 rejection + source confirmation) must be wired into the probe."""
     module = _module()
-    for name in ("gate_r21_rejection", "gate_r21_rejection_is_mappable", "_w1_run", "assess_w1"):
+    for name in (
+        "gate_r21_rejection",
+        "gate_r21_rejection_is_mappable",
+        "_w1_run",
+        "assess_w1",
+        "gate_source_confirmation",
+        "_w1_positive_run",
+        "assess_w1_positive",
+    ):
         assert hasattr(module, name), name
 
     # The gate names must appear in main's harness so a run cannot silently omit them.
@@ -1025,6 +1042,401 @@ def test_the_probe_registers_w1_as_a_gate():
     main_body = source[source.index("def main(argv") :]
     assert "W1 R21 rejection" in main_body
     assert "_w1_run" in main_body
+    assert "W1 source confirmation" in main_body
+    assert "_w1_positive_run" in main_body
+
+
+def test_w1_uses_legible_40px_png_fixture(monkeypatch, tmp_path):
+    """Stage 2: W1 isolated seam renders ``W1_SOURCE_NAME`` via ``build_legible_scan_image``."""
+    import generate_p3_fixtures as fixtures
+    from app.core.config import reset_settings_cache
+
+    module = _module()
+    saved_env = {name: os.environ.get(name) for name in module._PROBE_ENV_KEYS}
+    seam = None
+    try:
+        seam = module._isolated_app(str(tmp_path))
+        expected = fixtures.build_legible_scan_image(module.W1_SOURCE_NAME, fmt="PNG")
+        tiny_10px = fixtures.image_bytes(module.W1_SOURCE_NAME, fmt="PNG")
+        assert seam["image_bytes"] == expected
+        assert seam["image_bytes"] != tiny_10px
+    finally:
+        if seam is not None:
+            seam["saved_env"] = saved_env
+            seam["tmp"] = str(tmp_path)
+            problems = module._w1_teardown(seam)
+            assert problems == []
+        else:
+            for key, prev in saved_env.items():
+                if prev is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = prev
+            reset_settings_cache()
+
+
+def _w1_positive_pass_evidence():
+    """Evidence describing a complete positive source-confirmation W1 run."""
+    module = _module()
+    candidate = {
+        "fact_id": "fact-value",
+        "raw_text": "104",
+        "normalized_value": "104",
+        "unit": "mg/dL",
+        "confidence": 0.94,
+        "verification_status": "pending",
+        "extractor": "tesseract",
+        "requires_source_confirmation": True,
+    }
+    return module, module.W1PositiveEvidence(
+        candidate=candidate,
+        non_value_fact_count=4,
+        extracted_fields=("reference_text", "report_date", "test_name", "unit", "value"),
+        mapping_eligible=True,
+        mapping_reason="eligible for glucose 104.0 mg/dL at 2026-11-02T00:00:00Z",
+        attempts=({"path": "tesseract", "succeeded": True},),
+        bare_verify_status=400,
+        bare_verify_code="E_VALIDATION",
+        file_read_status=200,
+        file_read_audit_count=1,
+        text_read_status=200,
+        text_read_audit_count=1,
+        document_status="verified",
+        value_verification_status="verified",
+        value_source_image_compared=True,
+        value_confirmed_value="104",
+        value_confirmed_unit="mg/dL",
+        promoted_observations=(
+            {
+                "id": "obs-1",
+                "source": "verified_document",
+                "trust_level": "doctor_verified",
+                "measure_type": "glucose",
+                "value": 104.0,
+                "unit": "mg/dL",
+                "source_fact_id": "fact-value",
+            },
+        ),
+        page_text_count=1,
+        page_text_extractor="tesseract",
+        page_text_hash_matches=True,
+        spans_match_exactly=True,
+        source_truth_notice_present=True,
+        audit_events_safe=True,
+    )
+
+
+def test_w1_positive_source_confirmation_passes_only_when_all_assertions_hold():
+    """Positive W1 control passes only when every source-confirmation and provenance invariant holds."""
+    module, evidence = _w1_positive_pass_evidence()
+    rows = module.assess_w1_positive(evidence)
+
+    assert len(rows) == len(module.W1_POSITIVE_CASES)
+    assert [row.gate for row in rows] == [
+        f"W1 source confirmation: {name}" for name in module.W1_POSITIVE_CASES
+    ]
+    assert [row.status for row in rows] == [module.PASS] * len(module.W1_POSITIVE_CASES)
+
+
+def test_w1_positive_source_confirmation_not_run_without_engine_or_candidate(capsys):
+    """No engine or unmappable candidate yields honest NOT RUN for positive W1."""
+    module = _module()
+    results: list = []
+    module.gate_source_confirmation(results, None)
+    capsys.readouterr()
+    assert len(results) == len(module.W1_POSITIVE_CASES)
+    assert {row.status for row in results} == {module.NOT_RUN}
+
+    rows = module.assess_w1_positive(
+        module.W1PositiveEvidence(
+            candidate=None,
+            candidate_absence="no mappable OCR value fact",
+        )
+    )
+    assert [row.status for row in rows] == [module.NOT_RUN] * len(module.W1_POSITIVE_CASES)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("bare_verify_status", 200),
+        ("bare_verify_code", "E_OTHER"),
+        ("file_read_status", 403),
+        ("file_read_audit_count", 0),
+        ("document_status", "needs_verification"),
+        ("value_source_image_compared", False),
+        ("value_confirmed_value", "105"),
+        ("value_confirmed_unit", "g/dL"),
+        ("promoted_observations", ()),
+        ("page_text_count", 0),
+        ("page_text_extractor", "pypdf"),
+        ("page_text_hash_matches", False),
+        ("spans_match_exactly", False),
+        ("audit_events_safe", False),
+    ],
+)
+def test_w1_positive_source_confirmation_fails_when_any_invariant_breaks(field, value):
+    """Any broken invariant in positive W1 turns its corresponding gate row FAIL."""
+    module, evidence = _w1_positive_pass_evidence()
+    setattr(evidence, field, value)
+    rows = module.assess_w1_positive(evidence)
+    failing = [row for row in rows if row.status != module.PASS]
+    assert failing, f"breaking {field} must fail at least one positive W1 row"
+
+
+def test_w1_positive_runner_end_to_end_with_tsv_layout_and_cleanup(monkeypatch, capsys):
+    """End-to-end positive W1 control using real TSV reconstruction, /file, /text & audit checks."""
+    import pytesseract
+
+    from app.core.config import reset_settings_cache
+    from app.db import models
+    from app.db.session import cached_engine_urls
+    from app.services.documents import ocr as ocr_module
+
+    module = _module()
+    tsv = {
+        "level": [5] * 28,
+        "page_num": [1] * 28,
+        "block_num": [1] * 28,
+        "par_num": [1] * 28,
+        "line_num": ([1] * 9 + [2] * 8 + [3] * 6 + [4] * 5),
+        "word_num": (
+            list(range(1, 10)) + list(range(1, 9)) + list(range(1, 7)) + list(range(1, 6))
+        ),
+        "left": [
+            60,
+            285,
+            411,
+            524,
+            543,
+            635,
+            670,
+            777,
+            961,
+            60,
+            176,
+            309,
+            443,
+            519,
+            859,
+            988,
+            1085,
+            60,
+            154,
+            295,
+            483,
+            602,
+            680,
+            60,
+            253,
+            375,
+            430,
+            449,
+        ],
+        "top": [
+            74,
+            74,
+            75,
+            94,
+            74,
+            75,
+            75,
+            74,
+            74,
+            133,
+            132,
+            133,
+            130,
+            132,
+            133,
+            131,
+            132,
+            191,
+            190,
+            189,
+            189,
+            190,
+            189,
+            246,
+            255,
+            248,
+            268,
+            248,
+        ],
+        "width": [
+            216,
+            117,
+            104,
+            10,
+            83,
+            26,
+            98,
+            175,
+            160,
+            107,
+            124,
+            26,
+            67,
+            232,
+            120,
+            88,
+            204,
+            85,
+            132,
+            143,
+            110,
+            69,
+            118,
+            184,
+            113,
+            46,
+            10,
+            46,
+        ],
+        "height": [
+            30,
+            30,
+            28,
+            5,
+            30,
+            28,
+            28,
+            30,
+            30,
+            29,
+            30,
+            28,
+            32,
+            30,
+            36,
+            31,
+            30,
+            29,
+            38,
+            39,
+            31,
+            30,
+            39,
+            32,
+            31,
+            30,
+            5,
+            30,
+        ],
+        "conf": ["95"] * 28,
+        "text": [
+            "SYNTHETIC",
+            "DEMO",
+            "DATA",
+            "-",
+            "NOT",
+            "A",
+            "REAL",
+            "MEDICAL",
+            "RECORD",
+            "Demo",
+            "Patient",
+            "A",
+            "Ref:",
+            "DEMO-A-001",
+            "Report",
+            "date:",
+            "2026-11-02",
+            "Test:",
+            "Fasting",
+            "glucose",
+            "Value:",
+            "104",
+            "mg/dL",
+            "Reference",
+            "range:",
+            "70",
+            "-",
+            "99",
+        ],
+    }
+    # Add mg/dL on line 4 too
+    tsv["level"].append(5)
+    tsv["page_num"].append(1)
+    tsv["block_num"].append(1)
+    tsv["par_num"].append(1)
+    tsv["line_num"].append(4)
+    tsv["word_num"].append(6)
+    tsv["left"].append(504)
+    tsv["top"].append(247)
+    tsv["width"].append(118)
+    tsv["height"].append(39)
+    tsv["conf"].append("95")
+    tsv["text"].append("mg/dL")
+
+    monkeypatch.setattr(ocr_module, "resolve_engine", lambda cmd: "/fake/tesseract")
+    monkeypatch.setattr(ocr_module, "engine_version", lambda cmd: "5.4.0.simulated")
+    monkeypatch.setattr(pytesseract, "image_to_string", lambda image, **kw: "collapsed plain text")
+    monkeypatch.setattr(pytesseract, "image_to_data", lambda image, **kw: tsv)
+
+    sentinels = {
+        "DATABASE_URL": "sqlite:///sentinel-before-pos-w1.db",
+        "APP_ENV": "test",
+        "UPLOAD_DIR": "/tmp/sentinel-pos-w1-uploads",
+        "DEMO_SEED_PASSWORD": "sentinel-demo-value",
+    }
+    for key, value in sentinels.items():
+        monkeypatch.setenv(key, value)
+    reset_settings_cache()
+
+    urls_before = cached_engine_urls()
+    observed: dict = {}
+    orig_teardown = module._w1_teardown
+
+    def _inspect_and_teardown(seam: dict) -> list[str]:
+        observed["tmp"] = Path(seam["tmp"])
+        with seam["session_factory"]() as session:
+            doc = session.execute(select(models.Document)).scalars().one()
+            page_texts = session.execute(select(models.DocumentPageText)).scalars().all()
+            observations = (
+                session.execute(
+                    select(models.Observation).where(
+                        models.Observation.source == "verified_document"
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            observed["doc_status"] = doc.extraction_status
+            observed["page_text_count"] = len(page_texts)
+            observed["page_text_extractor"] = page_texts[0].extractor if page_texts else None
+            observed["obs_count"] = len(observations)
+            observed["obs_value"] = observations[0].value if observations else None
+        return orig_teardown(seam)
+
+    monkeypatch.setattr(module, "_w1_teardown", _inspect_and_teardown)
+
+    results: list = []
+    module._w1_positive_run(results, engine_present=True)
+    capsys.readouterr()
+
+    assert [row.gate for row in results] == [
+        f"W1 source confirmation: {name}" for name in module.W1_POSITIVE_CASES
+    ]
+    assert [row.status for row in results] == [module.PASS] * len(module.W1_POSITIVE_CASES)
+    assert observed["doc_status"] == "verified"
+    assert observed["page_text_count"] == 1
+    assert observed["page_text_extractor"] == "tesseract"
+    assert observed["obs_count"] == 1
+    assert observed["obs_value"] == pytest.approx(104.0)
+    assert not observed["tmp"].exists()
+    assert cached_engine_urls() == urls_before
+    for key, value in sentinels.items():
+        assert os.environ.get(key) == value
+
+
+def test_w1_negative_runner_fails_if_provenance_or_audit_safety_breaks():
+    """Negative W1 control fails loudly if persisted provenance or audit safety breaks."""
+    module, evidence = _w1_pass_evidence()
+    evidence.provenance_verified = False
+    evidence.provenance_detail = {"reason": "span mismatch"}
+    rows = module.assess_w1(evidence)
+    assert any(row.status == module.FAIL for row in rows)
 
 
 HANDOFF = REPO_ROOT / "docs" / "phase-reports" / "PHASE_3_WINDOWS_ACCEPTANCE.md"

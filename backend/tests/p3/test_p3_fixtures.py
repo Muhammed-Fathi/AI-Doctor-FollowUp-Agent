@@ -116,6 +116,21 @@ def test_report_pdfs_are_byte_stable(fixtures):
     assert first.startswith(b"%PDF")
 
 
+def test_build_legible_scan_image_returns_deterministic_bytes_for_png_and_jpeg(fixtures):
+    """Stage 2: both PNG and JPEG legible scan renders return deterministic ``bytes``."""
+    png_first = fixtures.build_legible_scan_image("report_a_glucose.txt", fmt="PNG")
+    png_second = fixtures.build_legible_scan_image("report_a_glucose.txt", fmt="PNG")
+    assert isinstance(png_first, bytes)
+    assert png_first == png_second
+    assert png_first.startswith(b"\x89PNG\r\n\x1a\n")
+
+    jpg_first = fixtures.build_legible_scan_image("report_a_glucose.txt", fmt="JPEG")
+    jpg_second = fixtures.build_legible_scan_image("report_a_glucose.txt", fmt="JPEG")
+    assert isinstance(jpg_first, bytes)
+    assert jpg_first == jpg_second
+    assert jpg_first.startswith(b"\xff\xd8\xff")
+
+
 # --- P3-R10: fixture integrity must be portable across LF and CRLF checkouts ---
 #
 # ``git`` checks these ``.txt`` sources out with CRLF on Windows by default

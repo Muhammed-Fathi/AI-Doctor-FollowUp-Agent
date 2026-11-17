@@ -239,10 +239,7 @@ def build_legible_scan_image(source_name: str, *, fmt: str = "PNG") -> bytes:
     if fmt == "JPEG":
         buffer = io.BytesIO()
         image.save(buffer, format="JPEG", quality=95)
-        buffer.seek(0)
-        from PIL import Image as _Image
-
-        return _Image.open(buffer).convert("RGB")
+        return buffer.getvalue()
     if fmt == "PNG":
         buffer = io.BytesIO()
         image.save(buffer, format="PNG", optimize=False)
@@ -281,6 +278,16 @@ def assert_deterministic() -> list[str]:
             "jpeg",
             image_bytes("report_a_clean.txt", fmt="JPEG"),
             image_bytes("report_a_clean.txt", fmt="JPEG"),
+        ),
+        (
+            "legible_png",
+            build_legible_scan_image("report_a_glucose.txt", fmt="PNG"),
+            build_legible_scan_image("report_a_glucose.txt", fmt="PNG"),
+        ),
+        (
+            "legible_jpeg",
+            build_legible_scan_image("report_a_glucose.txt", fmt="JPEG"),
+            build_legible_scan_image("report_a_glucose.txt", fmt="JPEG"),
         ),
     ]
     summary: list[str] = []

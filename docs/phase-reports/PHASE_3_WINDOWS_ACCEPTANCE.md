@@ -97,9 +97,10 @@ The expected test count travels with the commit. The count has moved across
 revisions: `e7d73b5` (Stages 3-5) expects **663** (P3: 275); Stage 5.1 expects
 **666** (P3: 275); Stage 5.2 expects **688** (P3: 297); Stage 5.2a
 (`e3a4698`) expects **702** (P3: 311); Stage 6a (`4f0862f`) expects **708**
-(P3: 314); and this Stage 6b.2 Stage 1 revision expects **739** (P3: **345**),
-adding 31 Stage 1 OCR confirmation, `/text`, `0005` safety, config-bound, and
-synthetic retention tests.
+(P3: 314); Stage 6b.2 Stage 1 (`e5d6dbb`) expects **739** (P3: 345); and this
+Stage 6b.2 Stage 2 revision expects **767** (P3: **373**), adding 28 Stage 2
+TSV layout reconstruction, anti-`FC-3` `1O5`->`105`, JPEG bytes fix, and W1
+positive/negative provenance & audit acceptance regressions.
 Pinning an older SHA while reading a newer table — or the reverse — reports a
 false FAIL on a run that actually succeeded, which is why the check below reads
 the figure from the pinned checkout rather than from whatever copy of this file
@@ -497,28 +498,28 @@ Record the per-gate summary block **and** the exit code. `SKIPPED` is never a pa
 note which gate skipped and why (the Playwright smoke legitimately skips unless
 `-IncludeE2E` is given and browser binaries are installed).
 
-Expected backend figure at this commit: **739 passed**, of which **345** are the P3
+Expected backend figure at this commit: **767 passed**, of which **373** are the P3
 suite (`backend/tests/p3`). Verified by collection and by a full run on the
 reviewed commit, not estimated:
 
 | Suite | Tests |
 |---|---|
-| `backend/tests` (whole backend) | **739 passed** |
-| `backend/tests/p3` (P3 suite) | **345** |
+| `backend/tests` (whole backend) | **767 passed** |
+| `backend/tests/p3` (P3 suite) | **373** |
 | ├ `test_p3_verification.py` | 29 |
 | ├ `test_p3_extraction.py` | 26 |
 | ├ `test_p3_edge_cases.py` (R06–R09) | 24 |
 | ├ `test_p3_review_corrections.py` (R01–R05) | 21 |
 | ├ `test_p3_rejection_recovery.py` (R21 rejection/recovery) | 21 |
-| ├ `test_p3_ocr_integration.py` (R11/R12 pytesseract + lock) | 17 |
-| ├ `test_p3_ocr_provenance.py` (Stage 1 OCR confirmation, `/text`, `0005` safety) | 31 |
+| ├ `test_p3_ocr_integration.py` (R11/R12 pytesseract + Stage 2 TSV layout) | 23 |
+| ├ `test_p3_ocr_provenance.py` (Stage 1/2 OCR confirmation, anti-FC-3, `/text`, `0005`) | 33 |
 | ├ `test_p3_r17_safety.py` (R17 OCR substitution + fail-closed) | 24 |
 | ├ `test_p3_r18_provenance.py` (R18 span exactness + bare label) | 14 |
 | ├ `test_p3_windows_findings.py` (R13–R16) | 49 |
-| ├ `test_windows_ocr_acceptance.py` (probe, W1 gate + handoff) | 53 |
+| ├ `test_windows_ocr_acceptance.py` (probe, W1 R21/source-confirmation + handoff) | 72 |
 | ├ `test_p3_upload.py` | 12 |
 | ├ `test_p3_authorization.py` | 12 |
-| └ `test_p3_fixtures.py` (incl. CRLF portability) | 12 |
+| └ `test_p3_fixtures.py` (incl. CRLF portability + PNG/JPEG legible bytes) | 13 |
 
 > **R21 note (current figures).** This table previously read **635 passed** for
 > the backend and **252** for P3. The R21 rejection/recovery work added 21 cases
@@ -558,6 +559,17 @@ reviewed commit, not estimated:
 > `test_p3_windows_findings.py` (47 -> 49), plus full `/health` dependency state
 > (`not_configured`, `ok`, `unavailable`) and host-`TESSERACT_CMD` fixture
 > isolation tests in `backend/tests/test_health.py` (+3).
+>
+> **Stage 6b.2 Stage 1 & Stage 2 (current figures).** Stage 1 (`8f7c007`/`e5d6dbb`)
+> added 31 regressions (`708 -> 739`, P3 `314 -> 345`) in `test_p3_ocr_provenance.py`
+> covering OCR confirmation, `/text`, migration `0005` safety, `max_page_text_chars`
+> alignment (`20,000`), and synthetic retention. Stage 2 adds 28 regressions
+> (`739 -> 767`, P3 `345 -> 373`): `build_legible_scan_image` JPEG bytes + determinism
+> in `test_p3_fixtures.py` (12 -> 13), TSV bounding-box layout reconstruction and
+> real-subprocess TSV fallback checks in `test_p3_ocr_integration.py` (17 -> 23),
+> anti-`FC-3` `1O5`->`105` confirmation and dual-path observation rules in
+> `test_p3_ocr_provenance.py` (31 -> 33), and W1 negative provenance + W1 positive
+> source-confirmation gates in `test_windows_ocr_acceptance.py` (53 -> 72).
 >
 > The R1-R8 R21 cases were written **RED first** and stayed RED until the
 > implementation landed. They are now all GREEN — R1/R1a/R1b/R2/R3 from the
@@ -628,6 +640,12 @@ evidence is bound to the exact commit it was produced from.
 | `W1 R21 rejection: fact immutable` | the rejected fact keeps its `raw_text`, `normalized_value`, `quality_flags` and exactly **one** decision row | R21 W1 |
 | `W1 R21 rejection: VI-002 stays open` | `VI-002` is still `state='open'` after the rejection (D-14) | R21 W1 |
 | `W1 R21 rejection: re-decision refused` | a second decision answers `409 E_FACT_ALREADY_DECIDED` and appends **no** row | R21 W1 |
+| `W1 source confirmation: OCR mappable candidate` | 40px legible `report_a_glucose.txt` scan yields mappable `104 mg/dL` `value` fact (`extractor='tesseract'`, `requires_source_confirmation=True`) | Stage 2 W1 |
+| `W1 source confirmation: bare verify refused` | bare `POST /verify` (`decision='verified'`) without `GET /file` or confirmations answers `400 E_VALIDATION` | Stage 2 W1 |
+| `W1 source confirmation: source retrieved and audited` | doctor calls `GET /file` (`200`) and `GET /text` (`200`), recording `document.file_read` / `document.text_read` audits | Stage 2 W1 |
+| `W1 source confirmation: source-confirmed verification` | explicit `source_image_compared=True`, `confirmed_value='104'`, `confirmed_unit='mg/dL'` verify all facts to `document_status='verified'` | Stage 2 W1 |
+| `W1 source confirmation: verified Observation created` | exactly **one** `verified_document` / `doctor_verified` glucose `104.0 mg/dL` Observation linked to `source_fact_id` | Stage 2 W1 |
+| `W1 source confirmation: persisted provenance and audit safety` | `document_page_text` (`extractor='tesseract'`, matching SHA-256), exact span equality on all facts, `source_truth_notice`, zero leaked clinical text in `audit_event` | Stage 2 W1 |
 
 `W1` is the only gate in this file that proves R21's rejection behaviour on the
 **real engine**. It is deliberately the mappable glucose fixture: with a hemoglobin
@@ -686,10 +704,11 @@ Copy this table into PR #10 (or attach the JSON) and fill it from the run above.
 | 20 | **W1** rejected fact immutable, one decision row | step 7 | | JSON gate entry |
 | 21 | **W1** `VI-002` remains `open` (D-14) | step 7 | | JSON gate entry |
 | 22 | **W1** re-decision → `409 E_FACT_ALREADY_DECIDED`, no new row | step 7 | | JSON gate entry |
-| 23 | **`GOLD-EX-11`** | step 7 | **`FAIL` / NOT PROVEN — see §9** | JSON gate entry + raw OCR text |
-| 24 | CI on the tested head | GitHub Actions | | run URL |
+| 23 | **W1 source confirmation** (6 rows: mappable candidate, bare verify refused, source retrieved/audited, confirmed verify, 1 linked Observation, persisted provenance + audit safety) | step 7 | | JSON gate entries |
+| 24 | **`GOLD-EX-11`** | step 7 | **`FAIL` / NOT PROVEN — see §9** | JSON gate entry + raw OCR text |
+| 25 | CI on the tested head | GitHub Actions | | run URL |
 
-Row 23 is filled in **as a failure** unless the real engine genuinely stops
+Row 24 is filled in **as a failure** unless the real engine genuinely stops
 producing the `1O5` reading. See §9: a preserved `GOLD-EX-11` failure is a
 **release blocker**, not a successful acceptance result.
 

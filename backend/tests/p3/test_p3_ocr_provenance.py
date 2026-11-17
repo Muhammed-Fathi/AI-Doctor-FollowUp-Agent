@@ -1304,3 +1304,342 @@ def test_stage1_demo_reset_clears_synthetic_document_page_text_and_lineage(
     assert any(
         row.event_type == "demo.reset" for row in db.execute(select(AuditEvent)).scalars().all()
     )
+
+
+# =============================================================================
+# 8. Stage 2 mandatory anti-FC-3 regression (layout-recovered 105 for 1O5)
+# =============================================================================
+
+
+def _tsv_o_confusion_substituted_105() -> dict[str, list]:
+    """Measured 40px TSV boxes for ``report_ocr_o_confusion.txt`` with OCR ``1O5`` -> ``105``."""
+    lines = [
+        [
+            (60, 74, 216, 30, "SYNTHETIC"),
+            (285, 74, 117, 30, "DEMO"),
+            (411, 75, 104, 28, "DATA"),
+            (524, 94, 10, 5, "-"),
+            (543, 74, 83, 30, "NOT"),
+            (635, 75, 26, 28, "A"),
+            (670, 75, 98, 28, "REAL"),
+            (777, 74, 175, 30, "MEDICAL"),
+            (961, 74, 160, 30, "RECORD"),
+        ],
+        [
+            (60, 133, 107, 29, "Demo"),
+            (176, 132, 124, 30, "Patient"),
+            (309, 133, 26, 28, "A"),
+            (443, 130, 67, 32, "Ref:"),
+            (519, 132, 232, 30, "DEMO-A-001"),
+            (859, 133, 120, 36, "Report"),
+            (988, 131, 88, 31, "date:"),
+            (1085, 132, 204, 30, "2026-10-20"),
+        ],
+        [
+            (60, 191, 85, 29, "Test:"),
+            (154, 189, 148, 31, "Glucose"),
+            (419, 189, 110, 31, "Value:"),
+            (538, 190, 76, 30, "105"),
+            (623, 189, 118, 39, "mg/dL"),
+        ],
+        [
+            (60, 246, 184, 32, "Reference"),
+            (253, 255, 113, 31, "range:"),
+            (375, 248, 46, 30, "70"),
+            (430, 268, 10, 5, "-"),
+            (449, 248, 69, 30, "110"),
+            (527, 247, 118, 39, "mg/dL"),
+        ],
+    ]
+    out: dict[str, list] = {
+        "level": [],
+        "page_num": [],
+        "block_num": [],
+        "par_num": [],
+        "line_num": [],
+        "word_num": [],
+        "left": [],
+        "top": [],
+        "width": [],
+        "height": [],
+        "conf": [],
+        "text": [],
+    }
+    for line_idx, words in enumerate(lines, start=1):
+        for word_idx, (left, top, width, height, tok) in enumerate(words, start=1):
+            out["level"].append(5)
+            out["page_num"].append(1)
+            out["block_num"].append(1)
+            out["par_num"].append(1)
+            out["line_num"].append(line_idx)
+            out["word_num"].append(word_idx)
+            out["left"].append(left)
+            out["top"].append(top)
+            out["width"].append(width)
+            out["height"].append(height)
+            out["conf"].append("95")
+            out["text"].append(tok)
+    return out
+
+
+def test_stage2_tsv_layout_substituted_105_blocked_from_autonomous_promotion(
+    api, patient_headers, doctor_headers, fixtures, db: Session, monkeypatch
+):
+    """Anti-FC-3: layout reconstruction making ``105`` parseable must not bypass review."""
+    import pytesseract
+
+    from app.services.documents import ocr as ocr_module
+
+    _clear_same_day_glucose(db)
+    tsv = _tsv_o_confusion_substituted_105()
+
+    # Run the *real* ocr.run_ocr pipeline with pytesseract returning collapsed plain text
+    # plus TSV bounding boxes where source `1O5` was misread as `105` at 95% confidence.
+    monkeypatch.setattr(ocr_module, "resolve_engine", lambda cmd: "/fake/tesseract")
+    monkeypatch.setattr(ocr_module, "engine_version", lambda cmd: "5.4.0.stage2-test")
+    monkeypatch.setattr(
+        pytesseract,
+        "image_to_string",
+        lambda image, **kw: "Test: Glucose Value: 105 mg/dL\nReference range: 70 - 110 mg/dL\n",
+    )
+    monkeypatch.setattr(pytesseract, "image_to_data", lambda image, **kw: tsv)
+
+    # Upload the real committed 40px render whose source literal is ``1O5 mg/dL``.
+    source_text = (
+        REPO_ROOT / "data" / "synthetic" / "documents" / "sources" / "report_ocr_o_confusion.txt"
+    ).read_text(encoding="utf-8")
+    assert "1O5 mg/dL" in source_text
+
+    doc_id = _upload_scan(
+        api,
+        patient_headers,
+        fixtures,
+        filename="o-confusion-40px.png",
+        source_name="report_ocr_o_confusion.txt",
+    )
+
+    ext = _extraction(api, doctor_headers, doc_id)
+    text_resp = api.get(f"/api/v1/documents/{doc_id}/text", headers=doctor_headers)
+    assert text_resp.status_code == 200, text_resp.text
+    persisted_text = text_resp.json()["pages"][0]["text"]
+
+    # Stage 2 layout reconstruction made all 5 fields parseable (clean high-conf 105).
+    by_field = _facts_by_field(ext)
+    assert set(by_field) == {"report_date", "test_name", "value", "unit", "reference_text"}
+    value_fact = by_field["value"][0]
+    unit_fact = by_field["unit"][0]
+    assert value_fact["normalized_value"] == "105"
+    assert value_fact["unit"] == "mg/dL"
+    assert value_fact["quality_flags"] == ["clean"]
+    assert value_fact["requires_source_confirmation"] is True
+    assert unit_fact["requires_source_confirmation"] is True
+    assert "Reference range: 70 - 110 mg/dL" in persisted_text
+    assert "70  -" not in persisted_text
+    for fact in ext["facts"]:
+        assert persisted_text[fact["char_start"] : fact["char_end"]] == fact["raw_text"]
+
+    # Never autonomously promoted regardless of confidence=0.95 and clean flags.
+    assert ext["document_status"] == "needs_verification"
+    assert _document_observations(db, doc_id) == []
+
+    # Bypass attempts BEFORE GET /file: both `verified` and `corrected` must fail closed.
+    assert _verify(api, doctor_headers, doc_id, value_fact["fact_id"]).status_code == 400
+    assert (
+        _verify(
+            api,
+            doctor_headers,
+            doc_id,
+            value_fact["fact_id"],
+            source_image_compared=True,
+            confirmed_value="105",
+            confirmed_unit="mg/dL",
+        ).status_code
+        == 400
+    )
+    assert (
+        _verify(
+            api,
+            doctor_headers,
+            doc_id,
+            value_fact["fact_id"],
+            decision="corrected",
+            corrected_value="104",
+            corrected_unit="mg/dL",
+            source_image_compared=True,
+            reason="attempted bypass without GET /file",
+        ).status_code
+        == 400
+    )
+
+    # Doctor retrieves the original source image (`GET /file` records document.file_read).
+    _fetch_source_file(api, doctor_headers, doc_id)
+
+    # Missing/mismatched confirmations AFTER GET /file must still fail closed.
+    for bad_kwargs in (
+        {"confirmed_value": "105", "confirmed_unit": "mg/dL"},  # missing source_image_compared
+        {"source_image_compared": True, "confirmed_unit": "mg/dL"},  # missing confirmed_value
+        {"source_image_compared": True, "confirmed_value": "105"},  # missing confirmed_unit
+        {
+            "source_image_compared": True,
+            "confirmed_value": "104",
+            "confirmed_unit": "mg/dL",
+        },  # numeric mismatch
+        {
+            "source_image_compared": True,
+            "confirmed_value": "105",
+            "confirmed_unit": "g/dL",
+        },  # unit mismatch
+        {
+            "decision": "corrected",
+            "corrected_value": "104",
+            "corrected_unit": "mg/dL",
+            "source_image_compared": False,
+        },  # corrected without source_image_compared=True
+        {
+            "decision": "corrected",
+            "corrected_value": "104",
+            "corrected_unit": "mgidL",
+            "source_image_compared": True,
+        },  # corrected with unallowlisted unit
+        {
+            "decision": "corrected",
+            "corrected_value": "104",
+            "confirmed_unit": "g/dL",
+            "source_image_compared": True,
+        },  # corrected with mismatched confirmed_unit
+        {
+            "decision": "corrected",
+            "corrected_value": "104",
+            "corrected_unit": "g/dL",
+            "confirmed_unit": "mg/dL",
+            "source_image_compared": True,
+        },  # corrected_unit conflicts with confirmed_unit
+    ):
+        resp = _verify(api, doctor_headers, doc_id, value_fact["fact_id"], **bad_kwargs)
+        assert resp.status_code == 400, (bad_kwargs, resp.text)
+        assert resp.json()["code"] == "E_VALIDATION"
+
+    assert _document_observations(db, doc_id) == []
+
+    # Doctor inspects the real image showing `1O5` and rejects the substituted `105` reading.
+    rej = _verify(
+        api,
+        doctor_headers,
+        doc_id,
+        value_fact["fact_id"],
+        decision="rejected",
+        reason="source image actually shows ambiguous 1O5, not 105",
+    )
+    assert rej.status_code == 200, rej.text
+    doc_row = db.execute(select(Document).where(Document.id == doc_id)).scalar_one()
+    assert doc_row.extraction_status == "failed"
+    assert doc_row.failure_code == "measurement_rejected"
+    assert _document_observations(db, doc_id) == []
+
+
+def test_stage2_tsv_layout_corrected_and_verified_observation_creation_rules(
+    api, patient_headers, doctor_headers, fixtures, db: Session, monkeypatch
+):
+    """Anti-FC-3 control: verified and corrected OCR paths promote exactly once with full checks."""
+    import pytesseract
+
+    from app.services.documents import ocr as ocr_module
+
+    _clear_same_day_glucose(db)
+    tsv = _tsv_o_confusion_substituted_105()
+    monkeypatch.setattr(ocr_module, "resolve_engine", lambda cmd: "/fake/tesseract")
+    monkeypatch.setattr(ocr_module, "engine_version", lambda cmd: "5.4.0.stage2-test")
+    monkeypatch.setattr(pytesseract, "image_to_string", lambda image, **kw: "collapsed")
+    monkeypatch.setattr(pytesseract, "image_to_data", lambda image, **kw: tsv)
+
+    # Path A: doctor inspects source image (`GET /file`), supplies source_image_compared=True,
+    # and corrects the reading to a valid numeric value + mg/dL unit -> 1 Observation (value=106).
+    doc_a = _upload_scan(
+        api,
+        patient_headers,
+        fixtures,
+        filename="corrected-flow.png",
+        source_name="report_ocr_o_confusion.txt",
+    )
+    _fetch_source_file(api, doctor_headers, doc_a)
+    facts_a = _extraction(api, doctor_headers, doc_a)["facts"]
+    for fact in facts_a:
+        if fact["field_name"] == "value":
+            resp = _verify(
+                api,
+                doctor_headers,
+                doc_a,
+                fact["fact_id"],
+                decision="corrected",
+                corrected_value="106",
+                corrected_unit="mg/dL",
+                source_image_compared=True,
+                reason="doctor confirmed value 106 against source image",
+            )
+        elif fact["field_name"] == "unit":
+            resp = _verify(
+                api,
+                doctor_headers,
+                doc_a,
+                fact["fact_id"],
+                source_image_compared=True,
+                confirmed_unit="mg/dL",
+            )
+        else:
+            resp = _verify(api, doctor_headers, doc_a, fact["fact_id"])
+        assert resp.status_code == 200, resp.text
+
+    obs_a = _document_observations(db, doc_a)
+    assert len(obs_a) == 1
+    assert obs_a[0].source == "verified_document"
+    assert obs_a[0].trust_level == "doctor_verified"
+    assert obs_a[0].measure_type == "glucose"
+    assert obs_a[0].value == pytest.approx(106.0)
+    assert obs_a[0].unit == "mg/dL"
+
+    # Path B: doctor inspects source image (`GET /file`), verifies with matching 105 + mg/dL
+    # -> 1 Observation (value=105) and no OCR text leaked in audit events.
+    _clear_same_day_glucose(db)
+    # Remove obs_a from 2026-10-20 before Path B so same-day VI-006 does not block.
+    db.delete(obs_a[0])
+    db.commit()
+
+    jpeg_bytes = fixtures.build_legible_scan_image("report_ocr_o_confusion.txt", fmt="JPEG")
+    upload_b = api.post(
+        UPLOAD,
+        headers=patient_headers,
+        files={"file": ("verified-flow.jpg", jpeg_bytes, "image/jpeg")},
+    )
+    assert upload_b.status_code == 202, upload_b.text
+    doc_b = upload_b.json()["document_id"]
+    _fetch_source_file(api, doctor_headers, doc_b)
+    facts_b = _extraction(api, doctor_headers, doc_b)["facts"]
+    for fact in facts_b:
+        kwargs: dict[str, object] = {}
+        if fact["field_name"] == "value":
+            kwargs = {
+                "source_image_compared": True,
+                "confirmed_value": "105",
+                "confirmed_unit": "mg/dL",
+            }
+        elif fact["field_name"] == "unit":
+            kwargs = {
+                "source_image_compared": True,
+                "confirmed_unit": "mg/dL",
+            }
+        resp = _verify(api, doctor_headers, doc_b, fact["fact_id"], **kwargs)
+        assert resp.status_code == 200, resp.text
+
+    obs_b = _document_observations(db, doc_b)
+    assert len(obs_b) == 1
+    assert obs_b[0].source == "verified_document"
+    assert obs_b[0].trust_level == "doctor_verified"
+    assert obs_b[0].value == pytest.approx(105.0)
+    assert obs_b[0].unit == "mg/dL"
+
+    audits = db.execute(select(AuditEvent)).scalars().all()
+    for audit in audits:
+        detail = audit.safe_detail or ""
+        assert "105" not in detail
+        assert "106" not in detail
+        assert "Glucose" not in detail
