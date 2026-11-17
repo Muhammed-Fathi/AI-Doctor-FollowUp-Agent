@@ -1924,6 +1924,9 @@ def gate_source_confirmation(results: list[Result], objects: dict | None) -> Non
             elif fact["field_name"] == "unit":
                 verify_body["source_image_compared"] = True
                 verify_body["confirmed_unit"] = fact["normalized_value"]
+            elif fact.get("requires_source_confirmation"):
+                verify_body["source_image_compared"] = True
+                verify_body["confirmed_value"] = fact["normalized_value"]
             verify = http.post(
                 f"/api/v1/documents/{document_id}/verify",
                 headers=doctor_headers,

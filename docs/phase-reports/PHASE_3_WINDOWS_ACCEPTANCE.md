@@ -498,14 +498,14 @@ Record the per-gate summary block **and** the exit code. `SKIPPED` is never a pa
 note which gate skipped and why (the Playwright smoke legitimately skips unless
 `-IncludeE2E` is given and browser binaries are installed).
 
-Expected backend figure at this commit: **767 passed**, of which **373** are the P3
+Expected backend figure at this commit: **789 passed**, of which **395** are the P3
 suite (`backend/tests/p3`). Verified by collection and by a full run on the
 reviewed commit, not estimated:
 
 | Suite | Tests |
 |---|---|
-| `backend/tests` (whole backend) | **767 passed** |
-| `backend/tests/p3` (P3 suite) | **373** |
+| `backend/tests` (whole backend) | **789 passed** |
+| `backend/tests/p3` (P3 suite) | **395** |
 | ├ `test_p3_verification.py` | 29 |
 | ├ `test_p3_extraction.py` | 26 |
 | ├ `test_p3_edge_cases.py` (R06–R09) | 24 |
@@ -515,6 +515,7 @@ reviewed commit, not estimated:
 | ├ `test_p3_ocr_provenance.py` (Stage 1/2 OCR confirmation, anti-FC-3, `/text`, `0005`) | 33 |
 | ├ `test_p3_r17_safety.py` (R17 OCR substitution + fail-closed) | 24 |
 | ├ `test_p3_r18_provenance.py` (R18 span exactness + bare label) | 14 |
+| ├ `test_p3_stage3_verification_hardening.py` (Stage 3 `G11-D1`..`G11-D6` hardening) | 22 |
 | ├ `test_p3_windows_findings.py` (R13–R16) | 49 |
 | ├ `test_windows_ocr_acceptance.py` (probe, W1 R21/source-confirmation + handoff) | 72 |
 | ├ `test_p3_upload.py` | 12 |
@@ -560,16 +561,22 @@ reviewed commit, not estimated:
 > (`not_configured`, `ok`, `unavailable`) and host-`TESSERACT_CMD` fixture
 > isolation tests in `backend/tests/test_health.py` (+3).
 >
-> **Stage 6b.2 Stage 1 & Stage 2 (current figures).** Stage 1 (`8f7c007`/`e5d6dbb`)
+> **Stage 6b.2 Stage 1, Stage 2 & Stage 3 (current figures).** Stage 1 (`8f7c007`/`e5d6dbb`)
 > added 31 regressions (`708 -> 739`, P3 `314 -> 345`) in `test_p3_ocr_provenance.py`
 > covering OCR confirmation, `/text`, migration `0005` safety, `max_page_text_chars`
-> alignment (`20,000`), and synthetic retention. Stage 2 adds 28 regressions
+> alignment (`20,000`), and synthetic retention. Stage 2 (`46ee188`) added 28 regressions
 > (`739 -> 767`, P3 `345 -> 373`): `build_legible_scan_image` JPEG bytes + determinism
 > in `test_p3_fixtures.py` (12 -> 13), TSV bounding-box layout reconstruction and
 > real-subprocess TSV fallback checks in `test_p3_ocr_integration.py` (17 -> 23),
 > anti-`FC-3` `1O5`->`105` confirmation and dual-path observation rules in
 > `test_p3_ocr_provenance.py` (31 -> 33), and W1 negative provenance + W1 positive
 > source-confirmation gates in `test_windows_ocr_acceptance.py` (53 -> 72).
+> Stage 3 added 22 regressions (`767 -> 789`, P3 `373 -> 395`) in
+> `test_p3_stage3_verification_hardening.py` enforcing `G11-D1`..`G11-D6` (fresh
+> post-extraction `GET /file` audit ordering, `requires_source_confirmation` across
+> all 5 OCR `FactField`s + `ambiguous_date` refusal, pending-sibling unit consistency,
+> `_create_observation_from_mapping` defense-in-depth, and mandatory `reason` on OCR
+> corrections and confusable digits `0`/`1`/`5`/`8`).
 >
 > The R1-R8 R21 cases were written **RED first** and stayed RED until the
 > implementation landed. They are now all GREEN — R1/R1a/R1b/R2/R3 from the

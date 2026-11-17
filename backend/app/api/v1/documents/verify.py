@@ -125,6 +125,7 @@ def verify_fact(
         source_image_compared=payload.source_image_compared,
         confirmed_value=payload.confirmed_value,
         confirmed_unit=payload.confirmed_unit,
+        now=now,
     )
 
     append_audit_event(

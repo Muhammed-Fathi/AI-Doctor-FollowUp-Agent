@@ -32,7 +32,7 @@ from app.api.v1.auth.dependencies import (
     RequestId,
     bearer_scheme,
 )
-from app.core.enums import AuditOutcome, DocumentStatus, ExtractionPath, FactField
+from app.core.enums import AuditOutcome, DocumentStatus, ExtractionPath
 from app.core.errors import EXTRACTION_PENDING_DETAIL, ApiError, ErrorCode, document_error
 from app.db.models import DocumentPageText, ExtractedFact, ExtractionAttempt
 from app.schemas.document import (
@@ -134,11 +134,8 @@ def _evidence_for(fact: ExtractedFact) -> EvidenceRef:
 
 
 def _requires_source_confirmation(fact: ExtractedFact) -> bool:
-    """Return True when an OCR measurement or unit requires source-image review."""
-    return fact.extractor == ExtractionPath.TESSERACT.value and fact.field_name in {
-        FactField.VALUE.value,
-        FactField.UNIT.value,
-    }
+    """Return True when an OCR-extracted fact requires source-image review."""
+    return fact.extractor == ExtractionPath.TESSERACT.value
 
 
 def _fact_schema(fact: ExtractedFact) -> ExtractedFactSchema:

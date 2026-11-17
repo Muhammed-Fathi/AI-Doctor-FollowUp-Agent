@@ -19,6 +19,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -27,6 +28,8 @@ from sqlalchemy.orm import Session
 from app.core.clock import format_utc, utc_now
 from app.core.config import Settings
 from app.core.enums import (
+    ActorType,
+    AuditOutcome,
     DocumentMimeType,
     DocumentStatus,
     ExtractionPath,
@@ -41,7 +44,9 @@ from app.core.errors import (
     ErrorCode,
     document_error,
 )
-from app.db.models import Document, DocumentPageText, ExtractedFact, ExtractionAttempt
+from app.db.models import Document, DocumentPageText, ExtractedFact, ExtractionAttempt, new_uuid
+from app.services.audit import append_audit_event
+from app.services.documents import EVENT_DOCUMENT_EXTRACTED
 from app.services.documents.field_parser import (
     ParseResult,
     parse_pages,
@@ -186,6 +191,7 @@ def accept_upload(
     declared_type: str | None,
     settings: Settings,
     recovery_of: str | None = None,
+    now: datetime | None = None,
 ) -> UploadOutcome:
     """Validate and persist one upload.
 
@@ -231,7 +237,7 @@ def accept_upload(
         size_bytes=validated.size_bytes,
         page_count=validated.page_count,
         extraction_status=DocumentStatus.PENDING_EXTRACTION.value,
-        uploaded_at=format_utc(utc_now()),
+        uploaded_at=format_utc(now or utc_now()),
         recovered_from_document_id=(source.id if source is not None else None),
     )
     db.add(document)
@@ -264,6 +270,7 @@ def _record_attempt(
     error_code: str | None,
     duration_ms: int,
     tool_version: str | None,
+    now: datetime | None = None,
 ) -> ExtractionAttempt:
     """Persist one typed extraction attempt."""
     attempt = ExtractionAttempt(
@@ -278,7 +285,7 @@ def _record_attempt(
         error_code=error_code,
         duration_ms=duration_ms,
         tool_version=tool_version,
-        created_at=format_utc(utc_now()),
+        created_at=format_utc(now or utc_now()),
     )
     db.add(attempt)
     return attempt
@@ -291,6 +298,7 @@ def _persist_facts(
     parse_result: ParseResult,
     pages: list[PageText],
     ocr_confidence_floor: float,
+    now: datetime | None = None,
 ) -> list[ExtractedFact]:
     """Persist candidate facts, refusing any fact whose span does not resolve.
 
@@ -298,6 +306,7 @@ def _persist_facts(
     span falls outside the stored page text is a programming error, so it is
     dropped rather than stored with an unusable provenance.
     """
+    created_ts = format_utc(now or utc_now())
     stored: list[ExtractedFact] = []
     for candidate in parse_result.facts:
         if not span_is_resolvable(pages, candidate):
@@ -334,7 +343,7 @@ def _persist_facts(
             confidence=confidence,
             extractor=candidate.extractor.value,
             verification_status=FactVerificationStatus.PENDING.value,
-            created_at=format_utc(utc_now()),
+            created_at=created_ts,
         )
         db.add(fact)
         stored.append(fact)
@@ -389,11 +398,15 @@ def _bound_pages(pages: list[PageText], *, max_chars: int) -> list[PageText]:
 
 
 def _persist_page_texts(
-    db: Session, *, document: Document, pages: list[PageText]
+    db: Session,
+    *,
+    document: Document,
+    pages: list[PageText],
+    now: datetime | None = None,
 ) -> list[DocumentPageText]:
     """Persist one ``DocumentPageText`` row per extracted page."""
     stored: list[DocumentPageText] = []
-    now = format_utc(utc_now())
+    created_ts = format_utc(now or utc_now())
     for page in pages:
         row = DocumentPageText(
             document_id=document.id,
@@ -404,14 +417,42 @@ def _persist_page_texts(
             text_length=len(page.text),
             non_whitespace_chars=page.char_count,
             text_sha256=hashlib.sha256(page.text.encode("utf-8")).hexdigest(),
-            created_at=now,
+            created_at=created_ts,
         )
         db.add(row)
         stored.append(row)
     return stored
 
 
-def run_extraction(db: Session, *, document: Document, settings: Settings) -> ExtractionOutcome:
+def _emit_extracted_audit(db: Session, *, document: Document, now: datetime) -> None:
+    """Append an ordering audit anchor recording when extraction completed."""
+    outcome = (
+        AuditOutcome.ERROR
+        if document.extraction_status == DocumentStatus.FAILED.value
+        else AuditOutcome.OK
+    )
+    append_audit_event(
+        db,
+        event_type=EVENT_DOCUMENT_EXTRACTED,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+        outcome=outcome,
+        request_id=new_uuid(),
+        now=now,
+        patient_id=document.patient_id,
+        subject_type="document",
+        subject_id=document.id,
+        detail_fragments=(f"status={document.extraction_status}",),
+    )
+
+
+def run_extraction(
+    db: Session,
+    *,
+    document: Document,
+    settings: Settings,
+    now: datetime | None = None,
+) -> ExtractionOutcome:
     """Extract a document, recording attempts and candidate facts.
 
     Transitions ``pending_extraction`` to ``extracted``/``needs_verification``/
@@ -420,6 +461,7 @@ def run_extraction(db: Session, *, document: Document, settings: Settings) -> Ex
     """
     from app.services.documents.storage import resolve_for_read
 
+    effective_now = now or utc_now()
     started = time.monotonic()
     try:
         payload = resolve_for_read(
@@ -428,6 +470,7 @@ def run_extraction(db: Session, *, document: Document, settings: Settings) -> Ex
     except FileNotFoundError:
         document.extraction_status = DocumentStatus.FAILED.value
         document.failure_code = ErrorCode.PARSE_FAILED.value
+        _emit_extracted_audit(db, document=document, now=effective_now)
         return ExtractionOutcome(document=document, untrusted_content_detected=False)
 
     pages: list[PageText] = []
@@ -451,7 +494,9 @@ def run_extraction(db: Session, *, document: Document, settings: Settings) -> Ex
                 error_code=ErrorCode.PARSE_FAILED.value,
                 duration_ms=int((time.monotonic() - started) * 1000),
                 tool_version=None,
+                now=effective_now,
             )
+            _emit_extracted_audit(db, document=document, now=effective_now)
             return ExtractionOutcome(document=document, untrusted_content_detected=False)
 
         _record_attempt(
@@ -467,16 +512,23 @@ def run_extraction(db: Session, *, document: Document, settings: Settings) -> Ex
             error_code=None,
             duration_ms=int((time.monotonic() - started) * 1000),
             tool_version=None,
+            now=effective_now,
         )
 
         needed = pages_needing_ocr(pages, min_chars=settings.text_layer_min_chars)
         if needed:
             ocr_pages, ocr_failure = _ocr_pages(
-                db, document=document, payload=payload, needed=needed, settings=settings
+                db,
+                document=document,
+                payload=payload,
+                needed=needed,
+                settings=settings,
+                now=effective_now,
             )
             if ocr_failure is not None:
                 document.extraction_status = DocumentStatus.FAILED.value
                 document.failure_code = ocr_failure
+                _emit_extracted_audit(db, document=document, now=effective_now)
                 return ExtractionOutcome(document=document, untrusted_content_detected=False)
             by_index = {page.page_index: page for page in pages}
             for page in ocr_pages:
@@ -484,16 +536,17 @@ def run_extraction(db: Session, *, document: Document, settings: Settings) -> Ex
             pages = [by_index[index] for index in sorted(by_index)]
     else:
         ocr_pages, ocr_failure = _ocr_image_document(
-            db, document=document, payload=payload, settings=settings
+            db, document=document, payload=payload, settings=settings, now=effective_now
         )
         if ocr_failure is not None:
             document.extraction_status = DocumentStatus.FAILED.value
             document.failure_code = ocr_failure
+            _emit_extracted_audit(db, document=document, now=effective_now)
             return ExtractionOutcome(document=document, untrusted_content_detected=False)
         pages = ocr_pages
 
     pages = _bound_pages(pages, max_chars=settings.max_page_text_chars)
-    _persist_page_texts(db, document=document, pages=pages)
+    _persist_page_texts(db, document=document, pages=pages, now=effective_now)
     parse_result = parse_pages(pages)
 
     # The document's own identity claim, stored once so ``VI-004`` can be
@@ -518,6 +571,7 @@ def run_extraction(db: Session, *, document: Document, settings: Settings) -> Ex
         parse_result=parse_result,
         pages=pages,
         ocr_confidence_floor=settings.ocr_confidence_floor,
+        now=effective_now,
     )
 
     if not stored:
@@ -525,12 +579,14 @@ def run_extraction(db: Session, *, document: Document, settings: Settings) -> Ex
         # inspect but cannot become verified.
         document.extraction_status = DocumentStatus.FAILED.value
         document.failure_code = "no_facts_extracted"
+        _emit_extracted_audit(db, document=document, now=effective_now)
         return ExtractionOutcome(
             document=document,
             untrusted_content_detected=parse_result.untrusted_content_detected,
         )
 
     document.extraction_status = DocumentStatus.NEEDS_VERIFICATION.value
+    _emit_extracted_audit(db, document=document, now=effective_now)
     return ExtractionOutcome(
         document=document,
         untrusted_content_detected=parse_result.untrusted_content_detected,
@@ -544,6 +600,7 @@ def _ocr_pages(
     payload: bytes,
     needed: list[int],
     settings: Settings,
+    now: datetime | None = None,
 ) -> tuple[list[PageText], str | None]:
     """OCR the selected pages, honouring the bounded retry budget.
 
@@ -590,6 +647,7 @@ def _ocr_pages(
                     error_code=ErrorCode.DEPENDENCY_MISSING.value,
                     duration_ms=int((time.monotonic() - started) * 1000),
                     tool_version=None,
+                    now=now,
                 )
                 return results, ErrorCode.DEPENDENCY_MISSING.value
 
@@ -607,6 +665,7 @@ def _ocr_pages(
                 error_code=None if char_count > 0 else "empty_ocr",
                 duration_ms=int((time.monotonic() - started) * 1000),
                 tool_version=ocr.tool_version,
+                now=now,
             )
 
             if char_count >= settings.text_layer_min_chars:
@@ -638,7 +697,12 @@ def _ocr_pages(
 
 
 def _ocr_image_document(
-    db: Session, *, document: Document, payload: bytes, settings: Settings
+    db: Session,
+    *,
+    document: Document,
+    payload: bytes,
+    settings: Settings,
+    now: datetime | None = None,
 ) -> tuple[list[PageText], str | None]:
     """OCR a PNG/JPEG document as a single page."""
     import io
@@ -673,6 +737,7 @@ def _ocr_image_document(
             error_code=ErrorCode.DEPENDENCY_MISSING.value,
             duration_ms=int((time.monotonic() - started) * 1000),
             tool_version=None,
+            now=now,
         )
         return [], ErrorCode.DEPENDENCY_MISSING.value
 
@@ -690,6 +755,7 @@ def _ocr_image_document(
         error_code=None if char_count > 0 else "empty_ocr",
         duration_ms=int((time.monotonic() - started) * 1000),
         tool_version=ocr.tool_version,
+        now=now,
     )
     return [
         PageText(

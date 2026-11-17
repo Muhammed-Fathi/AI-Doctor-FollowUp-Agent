@@ -402,7 +402,7 @@ here, and on restart the service reconciles against these rows (`STATE_AND_GRAPH
 | Column | Type | Constraints | Notes |
 |---|---|---|---|
 | `id` | TEXT(36) | PK | |
-| `event_type` | TEXT(48) | NOT NULL | e.g. `workflow.run.started`, `fact.verified`, `approval.recorded`, `access.denied` |
+| `event_type` | TEXT(48) | NOT NULL | e.g. `document.extracted`, `document.file_read`, `document.text_read`, `fact.verified`, `workflow.run.started`, `approval.recorded`, `access.denied` |
 | `actor_type` | TEXT(16) | NOT NULL, CHECK in (`user`,`system`,`demo_admin`) | |
 | `actor_id` | TEXT(36) | NULL | NULL only for pure system events |
 | `patient_id` | TEXT(36) | NULL | Scoping for doctor views |
@@ -559,7 +559,7 @@ Per-fixture expectation (`MAP-01`):
 
 - No real identifiers, no contact details, no national IDs, no addresses. Names are obviously fictional (`Demo Patient A — Sara`).
 - The `external_ref` is a synthetic demo reference and must be prefixed `DEMO-`.
-- Logs and audit `safe_detail` contain IDs, route names, outcomes, and status codes only — never OCR text, document contents, or sensitive measurement values (`document.file_read`, `document.text_read`, `fact.verified`).
+- Logs and audit `safe_detail` contain IDs, route names, outcomes, and status codes only — never OCR text, document contents, or sensitive measurement values (`document.extracted`, `document.file_read`, `document.text_read`, `fact.verified`). Under Stage 3 (`G11-D2`/`G11-D5`), `document.file_read` must occur strictly after the latest `ExtractionAttempt` / `document.extracted` anchor for the deciding doctor, and `_create_observation_from_mapping` re-verifies fresh file access, `source_image_compared=1`, exact `confirmed_value`/`confirmed_unit`, and mandatory `reason` (all OCR corrections and confusable-digit `0`/`1`/`5`/`8` confirmations) before creating an `Observation`.
 - Every runtime artifact is disposable; backup/restore is out of scope for the MVP.
 
 ### 5.1 Synthetic Document-Lifecycle Retention Policy (`IMP-04` — Educational / Synthetic Data Only)

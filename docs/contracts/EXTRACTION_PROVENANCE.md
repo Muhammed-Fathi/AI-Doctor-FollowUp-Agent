@@ -121,8 +121,8 @@ Rules:
 
 | Action | Effect |
 |---|---|
-| `verified` | Accept normalized value/unit as-is; the fact becomes admissible. For `extractor='tesseract'` `value`/`unit` facts (when numeric), requires prior doctor `GET /file` access (`document.file_read`), `source_image_compared=true`, and exact `confirmed_value` + closed `confirmed_unit` match |
-| `corrected` | Store `previous_value`/`new_value`/`new_unit`, mark the original `rejected` and create a corrected fact marked `verified`. For `extractor='tesseract'` `value`/`unit` facts, also requires prior doctor `GET /file` access, `source_image_compared=true`, and valid unit confirmation (`corrected_unit` or matching `confirmed_unit`) |
+| `verified` | Accept normalized value as-is; the fact becomes admissible. For **all five** `extractor='tesseract'` `FactField`s (`report_date`, `test_name`, `value`, `unit`, `reference_text`), requires fresh post-extraction doctor `GET /file` access (`document.file_read` strictly after latest `ExtractionAttempt` / `document.extracted`), `source_image_compared=true`, exact `confirmed_value` / closed `confirmed_unit` match (refusing `ambiguous_date` / `unparseable_value`), pending/verified sibling unit consistency, and mandatory non-empty `reason` whenever confusable digits (`0`, `1`, `5`, `8`) are present |
+| `corrected` | Store `previous_value`/`new_value`/`new_unit`, mark the original `rejected` and create a corrected fact marked `verified`. For **all five** `extractor='tesseract'` `FactField`s, also requires fresh post-extraction doctor `GET /file` access, `source_image_compared=true`, mandatory non-empty `reason`, valid confirmation consistency (`corrected_unit`/`confirmed_*`), and sibling unit consistency |
 | `rejected` | Fact is never used; requires no confirmation fields and triggers R21 rejection-first terminal `failed` status |
 
 Rules:

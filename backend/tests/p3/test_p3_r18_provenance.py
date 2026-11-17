@@ -252,16 +252,29 @@ def test_r18_b_bare_label_cannot_reach_verified_after_approving_other_facts(
 
     _inject_ocr(monkeypatch, BARE_LABEL_TEXT)
     document_id = _upload_scan(api, patient_headers, fixtures)
+    assert (
+        api.get(f"/api/v1/documents/{document_id}/file", headers=doctor_headers).status_code == 200
+    )
 
     body = _extraction(api, doctor_headers, document_id)
     non_measurement = [f for f in body["facts"] if f["field_name"] != "value"]
     assert non_measurement, "precondition: the document carries other readable facts"
 
     for fact in non_measurement:
+        verify_payload: dict[str, object] = {
+            "fact_id": fact["fact_id"],
+            "decision": "verified",
+            "source_image_compared": True,
+            "reason": "verified against source scan",
+        }
+        if fact["field_name"] == "unit":
+            verify_payload["confirmed_unit"] = fact["normalized_value"]
+        else:
+            verify_payload["confirmed_value"] = fact["normalized_value"]
         response = api.post(
             f"/api/v1/documents/{document_id}/verify",
             headers=doctor_headers,
-            json={"fact_id": fact["fact_id"], "decision": "verified"},
+            json=verify_payload,
         )
         assert response.status_code == 200, response.text
 

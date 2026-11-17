@@ -1909,6 +1909,39 @@ Not fixed, and flagged rather than changed: `span_is_resolvable()` still checks 
 only and cannot detect a future `raw_text`/span mismatch. Asserting equality inside it
 would change validation semantics for every fact, which was not authorized.
 
+## V.16 Stage 3 — OCR Verification Safety Hardening (`G11-D1`..`G11-D6`)
+
+Stage 3 hardens the server-side verification boundary on branch
+`arena/752cca1f-ai-doctor-followup-agent` (following Stage 1 `8f7c007`/`e5d6dbb` and
+Stage 2 `46ee188`) without tuning or mutating `GOLD-EX-11`:
+
+| Requirement | Hardening implemented |
+|---|---|
+| `G11-D1` (`GOLD-EX-11` preservation) | `report_ocr_o_confusion.txt` keeps `"1O5 mg/dL"`, deterministic 40 px rendering & parser refusal of `"1O5"` remain untouched, and `gate_ocr_corruption` continues failing closed when the engine emits `105`. |
+| `G11-D2` (Fresh post-extraction `GET /file`) | `upload_document` propagates request `now` through `accept_upload` and `run_extraction`; `run_extraction` emits a per-run `document.extracted` audit anchor (`request_id=new_uuid()`). `_doctor_accessed_source_file` proves the deciding doctor's `document.file_read` (`outcome='ok'`) occurred strictly after the latest `ExtractionAttempt` (`created_at` comparison with `document.extracted` SQLite `rowid` tie-breaker for sub-second / frozen-clock sequences). Pre-extraction, pre-re-extraction, patient, denied, and cross-document reads fail closed (`400 E_VALIDATION`). |
+| `G11-D3` (All 5 OCR `FactField`s) | `_requires_source_confirmation` applies to all `extractor='tesseract'` facts (`report_date`, `test_name`, `value`, `unit`, `reference_text`). OCR `report_date`, `test_name`, and `reference_text` enforce fresh `GET /file`, `source_image_compared=true`, exact `confirmed_value`, and refuse `ambiguous_date` (`normalized_value=None`) as `verified`. |
+| `G11-D4` (Pending-sibling unit consistency) | `_active_sibling_units` prevents `value` (`verified` and `corrected`) and `unit` (`verified`) from diverging from any active (`pending` or `verified`) sibling fact regardless of decision order, while `unit` (`corrected`) checks `verified` `value` siblings so wrong-unit recovery (`unit` first, then `value`) stays deadlock-free. |
+| `G11-D5` (`_create_observation_from_mapping` defense-in-depth) | Observation promotion independently enforces fresh `GET /file` access, `source_image_compared=1`, `confirmed_unit == candidate.unit`, `Decimal`-equivalent `confirmed_value`/`new_value`, mandatory `reason`, and matching confirmation across `source_fact` and all active verified OCR siblings (`report_date`, `test_name`, `unit`, `reference_text`). |
+| `G11-D6` (Mandatory `reason`) | Non-blank `reason` (`400 E_VALIDATION`) is required on all OCR `decision='corrected'` calls and on OCR `decision='verified'` calls containing confusable digits (`0`, `1`, `5`, `8`) across `(raw_text, normalized_value, confirmed_value)`. Non-confusable OCR confirmations (e.g. `74`, `mg/dL`, `Glucose`) and all `rejected` / `pypdf` calls remain frictionless. |
+
+### Required P6 Doctor Review UI Controls (Carry-Forward Specification)
+
+When building the P6 frontend document review UI, the client MUST enforce matching UI ergonomics
+without undermining server-side Stage 3 guards:
+
+1. **No bulk or auto-attested controls:** Never provide `Verify All` / `Select All` buttons and never
+   render `source_image_compared` pre-checked by default.
+2. **Side-by-side source viewer:** Display `GET /file` visually beside `GET /text` (labelled
+   untrusted OCR output) and candidate facts; keep `source_image_compared` and confirmation submit
+   actions gated until the doctor has inspected the loaded `GET /file` image/PDF in the viewer.
+3. **Explicit typed/confirmed entry per OCR fact:** For every `requires_source_confirmation=true`
+   fact (`report_date`, `test_name`, `value`, `unit`, `reference_text`), require explicit doctor
+   confirmation of `confirmed_value` / `confirmed_unit` (never auto-populating confusable-digit
+   confirmations behind a single blind click).
+4. **Visible `reason` prompt & unblocked rejection:** Prompt visibly for a non-empty `reason`
+   on every OCR correction and whenever an OCR value/date/reference contains confusable digits
+   (`0`, `1`, `5`, `8`), while keeping `Reject` (`decision='rejected'`) immediately accessible.
+
 ## V.7 Status
 
 **P3 remains `IN_REVIEW`.** No PASS, no self-approval, no merge, no P4/P5. One

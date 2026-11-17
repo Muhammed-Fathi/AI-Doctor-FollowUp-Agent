@@ -132,6 +132,25 @@ def _verify(api, doctor_headers, document_id: str, fact_id: str, **body):
     )
 
 
+def _verify_source_reviewed(api, doctor_headers, document_id: str, fact: dict):
+    """Verify an OCR fact with Stage 3 source confirmation & reason."""
+    kwargs: dict[str, object] = {
+        "source_image_compared": True,
+        "reason": "verified against source scan",
+    }
+    if fact["field_name"] == "value":
+        if fact["normalized_value"] is not None:
+            kwargs["confirmed_value"] = fact["normalized_value"]
+        if fact["unit"] is not None:
+            kwargs["confirmed_unit"] = fact["unit"]
+    elif fact["field_name"] == "unit":
+        if fact["normalized_value"] is not None:
+            kwargs["confirmed_unit"] = fact["normalized_value"]
+    elif fact["normalized_value"] is not None:
+        kwargs["confirmed_value"] = fact["normalized_value"]
+    return _verify(api, doctor_headers, document_id, fact["fact_id"], **kwargs)
+
+
 def _document_observations(db: Session, document_id: str) -> list[Observation]:
     """Return observations derived from ``document_id`` only."""
     fact_ids = {
@@ -215,10 +234,13 @@ def test_r17_missing_measurement_never_reaches_verified(
     """P0: `verified` must require a measurement, not just any decided fact."""
     _inject_ocr(monkeypatch, OWNER_OCR_TEXT)
     document_id = _upload_scan(api, patient_headers, fixtures)
+    assert (
+        api.get(f"/api/v1/documents/{document_id}/file", headers=doctor_headers).status_code == 200
+    )
 
     body = _extraction(api, doctor_headers, document_id)
     for fact in body["facts"]:
-        response = _verify(api, doctor_headers, document_id, fact["fact_id"])
+        response = _verify_source_reviewed(api, doctor_headers, document_id, fact)
         assert response.status_code == 200, response.text
 
     assert _status(api, doctor_headers, document_id) != DocumentStatus.VERIFIED.value, (
@@ -233,10 +255,14 @@ def test_r17_missing_measurement_blocks_document(
     """P0: the blocks-everything state, distinct from `verified` and from `failed`."""
     _inject_ocr(monkeypatch, OWNER_OCR_TEXT)
     document_id = _upload_scan(api, patient_headers, fixtures)
+    assert (
+        api.get(f"/api/v1/documents/{document_id}/file", headers=doctor_headers).status_code == 200
+    )
 
     body = _extraction(api, doctor_headers, document_id)
     for fact in body["facts"]:
-        _verify(api, doctor_headers, document_id, fact["fact_id"])
+        resp = _verify_source_reviewed(api, doctor_headers, document_id, fact)
+        assert resp.status_code == 200, resp.text
 
     assert _status(api, doctor_headers, document_id) == DocumentStatus.NEEDS_VERIFICATION.value
     assert IssueType.VI_005.value in _issue_types(_extraction(api, doctor_headers, document_id))
@@ -253,6 +279,9 @@ def test_r17_document_only_report_is_not_a_failed_measurement(
     """
     _inject_ocr(monkeypatch, NO_MEASUREMENT_TEXT)
     document_id = _upload_scan(api, patient_headers, fixtures)
+    assert (
+        api.get(f"/api/v1/documents/{document_id}/file", headers=doctor_headers).status_code == 200
+    )
 
     body = _extraction(api, doctor_headers, document_id)
     assert "value" not in _facts_by_field(body)
@@ -263,7 +292,8 @@ def test_r17_document_only_report_is_not_a_failed_measurement(
     )
 
     for fact in body["facts"]:
-        _verify(api, doctor_headers, document_id, fact["fact_id"])
+        resp = _verify_source_reviewed(api, doctor_headers, document_id, fact)
+        assert resp.status_code == 200, resp.text
     assert _document_observations(db, document_id) == []
 
 
@@ -284,6 +314,9 @@ def test_r17_lost_label_line_cannot_reach_verified(
     """
     _inject_ocr(monkeypatch, LOST_LABEL_TEXT)
     document_id = _upload_scan(api, patient_headers, fixtures)
+    assert (
+        api.get(f"/api/v1/documents/{document_id}/file", headers=doctor_headers).status_code == 200
+    )
 
     body = _extraction(api, doctor_headers, document_id)
     assert "value" not in _facts_by_field(body), (
@@ -291,7 +324,8 @@ def test_r17_lost_label_line_cannot_reach_verified(
     )
 
     for fact in body["facts"]:
-        _verify(api, doctor_headers, document_id, fact["fact_id"])
+        resp = _verify_source_reviewed(api, doctor_headers, document_id, fact)
+        assert resp.status_code == 200, resp.text
     assert _document_observations(db, document_id) == []
 
 
@@ -646,6 +680,9 @@ def test_r17_date_correction_is_not_held_to_the_numeric_rule(
     """P1: validation is field-specific; a date is not a number."""
     _inject_ocr(monkeypatch, PARSEABLE_PRESERVED_TEXT)
     document_id = _upload_scan(api, patient_headers, fixtures)
+    assert (
+        api.get(f"/api/v1/documents/{document_id}/file", headers=doctor_headers).status_code == 200
+    )
     body = _extraction(api, doctor_headers, document_id)
     date_fact = _facts_by_field(body)["report_date"][0]
 
@@ -656,6 +693,7 @@ def test_r17_date_correction_is_not_held_to_the_numeric_rule(
             "fact_id": date_fact["fact_id"],
             "decision": "corrected",
             "corrected_value": "2026-10-21",
+            "source_image_compared": True,
             "reason": "printed date confirmed",
         },
     )

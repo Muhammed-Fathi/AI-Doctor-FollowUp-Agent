@@ -146,6 +146,7 @@ def upload_document(
         declared_type=declared_type,
         settings=settings,
         recovery_of=recovery_of,
+        now=now,
     )
 
     if outcome.duplicate:
@@ -166,7 +167,7 @@ def upload_document(
         )
         raise document_error(ErrorCode.DUPLICATE_DOCUMENT, DUPLICATE_DOCUMENT_DETAIL)
 
-    extraction = run_extraction(db, document=outcome.document, settings=settings)
+    extraction = run_extraction(db, document=outcome.document, settings=settings, now=now)
     document = extraction.document
 
     append_audit_event(

@@ -236,10 +236,12 @@ class VerifyRequest(ApiModel):
     with no replacement is a rejection in disguise and would silently change what
     the doctor recorded. The validator enforces that pairing.
 
-    For OCR-derived measurement/unit facts (``extractor='tesseract'``),
-    ``source_image_compared=True``, prior doctor access to ``GET /file``, and
-    explicit value/unit confirmation are required before verification or
-    correction can succeed.
+    For all OCR-derived facts (``extractor='tesseract'`` across ``report_date``,
+    ``test_name``, ``value``, ``unit``, and ``reference_text``),
+    ``source_image_compared=True``, fresh post-extraction doctor access to
+    ``GET /file``, explicit value/unit confirmation, and a non-blank ``reason``
+    on corrections or confusable-digit (``0``/``1``/``5``/``8``) confirmations
+    are required before verification or correction can succeed.
     """
 
     fact_id: str

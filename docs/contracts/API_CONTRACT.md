@@ -132,16 +132,19 @@ Upload validation order (fixed): declared size → magic bytes → allowed MIME 
 
 **Terminal rejection codes (R21 §4.1).** `measurement_rejected` (an active rejected `value` fact) and `fact_rejected` (an active rejected non-measurement fact) join the existing `all_facts_rejected`. Any active rejected fact makes the document terminally `failed` regardless of decision order, and no Observation may be promoted unless the document is `verified`.
 
-**Stage 1 OCR source confirmation & persisted page text (IMP-01 / IMP-02 / IMP-03).**
+**Stage 1 & Stage 3 OCR source confirmation & persisted page text (`IMP-01`..`IMP-03`, `G11-D1`..`G11-D6`).**
 
 * `GET /api/v1/documents/{document_id}/text` is assigned-doctor-only and returns the bounded extracted/OCR text stored in `document_page_text` (`pages[]`) together with `source_truth_notice` labelling OCR text as untrusted engine output rather than original source truth. Patients and unassigned doctors receive `403`.
-* `GET /api/v1/documents/{document_id}/file` appends a `document.file_read` audit event (`actor_id`, `subject_id=document_id`, zero document text) as defense-in-depth access evidence. Access records prove file retrieval only — never genuine human visual comprehension.
-* For OCR-origin measurement and unit facts (`extractor='tesseract'`, `field_name ∈ {'value', 'unit'}`), both `decision='verified'` and `decision='corrected'` enforce:
-  1. prior `document.file_read` audit event for the deciding doctor on that document;
+* `GET /api/v1/documents/{document_id}/file` appends a `document.file_read` audit event (`actor_id`, `subject_id=document_id`, zero document text) as defense-in-depth access evidence. Extraction runs (`run_extraction`) append a `document.extracted` ordering anchor with injected request/service time. Access records prove file retrieval only — never genuine human visual comprehension.
+* All five OCR-origin `FactField`s (`report_date`, `test_name`, `value`, `unit`, `reference_text` when `extractor='tesseract'`) expose `requires_source_confirmation=true` and enforce for both `decision='verified'` and `decision='corrected'`:
+  1. a **fresh** `document.file_read` (`outcome='ok'`) for the deciding doctor on that document strictly **after** the latest `ExtractionAttempt` (pre-extraction or pre-re-extraction reads fail closed with `400 E_VALIDATION`);
   2. `source_image_compared=true` (explicit attestation — recorded as an attestation, never claimed to guarantee human inspection);
-  3. for `verified` `value` (when numeric): exact `Decimal` match on `confirmed_value` plus exact closed-allowlist match on `confirmed_unit` (refusing missing/unrecognized units or `unparseable_value` tokens);
-  4. for `verified` `unit`: exact closed-allowlist match on `confirmed_unit`;
-  5. for `corrected` `value`/`unit`: valid closed-unit confirmation (`corrected_unit` or matching `confirmed_unit`) and sibling consistency between active `value` and `unit` facts.
+  3. for `verified` `value` (when numeric): exact `Decimal` match on `confirmed_value`, closed-allowlist match on `confirmed_unit`, and consistency with all active (`pending` or `verified`) `unit` siblings (refusing missing/unrecognized units, `unparseable_value` tokens, and diverging `pending` siblings);
+  4. for `verified` `unit`: closed-allowlist match on `confirmed_unit` and consistency with all active (`pending` or `verified`) `value` units;
+  5. for `verified` `report_date`, `test_name`, and `reference_text`: non-null `normalized_value` (refusing `ambiguous_date` as-is with `400 E_VALIDATION`) and exact match on `confirmed_value` (`YYYY-MM-DD` exact for `report_date`, whitespace-collapsed casefold for `test_name`, whitespace-collapsed exact for `reference_text`);
+  6. for `corrected` across all five OCR fields: non-blank `reason` (`400 E_VALIDATION`), matching `confirmed_value`/`confirmed_unit` if supplied, and active sibling consistency (value `corrected` checks all `pending`/`verified` `unit` siblings; unit `corrected` checks `verified` `value` siblings so wrong-unit recovery `unit`-first remains deadlock-free);
+  7. for `verified` on any OCR field when `raw_text`, `normalized_value`, or `confirmed_value` contains confusable digits (`0`, `1`, `5`, `8`): mandatory non-blank `reason` (`400 E_VALIDATION`);
+  8. internal `_create_observation_from_mapping` defense-in-depth re-verifies fresh `GET /file` access, `source_image_compared=1`, matching `confirmed_value`/`confirmed_unit`, and mandatory `reason` across `source_fact` and all active verified OCR siblings before inserting an `Observation`.
 * `decision='rejected'` requires no confirmation fields and stays immediately available for R21 rejection-first handling. Existing `pypdf` verification and correction semantics are unchanged.
 
 ### 2.5 Workflows

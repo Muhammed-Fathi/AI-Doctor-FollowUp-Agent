@@ -444,7 +444,45 @@ def test_stage1_ocr_unit_correction_flow_from_wrong_unit_and_malformed_unit(
     body1 = _extraction(api, doctor_headers, doc1)
     by_field1 = _facts_by_field(body1)
 
-    # Correct value's unit to mg/dL with source confirmation.
+    # Correcting value's unit to mg/dL while unit sibling is still pending (g/dL) must fail.
+    conflict_val = _verify(
+        api,
+        doctor_headers,
+        doc1,
+        by_field1["value"][0]["fact_id"],
+        decision="corrected",
+        corrected_value="104",
+        corrected_unit="mg/dL",
+        source_image_compared=True,
+        reason="source image prints mg/dL",
+    )
+    assert conflict_val.status_code == 400, conflict_val.text
+
+    # Correct the unit fact first (g/dL -> mg/dL), then verify stale value as-is fails, then correct value.
+    ok_unit = _verify(
+        api,
+        doctor_headers,
+        doc1,
+        by_field1["unit"][0]["fact_id"],
+        decision="corrected",
+        corrected_value="mg/dL",
+        source_image_compared=True,
+        reason="source image prints mg/dL",
+    )
+    assert ok_unit.status_code == 200, ok_unit.text
+
+    stale_val = _verify(
+        api,
+        doctor_headers,
+        doc1,
+        by_field1["value"][0]["fact_id"],
+        source_image_compared=True,
+        confirmed_value="104",
+        confirmed_unit="g/dL",
+        reason="tried verifying stale g/dL unit",
+    )
+    assert stale_val.status_code == 400, stale_val.text
+
     resp_val = _verify(
         api,
         doctor_headers,
@@ -457,33 +495,18 @@ def test_stage1_ocr_unit_correction_flow_from_wrong_unit_and_malformed_unit(
         reason="source image prints mg/dL",
     )
     assert resp_val.status_code == 200, resp_val.text
-
-    # Trying to blindly verify the stale `g/dL` unit fact must fail (disagrees with corrected value unit).
-    stale_unit = _verify(
-        api,
-        doctor_headers,
-        doc1,
-        by_field1["unit"][0]["fact_id"],
-        source_image_compared=True,
-        confirmed_unit="g/dL",
-    )
-    assert stale_unit.status_code == 400, stale_unit.text
-
-    # Correct the unit fact to mg/dL too and verify the non-measurement siblings.
-    ok_unit = _verify(
-        api,
-        doctor_headers,
-        doc1,
-        by_field1["unit"][0]["fact_id"],
-        decision="corrected",
-        corrected_value="mg/dL",
-        source_image_compared=True,
-        reason="source image prints mg/dL",
-    )
-    assert ok_unit.status_code == 200, ok_unit.text
     for field_name in ("report_date", "test_name", "reference_text"):
+        fact = by_field1[field_name][0]
         assert (
-            _verify(api, doctor_headers, doc1, by_field1[field_name][0]["fact_id"]).status_code
+            _verify(
+                api,
+                doctor_headers,
+                doc1,
+                fact["fact_id"],
+                source_image_compared=True,
+                confirmed_value=fact["normalized_value"],
+                reason="confirmed against source scan",
+            ).status_code
             == 200
         )
 
@@ -549,8 +572,17 @@ def test_stage1_ocr_unit_correction_flow_from_wrong_unit_and_malformed_unit(
     )
     assert ok_corr.status_code == 200, ok_corr.text
     for field_name in ("report_date", "test_name", "reference_text"):
+        fact = by_field2[field_name][0]
         assert (
-            _verify(api, doctor_headers, doc2, by_field2[field_name][0]["fact_id"]).status_code
+            _verify(
+                api,
+                doctor_headers,
+                doc2,
+                fact["fact_id"],
+                source_image_compared=True,
+                confirmed_value=fact["normalized_value"],
+                reason="confirmed against source scan",
+            ).status_code
             == 200
         )
 
@@ -749,9 +781,18 @@ def test_stage1_explicit_source_confirmed_ocr_verification_promotes_and_preserve
     assert unit_resp.status_code == 200, unit_resp.text
     assert _document_observations(db, document_id) == []
 
-    # Verify remaining siblings.
+    # Verify remaining siblings with source confirmation.
     for field_name in ("report_date", "test_name", "reference_text"):
-        resp = _verify(api, doctor_headers, document_id, by_field[field_name][0]["fact_id"])
+        fact = by_field[field_name][0]
+        resp = _verify(
+            api,
+            doctor_headers,
+            document_id,
+            fact["fact_id"],
+            source_image_compared=True,
+            confirmed_value=fact["normalized_value"],
+            reason="compared against source scan",
+        )
         assert resp.status_code == 200, resp.text
 
     after = _extraction(api, doctor_headers, document_id)
@@ -1266,13 +1307,17 @@ def test_stage1_demo_reset_clears_synthetic_document_page_text_and_lineage(
 
     _fetch_source_file(api, doctor_headers, rec_doc_id)
     for fact in _extraction(api, doctor_headers, rec_doc_id)["facts"]:
-        kwargs = {}
-        if fact["field_name"] in {"value", "unit"}:
-            kwargs = {
-                "source_image_compared": True,
-                "confirmed_value": "104" if fact["field_name"] == "value" else None,
-                "confirmed_unit": "mg/dL",
-            }
+        kwargs: dict[str, object] = {
+            "source_image_compared": True,
+            "reason": "confirmed against source scan",
+        }
+        if fact["field_name"] == "value":
+            kwargs["confirmed_value"] = "104"
+            kwargs["confirmed_unit"] = "mg/dL"
+        elif fact["field_name"] == "unit":
+            kwargs["confirmed_unit"] = "mg/dL"
+        else:
+            kwargs["confirmed_value"] = fact["normalized_value"]
         resp = _verify(api, doctor_headers, rec_doc_id, fact["fact_id"], **kwargs)
         assert resp.status_code == 200, resp.text
 
@@ -1586,7 +1631,15 @@ def test_stage2_tsv_layout_corrected_and_verified_observation_creation_rules(
                 confirmed_unit="mg/dL",
             )
         else:
-            resp = _verify(api, doctor_headers, doc_a, fact["fact_id"])
+            resp = _verify(
+                api,
+                doctor_headers,
+                doc_a,
+                fact["fact_id"],
+                source_image_compared=True,
+                confirmed_value=fact["normalized_value"],
+                reason="confirmed against source image",
+            )
         assert resp.status_code == 200, resp.text
 
     obs_a = _document_observations(db, doc_a)
@@ -1615,18 +1668,16 @@ def test_stage2_tsv_layout_corrected_and_verified_observation_creation_rules(
     _fetch_source_file(api, doctor_headers, doc_b)
     facts_b = _extraction(api, doctor_headers, doc_b)["facts"]
     for fact in facts_b:
-        kwargs: dict[str, object] = {}
+        kwargs: dict[str, object] = {
+            "source_image_compared": True,
+            "reason": "confirmed against source image",
+        }
         if fact["field_name"] == "value":
-            kwargs = {
-                "source_image_compared": True,
-                "confirmed_value": "105",
-                "confirmed_unit": "mg/dL",
-            }
+            kwargs.update(confirmed_value="105", confirmed_unit="mg/dL")
         elif fact["field_name"] == "unit":
-            kwargs = {
-                "source_image_compared": True,
-                "confirmed_unit": "mg/dL",
-            }
+            kwargs.update(confirmed_unit="mg/dL")
+        else:
+            kwargs.update(confirmed_value=fact["normalized_value"])
         resp = _verify(api, doctor_headers, doc_b, fact["fact_id"], **kwargs)
         assert resp.status_code == 200, resp.text
 
