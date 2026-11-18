@@ -12,7 +12,7 @@ This report summarizes the **actual owner's supplied output files** from `script
 - JSON `repository_head`: **`6e6fcdf02d39d3a97ca3221ef2cc84b2ba528821`**, matches the pinned reviewed source.
 - Probe exit: **`2`**, correctly nonzero for a blocking gate.
 - Gate summary: **27 PASS / 1 FAIL / 0 NOT RUN / 1 DERIVED** (29 rows total).
-- Reviewer-computed SHA-256 of the uploaded original JSON bytes: `9ac465722f011d538fd8045e393328fa8aff961f08e3488aff961f08cb`.
+- Reviewer-computed SHA-256 of the uploaded original JSON bytes: `9ac465722f011d538fd8045e393328fa4a0e2b1f10afd1b8e3488aff961f08cb` (**15,283 bytes**, recomputed directly from the preserved conversation-upload attachment). An earlier review comment and early report draft contained a transcription error in this evidence checksum; their hashes are NOT authoritative. This correction does not change the gate counts, clinical data, or interpretation.
 - Ancillary uploaded artifacts: `p3_g11_real_ocr.cmd`, `p3_g11_real_ocr_stdout.txt`, `p3_g11_real_ocr_stderr.txt`, and `p3_g11_windows_quality.log`. The runner uses an isolated child CMD process and output paths under the detached worktree. No source or fixture changes reported.
 - Owner's prior Python 3.12 `test_all.ps1` had **12 PASS / 0 FAIL / 1 SKIPPED** optional Playwright; earlier native `finally` shell wrapper issue was separately cleaned up and source/protected checks repeated. These facts do not convert the OCR FAIL to PASS.
 
