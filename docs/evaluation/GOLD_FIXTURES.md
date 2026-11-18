@@ -343,3 +343,29 @@ All negative fixtures are synthetic and generated locally. None contains a real 
 | Fixture files authored | **Not created** (P3/P4) |
 | Golden JSON files authored | **Not created** (P3/P4) |
 | Any fixture executed | **No** |
+
+---
+
+## 12. PROPOSED P2 policy alignment — measured GOLD-EX-11 deviation (NOT EFFECTIVE, 2026-11-18)
+
+**Authority and scope:** The owner expressly approved *drafting a five-document amendment* in [PR #10 comment 6986820279](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986820279), following the proposed exact-file scope in [comment 6986774509](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986774509). This appendix is **PROPOSED P2 ONLY; the existing P1 acceptance criterion remains binding**, until an independently reviewed final text receives separate owner ratification. P2 denotes an *alternative acceptance policy*, not the already completed project Phase P2.
+
+### 12.1 Preserve the original fixture and historical expectations
+
+The existing `GOLD-C` example in §4 (a *design fixture* with a missing unit and ambiguous date) and its originally declared raw `1O5` candidate remain exactly as specified. This amendment does **not** change any source bytes, expected JSON, declared candidate fields, generated image rendering, or fixture test.
+
+The separate, committed `data/synthetic/documents/sources/report_ocr_o_confusion.txt` source tested by the Windows real-engine `GOLD-EX-11` gate contains **`1O5` with the letter O**. On **2026-11-18**, Windows Python 3.12.9 with Tesseract 5.4.0.20240606 emitted numeric **`105` (digit zero)**. The parser received `raw_text='105'`, normalized `105`, `quality_flags=['clean']`; the application did not substitute the character. Accordingly the unchanged literal P1 requirement—preserve the ambiguous OCR token and refuse it as `unparseable_value`, with no normalized numeric output—**FAILS / IS NOT PROVEN**.
+
+Owner-provided evidence at exact implementation SHA `6e6fcdf02d39d3a97ca3221ef2cc84b2ba528821`: **27 PASS, 1 FAIL, 0 NOT RUN, 1 DERIVED, OCR exit 2**. Evidence JSON SHA-256: `9ac465722f011d538fd8045e393328fa4a0e2b1f10afd1b8e3488aff961f08cb` (15,283 bytes). The DERIVED row is a coverage explanation, not an extra independent PASS. See [owner real Windows OCR evidence review](../phase-reports/P3_G11_OWNER_WINDOWS_REAL_OCR_6E6FCDF_EVIDENCE_REVIEW.md).
+
+### 12.2 Proposed *conditional application acceptance*, not a new GOLD technical PASS
+
+If a future explicitly ratified **P2** amendment becomes effective, a **synthetic-only academic P3 application-layer acceptance** *could* permit the **disclosed GOLD-EX-11 technical FAIL** as a narrowly recorded exception **only if all independent non-autonomy, integrity, human-verification and provenance acceptance gates pass**. Required evidence includes real Tesseract/PNG/JPEG/PDFium and `ING-02` provenance; all W1 (R21 rejection + source confirmation) and W2/FC-3 gates; immutable source with SHA-256 verified on access, verification and promotion; no pre-doctor Observation; explicit source review/confirmation and rejection path; supported Windows gate; and green CI on the exact final implementation head.
+
+The risk persists that a clinician *falsely attests* a substituted `105` after retrieving an original `1O5` image. Fetching the file plus typed `source_image_compared=true` **does not prove the person interpreted the glyph correctly**. Thus P2 would acknowledge a residual limitation; it cannot claim glyph detection, clinical reliability, or that `GOLD-EX-11` passed. No risk scoring, autonomous interpretation, real-patient data, or external communication is permitted.
+
+**Still required before P2 can take effect:** independently review the exact amended documents, obtain the owner's **separate final GitHub ratification of this specific deviation and scope**, verify final PR #10 head/CI and source/evidence parity, and separately decide phase acceptance and merge. Until then **`P3=IN_REVIEW`, `GOLD-EX-11=FAIL / NOT PROVEN`, and strict P1 remains the current release blocker**.
+
+[Owner-selected P2 decision memo](../phase-reports/P3_GOLD_EX11_P2_OWNER_POLICY_DECISION_20261118.md) · [Windows acceptance procedure and proposed annex](../phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md).
+
+**EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE.**
