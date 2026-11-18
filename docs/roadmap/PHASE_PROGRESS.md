@@ -1174,3 +1174,22 @@ The definitive owner Windows evidence at implementation SHA `6e6fcdf02d39d3a97ca
 The owner confirmed in chat that they posted the agreed direction approval on [PR #10 issue comment `6986661566`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986661566), and the GitHub issue-comment API independently returned the **exact requested text** displayed under `Muhammed-Fathi`. The comment explicitly authorizes **formal policy-amendment review only**, acknowledges that `GOLD-EX-11` technical `FAIL / NOT PROVEN` and the doctor false-attestation risk remain, and **does not** authorize a P3 PASS, a code/test/fixture change, PR #10 head fast-forward, or merge. The [P2 decision checklist](../phase-reports/P3_GOLD_EX11_P2_OWNER_POLICY_DECISION_20261118.md) now separately records this completed approval-of-process and the **still pending final owner ratification** of an exact revised acceptance contract.
 
 A read-only GitHub comparison verified the frozen implementation `6e6fcdf...` is **17 commits ahead / zero behind** original PR #10 head `18a53b2...`, so a strictly guarded fast-forward of the PR head is technically plausible **but is not authorized by the comment**. PR #10 remains original DRAFT old head; PR #11 remains DRAFT docs. No PR/phase state changed; original P1 strict release blocker remains effective until separately approved contract/handoff amendment. P3 stays `IN_REVIEW`.
+
+
+### P2 policy five-document drafting scope — owner-authorized and implemented as proposed text (2026-11-18)
+
+**Scope authorization VERIFIED:** [PR #10 comment `6986820279`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986820279) was authored under `Muhammed-Fathi`, approving exactly the five docs-only paths listed in [scope request `6986774509`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986774509). That approval **does not authorize** changing executable GOLD, synthetic fixtures, production code, PR #10 head or status, merge, phase PASS, or next-phase activities.
+
+**Amendment drafted on EXISTING docs-only Draft PR #11 ONLY**; all new policy wording is **PROPOSED / NOT EFFECTIVE**:
+
+1. `docs/evaluation/GOLD_FIXTURES.md` — proposed P2 policy annex, preserving historical Case C declarations and actual `GOLD-EX-11` failure.
+2. `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md` — proposed conditional-acceptance annex; currently effective strict §9 remains unchanged and `exit 2` remains nonzero.
+3. `docs/phase-reports/PHASE_3_REPORT.md` — appended real owner Windows OCR results, W1/W2 compensating guarantees and doctor false-attestation limitation.
+4. `docs/roadmap/PHASE_PROGRESS.md` — this owner-authorization evidence and prospective/final policy gate separation.
+5. `docs/phase-reports/P3_GOLD_EX11_P2_OWNER_POLICY_DECISION_20261118.md` — checklist records docs scope authorization while keeping the final policy and P3 acceptance approval pending.
+
+**Immutable evidence:** implementation `6e6fcdf02d39d3a97ca3221ef2cc84b2ba528821`, actual Windows OCR 27 PASS / 1 FAIL / 0 NOT RUN / 1 DERIVED, exit 2; `GOLD-EX-11=FAIL / NOT PROVEN` because source `1O5` became `105`. W1 and W2 controls PASS, but do not prevent a doctor falsely attesting a misread source. Source JSON 15,283 bytes SHA-256 `9ac465722f011d538fd8045e393328fa4a0e2b1f10afd1b8e3488aff961f08cb`. Synthetic academic use only; no clinical claims.
+
+**Remaining gates (UNFULFILLED):** independent review of the exact five-file docs diff; owner **final**, explicit GitHub policy ratification; owner decision to authorize a verified **fast-forward-only** update of old Draft PR #10 head `18a53b2...` to `6e6fcdf...` (or stop if branch/ref changed); successful authoritative CI on the final PR #10 head; final source/Windows/evidence and test-skip inspection; separate owner P3 acceptance/merge decision. No implicit authorization by this docs amendment. **Until all required gates are satisfied, existing strict P1 blocks final P3 acceptance, `P3=IN_REVIEW`, `GOLD-EX-11=FAIL / NOT PROVEN`**; PR #10/#11 remain DRAFT/unmerged. P4/P5 not started.
+
+*Educational synthetic project — NOT FOR CLINICAL USE.*
