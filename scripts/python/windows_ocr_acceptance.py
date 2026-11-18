@@ -2193,6 +2193,7 @@ W2_SOURCE_NAME = "report_ocr_o_confusion.txt"
 #: Committed canonical LF SHA-256 and byte length from ``data/synthetic/documents/manifest.json``.
 W2_SOURCE_SHA256 = "0f8cae895dff04f3017b32d3e2d9b5e50e75c60f2498cb188991c749732c2492"
 W2_SOURCE_SIZE_BYTES = 200
+W2_REQUIRED_SIBLING_FIELDS = ("report_date", "test_name", "unit")
 
 W2_CASES = (
     "source fixture intact",
@@ -2292,12 +2293,42 @@ def assess_w2(evidence: W2Evidence) -> list[Result]:
             extracted_summary,
         )
 
+    if evidence.candidate is None and evidence.preserved_1o5_refused:
+        provenance_violations = [
+            label
+            for ok, label in (
+                (evidence.all_facts_pending, "all_facts_pending"),
+                (evidence.all_facts_tesseract, "all_facts_tesseract"),
+                (evidence.all_facts_require_source, "all_facts_require_source"),
+            )
+            if not ok
+        ]
+        if provenance_violations:
+            return rows(
+                FAIL,
+                "W2 extracted facts violated safety/provenance guards "
+                f"({', '.join(provenance_violations)}); cannot emit DERIVED",
+                extracted_summary,
+            )
+
     if evidence.candidate is None and evidence.gold_ex_11_passed and evidence.preserved_1o5_refused:
+        missing_siblings = [
+            field for field in W2_REQUIRED_SIBLING_FIELDS if field not in evidence.extracted_fields
+        ]
+        if evidence.non_value_fact_count == 0 or missing_siblings:
+            return rows(
+                NOT_RUN,
+                "real OCR preserved '1O5' without complete required sibling layout "
+                f"(non_value_fact_count={evidence.non_value_fact_count}, "
+                f"missing_siblings={missing_siblings}); cannot emit DERIVED",
+                extracted_summary,
+            )
         return rows(
             DERIVED,
             "not applicable (DERIVED from GOLD-EX-11 PASS): independent GOLD-EX-11 "
             "passed with OCR preserving literal '1O5' and parser refusing it as "
-            "unparseable_value (0 Observations); false-clean 105 counterexample did not arise",
+            "unparseable_value with intact sibling layout and provenance (0 Observations); "
+            "false-clean 105 counterexample did not arise",
             extracted_summary,
         )
 

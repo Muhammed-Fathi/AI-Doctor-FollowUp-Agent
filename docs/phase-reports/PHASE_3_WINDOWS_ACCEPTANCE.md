@@ -98,10 +98,10 @@ revisions: `e7d73b5` (Stages 3-5) expects **663** (P3: 275); Stage 5.1 expects
 **666** (P3: 275); Stage 5.2 expects **688** (P3: 297); Stage 5.2a
 (`e3a4698`) expects **702** (P3: 311); Stage 6a (`4f0862f`) expects **708** (P3: 314); Stage 6b.2 Stage 1 (`e5d6dbb`) expects **739** (P3: 345);
 Stage 6b.2 Stage 2 (`46ee188`) expects **767** (P3: 373); Stage 3 (`af2bfd2`) expects
-**789** (P3: 395); and this P3-G11 Step 2 revision expects **829** (P3: **435**),
+**789** (P3: 395); and this P3-G11 Step 2 revision expects **837** (P3: **443**),
 adding 9 `OD-2b` / `A1-Anchored` / control regressions in Stage 3 verification
-hardening and 31 non-vacuous `W2 / FC-3` (`W2-R1` / `W2-R2`) acceptance harness
-regressions.
+hardening and 39 non-vacuous `W2 / FC-3` (`W2-R1` / `W2-R2` / `W2-R3`) acceptance
+harness regressions.
 Pinning an older SHA while reading a newer table — or the reverse — reports a
 false FAIL on a run that actually succeeded, which is why the check below reads
 the figure from the pinned checkout rather than from whatever copy of this file
@@ -499,14 +499,14 @@ Record the per-gate summary block **and** the exit code. `SKIPPED` is never a pa
 note which gate skipped and why (the Playwright smoke legitimately skips unless
 `-IncludeE2E` is given and browser binaries are installed).
 
-Expected backend figure at this commit: **829 passed**, of which **435** are the P3
+Expected backend figure at this commit: **837 passed**, of which **443** are the P3
 suite (`backend/tests/p3`). Verified by collection and by a full run on the
 reviewed commit, not estimated:
 
 | Suite | Tests |
 |---|---|
-| `backend/tests` (whole backend) | **829 passed** |
-| `backend/tests/p3` (P3 suite) | **435** |
+| `backend/tests` (whole backend) | **837 passed** |
+| `backend/tests/p3` (P3 suite) | **443** |
 | ├ `test_p3_verification.py` | 29 |
 | ├ `test_p3_extraction.py` | 26 |
 | ├ `test_p3_edge_cases.py` (R06–R09) | 24 |
@@ -518,7 +518,7 @@ reviewed commit, not estimated:
 | ├ `test_p3_r18_provenance.py` (R18 span exactness + bare label) | 14 |
 | ├ `test_p3_stage3_verification_hardening.py` (Stage 3 `G11-D1`..`G11-D6`, `OD-2b` & `A1-Anchored`) | 31 |
 | ├ `test_p3_windows_findings.py` (R13–R16) | 49 |
-| ├ `test_windows_ocr_acceptance.py` (probe, W1 R21/source-confirmation, W2 FC-3 + handoff) | 103 |
+| ├ `test_windows_ocr_acceptance.py` (probe, W1 R21/source-confirmation, W2 FC-3 + handoff) | 111 |
 | ├ `test_p3_upload.py` | 12 |
 | ├ `test_p3_authorization.py` | 12 |
 | └ `test_p3_fixtures.py` (incl. CRLF portability + PNG/JPEG legible bytes) | 13 |
@@ -580,18 +580,21 @@ reviewed commit, not estimated:
 > corrections and confusable digits `0`/`1`/`5`/`8`).
 >
 > **P3-G11 Step 2 (`A1-Anchored`, `OD-2b`, and non-vacuous `W2 / FC-3` — current
-> figures).** Added 40 offline regressions (`789 -> 829`, P3 `395 -> 435`): +9 in
+> figures).** Added 48 offline regressions (`789 -> 837`, P3 `395 -> 443`): +9 in
 > `test_p3_stage3_verification_hardening.py` (22 -> 31) proving route-local
 > post-rollback `AuditOutcome.ERROR` persistence (`OD-2b`), `A1-Anchored` source
 > integrity checks (`ETag` + `X-Content-Type-Options: nosniff`, `(created_at, rowid)`
 > `ERROR` invalidation with good re-read recovery, live SHA-256 rechecks in `verify.py`/
 > `verification.py` preserving `R21` `rejected`, and `upload_dir` propagation), plus
 > unmapped `13.4 g/dL` vs mapped `104 mg/dL` vs `M6` sibling attestation controls; and
-> +31 in `test_windows_ocr_acceptance.py` (72 -> 103) covering non-vacuous `W2 / FC-3`
+> +39 in `test_windows_ocr_acceptance.py` (72 -> 111) covering non-vacuous `W2 / FC-3`
 > acceptance on `report_ocr_o_confusion.txt` (`W2-R2` pinned canonical LF SHA-256
 > `0f8cae89...` / 200-byte source check even when tampered text still retains `1O5`,
-> and `W2-R1` bounded `DERIVED` status strictly when unchanged `GOLD-EX-11` passes
-> and W2 preserves/refuses `1O5` with zero Observations, while missing/unmappable/
+> `W2-R1` bounded `DERIVED` status strictly when unchanged `GOLD-EX-11` passes
+> and W2 preserves/refuses `1O5` with zero Observations, and `W2-R3` requiring intact
+> fact provenance `all_facts_pending`/`all_facts_tesseract`/`all_facts_require_source`
+> plus `non_value_fact_count > 0` and required sibling fields `report_date`/
+> `test_name`/`unit` before permitting `DERIVED`, while missing/unmappable/
 > substituted-unmappable OCR stays `NOT RUN` or `FAIL`). Sandbox runs execute under
 > Linux Python 3.11.2 (off-target compatibility evidence only; supported Windows
 > Python 3.12 remains unexecuted). No real Windows Tesseract run occurred; `P3`
@@ -672,7 +675,7 @@ evidence is bound to the exact commit it was produced from.
 | `W1 source confirmation: source-confirmed verification` | explicit `source_image_compared=True`, `confirmed_value='104'`, `confirmed_unit='mg/dL'` verify all facts to `document_status='verified'` | Stage 2 W1 |
 | `W1 source confirmation: verified Observation created` | exactly **one** `verified_document` / `doctor_verified` glucose `104.0 mg/dL` Observation linked to `source_fact_id` | Stage 2 W1 |
 | `W1 source confirmation: persisted provenance and audit safety` | `document_page_text` (`extractor='tesseract'`, matching SHA-256), exact span equality on all facts, `source_truth_notice`, zero leaked clinical text in `audit_event` | Stage 2 W1 |
-| `W2 FC-3 source-aware` (`source fixture intact`, `OCR mappable 105 candidate`, `no autonomous promotion`, `unreviewed verify refused`, `R21 rejection blocks promotion`) | non-vacuous check on pinned `report_ocr_o_confusion.txt` (`sha256=0f8cae89…`, 200 canonical LF bytes, literal `1O5`): requires mappable `105 mg/dL` + siblings; reports nonblocking `DERIVED` **only** if unchanged `GOLD-EX-11` independently `PASS`es and W2 preserves/refuses `1O5` with 0 Observations (missing/unmappable/substituted-unmappable OCR stays `NOT RUN`/`FAIL`); confirms 0 pre-verify Observations, refuses bare/`source_image_compared` verify before `GET /file`, and proves R21 rejection blocks promotion without weakening `GOLD-EX-11` | P3-G11 W2/FC-3 |
+| `W2 FC-3 source-aware` (`source fixture intact`, `OCR mappable 105 candidate`, `no autonomous promotion`, `unreviewed verify refused`, `R21 rejection blocks promotion`) | non-vacuous check on pinned `report_ocr_o_confusion.txt` (`sha256=0f8cae89…`, 200 canonical LF bytes, literal `1O5`): requires mappable `105 mg/dL` + siblings; reports nonblocking `DERIVED` **only** if unchanged `GOLD-EX-11` independently `PASS`es and W2 preserves/refuses `1O5` with 0 Observations, intact fact provenance (`pending`, `tesseract`, `requires_source_confirmation`), and complete required siblings (`report_date`, `test_name`, `unit`, `non_value_fact_count > 0`) (missing/unmappable/substituted-unmappable OCR or broken provenance stays `NOT RUN`/`FAIL`); confirms 0 pre-verify Observations, refuses bare/`source_image_compared` verify before `GET /file`, and proves R21 rejection blocks promotion without weakening `GOLD-EX-11` | P3-G11 W2/FC-3 |
 
 `W1` is the only gate in this file that proves R21's rejection behaviour on the
 **real engine**. It is deliberately the mappable glucose fixture: with a hemoglobin

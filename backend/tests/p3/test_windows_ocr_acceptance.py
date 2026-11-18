@@ -1850,6 +1850,42 @@ def test_w2_derived_only_when_gold_ex_11_truly_passed_and_1o5_preserved_refused(
     assert all(row.status == module.FAIL for row in fail_obs)
 
 
+@pytest.mark.parametrize(
+    "overrides,expected_status",
+    [
+        ({"all_facts_tesseract": False}, "FAIL"),
+        ({"all_facts_require_source": False}, "FAIL"),
+        ({"all_facts_pending": False}, "FAIL"),
+        ({"non_value_fact_count": 0}, "NOT RUN"),
+        ({"extracted_fields": ("reference_text", "test_name", "unit", "value")}, "NOT RUN"),
+        ({"extracted_fields": ("reference_text", "report_date", "unit", "value")}, "NOT RUN"),
+        (
+            {"extracted_fields": ("reference_text", "report_date", "test_name", "value")},
+            "NOT RUN",
+        ),
+        ({"extracted_fields": ("value",)}, "NOT RUN"),
+    ],
+)
+def test_w2_derived_rejected_when_provenance_or_required_siblings_missing(
+    overrides, expected_status
+):
+    """W2-R3: broken fact provenance/safety or missing sibling layout never yields DERIVED."""
+    module = _module()
+    _, ev = _w2_pass_evidence()
+    ev.candidate = None
+    ev.candidate_absence = "OCR preserved literal '1O5'; parser refused unparseable_value"
+    ev.non_value_fact_count = 4
+    ev.preserved_1o5_refused = True
+    ev.gold_ex_11_passed = True
+    for key, value in overrides.items():
+        setattr(ev, key, value)
+
+    rows = module.assess_w2(ev)
+    assert [row.status for row in rows] == [expected_status] * len(module.W2_CASES)
+    assert module.DERIVED not in {row.status for row in rows}
+    assert module.PASS not in {row.status for row in rows}
+
+
 def test_main_w2_derived_vs_blocking_matrix(monkeypatch, capsys, tmp_path):
     """W2-R1 end-to-end main() matrix with real gate_ocr_corruption + _w2_run."""
     import json
@@ -1949,17 +1985,28 @@ def test_main_w2_derived_vs_blocking_matrix(monkeypatch, capsys, tmp_path):
     assert pay_ok["summary"][module.NOT_RUN] == 0
 
     # 2. GOLD-EX-11 PASS, yet W2 OCR is empty (FAIL), missing Value: label, Hemoglobin,
-    # or substituted-but-unmappable (NOT RUN) -> never DERIVED, never PASS, exit 2.
+    # substituted-but-unmappable, or preserved 1O5 missing required sibling layout (NOT RUN)
+    # -> never DERIVED, never PASS, exit 2.
     no_value_label = (
         "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD\n"
         "Demo Patient A            Ref: DEMO-A-001            Report date: 2026-10-20\n"
         "Test: Glucose\n"
+    )
+    preserved_missing_unit = (
+        "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD\n"
+        "Demo Patient A            Ref: DEMO-A-001            Report date: 2026-10-20\n"
+        "Test: Glucose             Value: 1O5\n"
+    )
+    preserved_missing_date_and_test = (
+        "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD\nValue: 1O5 mg/dL\n"
     )
     for label, bad_w2_text, expected_status in (
         ("empty", "", module.FAIL),
         ("no_value_label", no_value_label, module.NOT_RUN),
         ("unmapped_hgb", hgb_text, module.NOT_RUN),
         ("substituted_unmappable", unmappable_substituted, module.NOT_RUN),
+        ("preserved_missing_unit", preserved_missing_unit, module.NOT_RUN),
+        ("preserved_missing_date_and_test", preserved_missing_date_and_test, module.NOT_RUN),
     ):
         code_bad, pay_bad = _run_main(real_1o5_text, bad_w2_text, f"gold_pass_bad_{label}")
         assert code_bad == 2, label
