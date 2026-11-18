@@ -53,7 +53,8 @@ P2 policy is **one approved direction for drafting**, not blanket permission to 
 - [x] Owner selected **P2 policy path in ChatGPT conversation** on 2026-11-18. *(Assistant-recorded instruction; not owner-authored GitHub ratification.)*
 - [x] Independent Windows OCR evidence and exact SHA recorded; `GOLD-EX-11` technical **FAIL** preserved.
 - [x] W1/W2/ING/PDFIUM real-engine successes and residual risk documented.
-- [ ] **Owner personally posts/approves the exact P2 policy exception in PR #10** after reading this decision. A ChatGPT connector comment **cannot substitute** for this signature.
+- [x] **Owner posted the P2 policy *review-process* approval** in PR #10 ([comment `6986661566`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986661566), displayed under account `Muhammed-Fathi`): approves the conditional direction, acknowledges the exact `1O5→105` failure and residual false-attestation risk, and **explicitly disallows final P3 acceptance or merge** at this step. The owner confirmed in chat that they posted it. This is a different gate from final ratification.
+- [ ] **Owner personally ratifies the final, fully drafted P2 policy exception and its exact contract/handoff scope on PR #10** after reviewing the amendment. Neither the earlier process-only comment nor an assistant-authored connector comment is a final policy amendment approval.
 - [ ] Explicit owner approval of a minimal documentation-only contract/handoff alignment with scope declared in advance; keep old technical gates untouched.
 - [ ] Source/evidence audit of the **final PR #10 candidate**; if needed update its old head `18a53b2...` to a reviewed implementation SHA **FF-only and separately authorized**, no force push; original draft state preserved until owner decision.
 - [ ] Green CI on the **exact final PR #10 implementation head**, verified by authoritative Actions checks.
@@ -66,7 +67,7 @@ If a required item is not satisfied, **STOP** at `P3=IN_REVIEW` and keep the tec
 
 This **docs-only** decision record belongs to existing Draft PR #11 (`docs/p3-e1e3-windows-evidence-20261118`), not the implementation branch or `main`. Do not open a new branch or PR. **No source, tests, OCR or fixture edits**, no Windows rerun, no holdout/canonical rerun, no PR #10 pointer manipulation, no merges or phase P4/P5 commencement were authorized by this owner instruction.
 
-**Decision ledger now:** `P2 POLICY PATH = OWNER SELECTED IN CHAT / FORMAL RATIFICATION PENDING`; `GOLD-EX-11 = FAIL / NOT PROVEN`; `P3 = IN_REVIEW`; `PR #10 = DRAFT, OLD HEAD`; `PR #11 = DRAFT DOCS`; no final acceptance.
+**Decision ledger now:** `P2 POLICY PATH = OWNER-POSTED REVIEW-PROCESS APPROVAL CONFIRMED / FINAL POLICY AMENDMENT PENDING`; `GOLD-EX-11 = FAIL / NOT PROVEN`; `P3 = IN_REVIEW`; `PR #10 = DRAFT, OLD HEAD`; `PR #11 = DRAFT DOCS`; no final acceptance.
 
 ---
 *Educational synthetic demo. NOT FOR CLINICAL USE.*
