@@ -58,3 +58,25 @@ Only the following **six** implementation/test repository paths are authorized:
 **Report origin:** owner’s explicit conversational approval, transcribed into this GitHub docs artifact by ChatGPT; no generated PR comment can be construed as the owner personally authenticating into GitHub to sign a separate policy amendment.
 
 *Academic synthetic demo, NOT FOR CLINICAL USE.*
+
+
+---
+
+## F. Owner workflow correction — continue in the EXISTING Arena session (2026-11-18)
+
+**This addendum supersedes ONLY sections A/E's instruction to implement on the freshly created `feat/p3-g11-a1-anchored-w2` branch and to open a third implementation PR. The owner objected to unnecessary extra branches/PRs and explicitly identified the ALREADY ACTIVE Arena session on `arena/752cca1f-ai-doctor-followup-agent`. The technical A1-Anchored + W2 scope, SIX allowed code/test paths, strict P1 policy, no real Windows OCR, no merge/auto-approval, untouched fixtures/holdout and STOP conditions in sections B–E stay unchanged.**
+
+### Evidence from Arena's STRICTLY READ-ONLY workspace audit
+
+- Arena session working directory `/home/user/AI-Doctor-FollowUp-Agent`, locally named branch `arena/752cca1f-ai-doctor-followup-agent`, **local shallow HEAD `5d30960c045de5eb6527de6aab64669d34fafb7a`**, **43 dirty paths** (39 tracked modified + 4 untracked), 0 staged.
+- Arena reports byte-for-byte Git blob equality of **all 204 local file paths** to remote `af2bfd226cc53b5c4665c160a6d8310abcce8b53` (`mismatched_count=0`, no extra files). The displayed UI `+7101/-290` is the 6 already pushed commits `e3a4698`, `4f0862f`, `8f7c007`, `e5d6dbb`, `46ee188`, `af2bfd2` rehydrated as a dirty working tree on older shallow local HEAD. Arena ran only read-only inspection and made no changes.
+- GitHub compare independently confirms `5d30960..af2bfd2 = ahead 6, behind 0`; `PR #10 HEAD 18a53b2..af2bfd2 = ahead 14, behind 0`, linear ancestry. The inadvertently created `feat/p3-g11-a1-anchored-w2` is **identical to `af2bfd2`, zero additional commits**, must **not** be used for development and should remain untouched unless owner separately approves removal.
+
+### Corrected next steps in the SAME session (no new branch or PR)
+
+1. **Metadata alignment only after full safety guards:** from existing Arena session branch, recheck `git ls-remote` pinned `origin/arena/752...` SHA unchanged, branch name, local HEAD, and **all 204** local paths and blob hashes equal to fetched remote target, including **all 4 previously untracked** files. A `git fetch` is allowed to populate `.git` only; it must not rewrite the working tree. If any mismatch or unaccounted file, STOP without reset. Once equality is **independently confirmed against fetched Git tree**, allow `git reset --mixed FETCH_HEAD` (explicitly **NEVER `--hard`**, no `clean`/stash). This changes only local `HEAD`/index metadata; existing bytes must remain identical; require clean `git status --porcelain`, `HEAD=af2bfd2`, no lost history, and report.
+2. Once correctly aligned and clean, implement authorized **A1-Anchored + nonvacuous W2** in **this same Arena session and branch**, with RED first, minimal changes limited to the **same six authorized paths**, isolated local GREEN checks, and evidence reporting. **Do not open a new PR.** Stop if dirty/mismatched state, failed isolation, new required paths or unexpected results.
+3. Continue review through **existing PR #10**. Only after the new code is committed/pushed to `origin/arena/752cca1f-ai-doctor-followup-agent` and independently audited, the owner or explicitly authorized maintainer may **strict fast-forward** PR #10's head ref `arena/ce85d4e6-ai-doctor-followup-agent` to the reviewed final P3 SHA after verifying true ancestry and unchanged expected old ref. **Do not force-push, rebase or merge into main.** This eventual PR-head fast-forward is a **separate action**, not authorized merely by this addendum; PR #10 stays DRAFT/unmerged for Windows gates and owner final review.
+4. PR #11 remains independent Draft documentation; no merges. No change to protected Windows acceptance checkout/database or existing evidence.
+
+**No action in this addendum is an OCR/P3 acceptance, P2 waiver, merge approval, or permission for a seventh changed implementation file.** This is a workflow correction in response to the owner's expressed preference to keep the already active Arena session and existing P3 PR, not a redefinition of scientific findings.
