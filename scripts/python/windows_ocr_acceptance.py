@@ -2190,6 +2190,9 @@ def _w1_positive_run(results: list[Result], *, engine_present: bool) -> None:
 # --- W2: non-vacuous source-aware acceptance on real `1O5` fixture (FC-3) ----
 
 W2_SOURCE_NAME = "report_ocr_o_confusion.txt"
+#: Committed canonical LF SHA-256 and byte length from ``data/synthetic/documents/manifest.json``.
+W2_SOURCE_SHA256 = "0f8cae895dff04f3017b32d3e2d9b5e50e75c60f2498cb188991c749732c2492"
+W2_SOURCE_SIZE_BYTES = 200
 
 W2_CASES = (
     "source fixture intact",
@@ -2205,10 +2208,13 @@ class W2Evidence:
     """Measured evidence for the non-vacuous W2 / FC-3 gate on real ``1O5``."""
 
     fixture_has_1o5: bool = False
+    fixture_source_sha256_matches: bool = False
     upload_sha256_matches: bool = False
     tesseract_attempt_succeeded: bool = False
     page_text_extractor: str | None = None
     page_text_hash_matches: bool = False
+    preserved_1o5_refused: bool = False
+    gold_ex_11_passed: bool = False
     candidate: dict | None = None
     candidate_absence: str = ""
     non_value_fact_count: int = 0
@@ -2257,10 +2263,11 @@ def assess_w2(evidence: W2Evidence) -> list[Result]:
     if evidence.precondition_failure:
         return rows(FAIL, evidence.precondition_failure, extracted_summary)
 
-    if not evidence.fixture_has_1o5:
+    if not evidence.fixture_has_1o5 or not evidence.fixture_source_sha256_matches:
         return rows(
             FAIL,
-            f"W2 fixture {W2_SOURCE_NAME} is missing or tampered (literal '1O5' required)",
+            f"W2 fixture {W2_SOURCE_NAME} failed pinned source SHA-256/size verification "
+            f"(expected sha256={W2_SOURCE_SHA256}, size={W2_SOURCE_SIZE_BYTES}, literal '1O5')",
             extracted_summary,
         )
     if not evidence.upload_sha256_matches:
@@ -2275,6 +2282,22 @@ def assess_w2(evidence: W2Evidence) -> list[Result]:
         return rows(
             FAIL,
             "missing or mismatched persisted tesseract extraction attempt / page text provenance",
+            extracted_summary,
+        )
+    if evidence.pre_verify_observation_count != 0:
+        return rows(
+            FAIL,
+            f"autonomous Observation promotion occurred before verification "
+            f"({evidence.pre_verify_observation_count} Observation(s))",
+            extracted_summary,
+        )
+
+    if evidence.candidate is None and evidence.gold_ex_11_passed and evidence.preserved_1o5_refused:
+        return rows(
+            DERIVED,
+            "not applicable (DERIVED from GOLD-EX-11 PASS): independent GOLD-EX-11 "
+            "passed with OCR preserving literal '1O5' and parser refusing it as "
+            "unparseable_value (0 Observations); false-clean 105 counterexample did not arise",
             extracted_summary,
         )
 
@@ -2315,6 +2338,7 @@ def assess_w2(evidence: W2Evidence) -> list[Result]:
     candidate = evidence.candidate
     fixture_ok = (
         evidence.fixture_has_1o5
+        and evidence.fixture_source_sha256_matches
         and evidence.upload_sha256_matches
         and evidence.tesseract_attempt_succeeded
         and evidence.page_text_extractor == "tesseract"
@@ -2391,7 +2415,9 @@ def assess_w2(evidence: W2Evidence) -> list[Result]:
     ]
 
 
-def gate_w2_fc3(results: list[Result], objects: dict | None) -> None:
+def gate_w2_fc3(
+    results: list[Result], objects: dict | None, *, gold_ex_11_passed: bool = False
+) -> None:
     """W2 / FC-3: non-vacuous source-aware acceptance on the real ``1O5`` fixture."""
     if objects is None:
         for name in W2_CASES:
@@ -2408,16 +2434,21 @@ def gate_w2_fc3(results: list[Result], objects: dict | None) -> None:
 
     from app.db import models as db_models
 
-    evidence = W2Evidence()
+    evidence = W2Evidence(gold_ex_11_passed=gold_ex_11_passed)
     source_path = SOURCES / W2_SOURCE_NAME
     if not source_path.is_file():
         evidence.precondition_failure = f"missing committed W2 fixture {W2_SOURCE_NAME}"
         for row in assess_w2(evidence):
             _record(results, row)
         return
-    fixture_text = source_path.read_text(encoding="utf-8", errors="replace")
-    evidence.fixture_has_1o5 = "1O5" in fixture_text
-    if not evidence.fixture_has_1o5:
+    canonical = source_path.read_bytes().replace(b"\r\n", b"\n")
+    actual_sha256 = hashlib.sha256(canonical).hexdigest()
+    actual_size = len(canonical)
+    evidence.fixture_has_1o5 = b"1O5" in canonical
+    evidence.fixture_source_sha256_matches = (
+        actual_sha256 == W2_SOURCE_SHA256 and actual_size == W2_SOURCE_SIZE_BYTES
+    )
+    if not evidence.fixture_has_1o5 or not evidence.fixture_source_sha256_matches:
         for row in assess_w2(evidence):
             _record(results, row)
         return
@@ -2532,6 +2563,23 @@ def gate_w2_fc3(results: list[Result], objects: dict | None) -> None:
                 else []
             )
             evidence.pre_verify_observation_count = len(pre_obs)
+
+            value_facts = [f for f in facts if f.get("field_name") == "value"]
+            has_preserved_1o5_page = bool(page_rows) and any("1O5" in pr.text for pr in page_rows)
+            has_unparseable_1o5_fact = any(
+                "unparseable_value" in (vf.get("quality_flags") or ())
+                and vf.get("normalized_value") is None
+                and "1O5" in (vf.get("raw_text") or "")
+                for vf in value_facts
+            )
+            has_any_numeric_value_fact = any(
+                vf.get("normalized_value") is not None for vf in value_facts
+            )
+            evidence.preserved_1o5_refused = (
+                has_preserved_1o5_page
+                and has_unparseable_1o5_fact
+                and not has_any_numeric_value_fact
+            )
 
         candidate = _w1_candidate(facts)
         eligible, mapping_detail = _w1_mapping_eligibility(body)
@@ -2661,10 +2709,12 @@ def gate_w2_fc3(results: list[Result], objects: dict | None) -> None:
             _record(results, row)
 
 
-def _w2_run(results: list[Result], *, engine_present: bool) -> None:
+def _w2_run(
+    results: list[Result], *, engine_present: bool, gold_ex_11_passed: bool = False
+) -> None:
     """Own W2/FC-3 end to end on the real ``1O5`` fixture in an isolated temporary DB."""
     if not engine_present:
-        gate_w2_fc3(results, None)
+        gate_w2_fc3(results, None, gold_ex_11_passed=gold_ex_11_passed)
         return
 
     tmp = tempfile.mkdtemp(prefix="p3-w2-")
@@ -2672,7 +2722,7 @@ def _w2_run(results: list[Result], *, engine_present: bool) -> None:
     seam = None
     try:
         seam = _isolated_app(tmp, source_name=W2_SOURCE_NAME)
-        gate_w2_fc3(results, seam)
+        gate_w2_fc3(results, seam, gold_ex_11_passed=gold_ex_11_passed)
     except Exception as error:
         detail = f"unexpected {type(error).__name__}: {error}\n{traceback.format_exc(limit=3)}"
         recorded_any = False
@@ -2776,10 +2826,16 @@ def main(argv: list[str]) -> int:
             if not _verdicts_for(results, gate):
                 _record(results, Result(gate, FAIL, detail))
 
+    gold_ex_11_verdicts = _verdicts_for(results, "GOLD-EX-11 OCR-produced 1O5")
+    gold_ex_11_passed = len(gold_ex_11_verdicts) == 1 and gold_ex_11_verdicts[0].status == PASS
     _guarded(
         results,
         "W2 FC-3 source-aware",
-        lambda: _w2_run(results, engine_present=engine_present),
+        lambda: _w2_run(
+            results,
+            engine_present=engine_present,
+            gold_ex_11_passed=gold_ex_11_passed,
+        ),
     )
 
     print()

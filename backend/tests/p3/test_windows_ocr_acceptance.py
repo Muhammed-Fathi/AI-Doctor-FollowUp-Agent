@@ -1460,6 +1460,7 @@ def _w2_pass_evidence():
     }
     return module, module.W2Evidence(
         fixture_has_1o5=True,
+        fixture_source_sha256_matches=True,
         upload_sha256_matches=True,
         tesseract_attempt_succeeded=True,
         page_text_extractor="tesseract",
@@ -1493,9 +1494,13 @@ def _w2_pass_evidence():
 
 def test_the_probe_registers_w2_as_a_gate():
     """W2 (FC-3 non-vacuous source-aware acceptance) must be wired into the probe."""
+    import json
+
     module = _module()
     for name in (
         "W2_SOURCE_NAME",
+        "W2_SOURCE_SHA256",
+        "W2_SOURCE_SIZE_BYTES",
         "W2_CASES",
         "W2Evidence",
         "assess_w2",
@@ -1505,6 +1510,18 @@ def test_the_probe_registers_w2_as_a_gate():
         assert hasattr(module, name), name
 
     assert module.W2_SOURCE_NAME == "report_ocr_o_confusion.txt"
+    manifest = json.loads(
+        (REPO_ROOT / "data" / "synthetic" / "documents" / "manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    entry = next(
+        row
+        for row in manifest["documents"]
+        if row["source"] == "data/synthetic/documents/sources/report_ocr_o_confusion.txt"
+    )
+    assert entry["sha256"] == module.W2_SOURCE_SHA256
+    assert entry["size_bytes"] == module.W2_SOURCE_SIZE_BYTES
     source = SCRIPT.read_text(encoding="utf-8")
     main_body = source[source.index("def main(argv") :]
     assert "_w2_run" in main_body
@@ -1559,6 +1576,7 @@ def test_w2_not_run_when_engine_absent_or_1o5_preserved_or_unmappable(capsys):
     "field,value",
     [
         ("fixture_has_1o5", False),
+        ("fixture_source_sha256_matches", False),
         ("upload_sha256_matches", False),
         ("tesseract_attempt_succeeded", False),
         ("page_text_extractor", "pypdf"),
@@ -1720,6 +1738,243 @@ def test_main_fails_w2_when_engine_present_and_1o5_fixture_tampered(monkeypatch,
     ]
     assert all(row["status"] == module.FAIL for row in w2_rows)
     assert module.PASS not in {row["status"] for row in w2_rows}
+
+
+def test_w2_fails_when_source_fixture_tampered_while_still_retaining_1o5(
+    monkeypatch, capsys, tmp_path
+):
+    """W2-R2: mutating the W2 source file while retaining literal '1O5' must FAIL SHA check."""
+    import json
+
+    from app.services.documents import ocr as ocr_module
+
+    module = _module()
+    fake_sources = tmp_path / "sources"
+    fake_sources.mkdir()
+    w1_src = REPO_ROOT / "data" / "synthetic" / "documents" / "sources" / module.W1_SOURCE_NAME
+    (fake_sources / module.W1_SOURCE_NAME).write_text(
+        w1_src.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    # Tampered text STILL retains literal "1O5", so a token-only check would miss it.
+    tampered_with_1o5 = (
+        "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD\n"
+        "Demo Patient A            Ref: DEMO-A-001            Report date: 2026-10-20\n"
+        "Test: Hemoglobin          Value: 1O5 g/dL\n"
+        "Reference range: 12.0 - 15.5 g/dL\n"
+    )
+    (fake_sources / module.W2_SOURCE_NAME).write_text(tampered_with_1o5, encoding="utf-8")
+
+    monkeypatch.setattr(module, "SOURCES", fake_sources)
+    monkeypatch.setattr(module, "gate_environment", lambda r: None)
+    monkeypatch.setattr(module, "gate_engine", lambda r: "/fake/tesseract")
+    monkeypatch.setattr(module, "gate_ocr_live", lambda r, engine_present: None)
+    monkeypatch.setattr(
+        module,
+        "gate_ocr_corruption",
+        lambda r, engine_present: module._record(
+            r, module.Result("GOLD-EX-11 OCR-produced 1O5", module.PASS, "simulated G1 pass")
+        ),
+    )
+    monkeypatch.setattr(module, "gate_rasterizer", lambda r: None)
+    monkeypatch.setattr(module, "gate_api_ocr_upload", lambda r, engine_present: None)
+    monkeypatch.setattr(module, "_w1_run", lambda r, engine_present: None)
+    monkeypatch.setattr(module, "_w1_positive_run", lambda r, engine_present: None)
+
+    _mock_intake_ocr(monkeypatch, tampered_with_1o5)
+    monkeypatch.setattr(ocr_module, "resolve_engine", lambda cmd: "/fake/tesseract")
+
+    out_json = tmp_path / "w2_tamper_with_1o5.json"
+    exit_code = module.main(["windows_ocr_acceptance.py", "--json", str(out_json)])
+    capsys.readouterr()
+
+    assert exit_code == 2
+    payload = json.loads(out_json.read_text(encoding="utf-8"))
+    w2_rows = [row for row in payload["gates"] if row["gate"].startswith("W2 FC-3 source-aware:")]
+    assert [row["gate"] for row in w2_rows] == [
+        f"W2 FC-3 source-aware: {name}" for name in module.W2_CASES
+    ]
+    assert [row["status"] for row in w2_rows] == [module.FAIL] * len(module.W2_CASES)
+    assert "sha" in w2_rows[0]["detail"].lower() or "size" in w2_rows[0]["detail"].lower()
+
+    # CRLF transport normalization of the exact committed source still passes canonical SHA check.
+    real_w2_bytes = (
+        REPO_ROOT / "data" / "synthetic" / "documents" / "sources" / module.W2_SOURCE_NAME
+    ).read_bytes()
+    crlf_bytes = real_w2_bytes.replace(b"\n", b"\r\n")
+    (fake_sources / module.W2_SOURCE_NAME).write_bytes(crlf_bytes)
+    _mock_intake_ocr(monkeypatch, real_w2_bytes.decode("utf-8"))
+
+    out_crlf = tmp_path / "w2_crlf_ok.json"
+    exit_crlf = module.main(["windows_ocr_acceptance.py", "--json", str(out_crlf)])
+    capsys.readouterr()
+    assert exit_crlf == 0
+    payload_crlf = json.loads(out_crlf.read_text(encoding="utf-8"))
+    w2_crlf = [
+        row for row in payload_crlf["gates"] if row["gate"].startswith("W2 FC-3 source-aware:")
+    ]
+    assert [row["status"] for row in w2_crlf] == [module.DERIVED] * len(module.W2_CASES)
+
+
+def test_w2_derived_only_when_gold_ex_11_truly_passed_and_1o5_preserved_refused():
+    """W2-R1: DERIVED requires GOLD-EX-11 PASS + preserved/refused 1O5 + zero Observations."""
+    module = _module()
+
+    def _preserved_evidence(**overrides):
+        _, ev = _w2_pass_evidence()
+        ev.candidate = None
+        ev.candidate_absence = "OCR preserved literal '1O5'; parser refused unparseable_value"
+        ev.non_value_fact_count = 4
+        ev.preserved_1o5_refused = True
+        ev.gold_ex_11_passed = True
+        for k, v in overrides.items():
+            setattr(ev, k, v)
+        return ev
+
+    derived_rows = module.assess_w2(_preserved_evidence())
+    assert [row.status for row in derived_rows] == [module.DERIVED] * len(module.W2_CASES)
+    assert module.PASS not in {row.status for row in derived_rows}
+
+    # Without GOLD-EX-11 PASS -> NOT_RUN (never DERIVED, never PASS).
+    not_run_no_gold = module.assess_w2(_preserved_evidence(gold_ex_11_passed=False))
+    assert [row.status for row in not_run_no_gold] == [module.NOT_RUN] * len(module.W2_CASES)
+
+    # Without preserved & refused 1O5 (e.g. empty/missing/Hemoglobin) -> NOT_RUN even if GOLD passed.
+    not_run_no_1o5 = module.assess_w2(_preserved_evidence(preserved_1o5_refused=False))
+    assert [row.status for row in not_run_no_1o5] == [module.NOT_RUN] * len(module.W2_CASES)
+
+    # If fixture SHA failed or an autonomous Observation leaked -> FAIL even if GOLD passed.
+    fail_sha = module.assess_w2(_preserved_evidence(fixture_source_sha256_matches=False))
+    assert all(row.status == module.FAIL for row in fail_sha)
+
+    fail_obs = module.assess_w2(_preserved_evidence(pre_verify_observation_count=1))
+    assert all(row.status == module.FAIL for row in fail_obs)
+
+
+def test_main_w2_derived_vs_blocking_matrix(monkeypatch, capsys, tmp_path):
+    """W2-R1 end-to-end main() matrix with real gate_ocr_corruption + _w2_run."""
+    import json
+
+    from app.services.documents import ocr as ocr_module
+
+    module = _module()
+    real_1o5_text = (
+        REPO_ROOT / "data" / "synthetic" / "documents" / "sources" / module.W2_SOURCE_NAME
+    ).read_text(encoding="utf-8")
+    substituted_105_text = (
+        "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD\n"
+        "Demo Patient A            Ref: DEMO-A-001            Report date: 2026-10-20\n"
+        "Test: Glucose             Value: 105 mg/dL\n"
+        "Reference range: 70 - 110 mg/dL\n"
+    )
+    unmappable_substituted = "Value: 105 mg/dL\n"
+    hgb_text = (
+        "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD\n"
+        "Demo Patient A            Ref: DEMO-A-001            Report date: 2026-10-20\n"
+        "Test: Hemoglobin          Value: 13.4 g/dL\n"
+        "Reference range: 12.0 - 15.5 g/dL\n"
+    )
+
+    def _run_main(gold_ocr_text: str, w2_ocr_text: str, name: str):
+        monkeypatch.setattr(
+            module,
+            "gate_environment",
+            lambda r: module._record(r, module.Result("ENV-01 python", module.PASS, "ok")),
+        )
+        monkeypatch.setattr(
+            module,
+            "gate_engine",
+            lambda r: (
+                module._record(r, module.Result("OCR-ENGINE", module.PASS, "ok")),
+                "/fake/tesseract",
+            )[1],
+        )
+        monkeypatch.setattr(
+            module,
+            "gate_ocr_live",
+            lambda r, engine_present: module._record(
+                r, module.Result("OCR-LIVE-01 measured", module.PASS, "ok")
+            ),
+        )
+        monkeypatch.setattr(
+            module,
+            "gate_rasterizer",
+            lambda r: module._record(r, module.Result("PDFIUM-01 rasterize", module.PASS, "ok")),
+        )
+        monkeypatch.setattr(
+            module,
+            "gate_api_ocr_upload",
+            lambda r, engine_present: module._record(
+                r, module.Result("ING-02 OCR upload end-to-end", module.PASS, "ok")
+            ),
+        )
+        monkeypatch.setattr(module, "gate_r21_rejection_is_mappable", lambda r: True)
+        monkeypatch.setattr(
+            module,
+            "_w1_run",
+            lambda r, engine_present: module._record(
+                r, module.Result("W1 R21 rejection: OCR value fact", module.PASS, "ok")
+            ),
+        )
+        monkeypatch.setattr(
+            module,
+            "_w1_positive_run",
+            lambda r, engine_present: module._record(
+                r,
+                module.Result("W1 source confirmation: OCR mappable candidate", module.PASS, "ok"),
+            ),
+        )
+        monkeypatch.setattr(ocr_module, "resolve_engine", lambda cmd: "/fake/tesseract")
+        monkeypatch.setattr(
+            ocr_module,
+            "run_ocr",
+            lambda image, *, tesseract_cmd, language, preprocessing=None: ocr_module.OcrResult(
+                text=gold_ocr_text, confidence=0.94, tool_version="5.3.0.sim"
+            ),
+        )
+        _mock_intake_ocr(monkeypatch, w2_ocr_text)
+        out_json = tmp_path / f"{name}.json"
+        exit_code = module.main(["windows_ocr_acceptance.py", "--json", str(out_json)])
+        capsys.readouterr()
+        return exit_code, json.loads(out_json.read_text(encoding="utf-8"))
+
+    # 1. Real GOLD-EX-11 PASS (preserved 1O5) + W2 preserved/refused 1O5 -> W2 is DERIVED, exit 0.
+    code_ok, pay_ok = _run_main(real_1o5_text, real_1o5_text, "gold_pass_w2_derived")
+    assert code_ok == 0
+    gold_ok = next(g for g in pay_ok["gates"] if g["gate"] == "GOLD-EX-11 OCR-produced 1O5")
+    w2_ok = [g for g in pay_ok["gates"] if g["gate"].startswith("W2 FC-3 source-aware:")]
+    assert gold_ok["status"] == module.PASS
+    assert [g["status"] for g in w2_ok] == [module.DERIVED] * len(module.W2_CASES)
+    assert pay_ok["summary"][module.DERIVED] == len(module.W2_CASES)
+    assert pay_ok["summary"][module.FAIL] == 0
+    assert pay_ok["summary"][module.NOT_RUN] == 0
+
+    # 2. GOLD-EX-11 PASS, yet W2 OCR is empty (FAIL), missing Value: label, Hemoglobin,
+    # or substituted-but-unmappable (NOT RUN) -> never DERIVED, never PASS, exit 2.
+    no_value_label = (
+        "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD\n"
+        "Demo Patient A            Ref: DEMO-A-001            Report date: 2026-10-20\n"
+        "Test: Glucose\n"
+    )
+    for label, bad_w2_text, expected_status in (
+        ("empty", "", module.FAIL),
+        ("no_value_label", no_value_label, module.NOT_RUN),
+        ("unmapped_hgb", hgb_text, module.NOT_RUN),
+        ("substituted_unmappable", unmappable_substituted, module.NOT_RUN),
+    ):
+        code_bad, pay_bad = _run_main(real_1o5_text, bad_w2_text, f"gold_pass_bad_{label}")
+        assert code_bad == 2, label
+        w2_bad = [g for g in pay_bad["gates"] if g["gate"].startswith("W2 FC-3 source-aware:")]
+        assert [g["status"] for g in w2_bad] == [expected_status] * len(module.W2_CASES), label
+        assert module.DERIVED not in {g["status"] for g in w2_bad}
+        assert module.PASS not in {g["status"] for g in w2_bad}
+
+    # 3. GOLD-EX-11 FAIL (substituted 105) + W2 mappable 105 -> W2 PASS, GOLD FAIL, exit 2.
+    code_fail, pay_fail = _run_main(substituted_105_text, substituted_105_text, "gold_fail_w2_pass")
+    assert code_fail == 2
+    gold_fail = next(g for g in pay_fail["gates"] if g["gate"] == "GOLD-EX-11 OCR-produced 1O5")
+    w2_pass = [g for g in pay_fail["gates"] if g["gate"].startswith("W2 FC-3 source-aware:")]
+    assert gold_fail["status"] == module.FAIL
+    assert [g["status"] for g in w2_pass] == [module.PASS] * len(module.W2_CASES)
 
 
 HANDOFF = REPO_ROOT / "docs" / "phase-reports" / "PHASE_3_WINDOWS_ACCEPTANCE.md"
