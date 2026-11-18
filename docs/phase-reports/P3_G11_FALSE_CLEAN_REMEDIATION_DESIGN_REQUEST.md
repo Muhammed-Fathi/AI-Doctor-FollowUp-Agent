@@ -1,0 +1,46 @@
+# P3-G11 — Arena design-only task: real-OCR false-clean gap after v1.1.3 canonical baseline
+
+**Task status:** `REQUESTED — DESIGN NOT DELIVERED / IMPLEMENTATION NOT AUTHORIZED`  
+**Date:** 2026-11-18  
+**Phase:** P3 only. **Tracking:** issue #9, draft P3 PR #10, docs-only draft PR #11.  
+**Source of truth:** pinned owner Windows acceptance checkout `af2bfd226cc53b5c4665c160a6d8310abcce8b53` on implementation branch `arena/752cca1f-ai-doctor-followup-agent`; not the older PR #10 code head `18a53b2` or accepted `main`. **Do not change, merge, or run these commits during design.**
+
+> **Design-first, stop-on-uncertainty.** No application code, fixtures, OCR settings, schema, migrations, thresholds, ZIP, binaries, tests, protected database, or diagnostic run may be changed or executed under this task. The agent may read project sources and submit a detailed review proposal in its conversation / a PR comment, but may not self-approve new file paths, open a code-change PR, or mark P3/GOLD accepted. A separate owner authorization is required before implementation.
+
+## Verified evidence to read first
+
+- [Independent canonical original-artifact audit](P3_E1_E3_V113_CANONICAL_RESULTS_INDEPENDENT_AUDIT.md) — **actual owner Windows** Tesseract 5.4, `canonical_baseline` 3/3 COMPLETE, inner exit 0, source `1O5` recognized `105`, no ambiguity-specific detector hit, non-specific D4/D6 review + clean `13.4` false positive.
+- [v1.1.3 source review](P3_E1_E3_V113_INDEPENDENT_SOURCE_AUDIT.md) and [real Windows probe audit](P3_E1_E3_V113_WINDOWS_PROBE_ONLY_EVIDENCE.md) — original diagnostic-harness localization and hOCR parsing defects are fixed; `O` alternative has confidence 0, **below** threshold 1%; do not claim detection or lower the threshold to make it pass.
+- [Wrapper incident and final resolution](P3_E1_E3_V113_CANONICAL_WRAPPER_INCIDENT.md) — external PowerShell 5.1 `NativeCommandError` due stderr `Image.getdata()` deprecation warning; original inner experiment nevertheless completed 3/3. Fix logging as an independent operational item, not a change to OCR scientific results.
+- Existing committed `docs/phase-reports/P3_R20_OCR_CONFIGURATION_DECISION.md` — separate gates G1 recognition fidelity, G2 structured extraction, G3 fail-closed routing, G4 attributable doctor confirmation; especially RF-2 and FC-3. **Do not** confuse true source recognition with source-aware human review.
+- Existing committed `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md` §§7–9; `docs/phase-reports/P3_R21_REJECTION_RECOVERY_DESIGN.md`; `docs/phase-reports/PHASE_3_REPORT.md` Stage 3 `G11-D1..D6`.
+- `AGENTS.md`, `docs/clinical-safety/DEMO_REVIEW_RULES.md`, `docs/roadmap/PHASE_PROGRESS.md` and relevant P3 code/tests at the **pinned** commit, not an unverified moving head.
+
+## Known results and unresolved safety claim
+
+The synthetic GOLD source has **letter O** in `1O5`. Real OCR produced the **digit zero** `105`, high confidence (~95.99), parsed into a plausible number. D1/D1b/D2/D3: specific `TP=0/FN=1/TN=2/FP=0` for the canonical 1 positive/2 negative. D4 raised `generic_disagreement_only` via `105°`; D6 `fail_closed_non_specific`. Both also routed the **clean 13.4** because another crop read `134`. D5 OEM0 unsupported. This is **neither a positive O/0 detector hit nor evidence that the application prevented an invalid `doctor_verified` Observation**.
+
+**Very important — existing P3 protections must be audited, not rebuilt:** Stage 2/3 already specifies and implements fresh post-extraction `GET /file`, `GET /text`, `document.file_read` / `document.text_read` audit, `requires_source_confirmation` for all five OCR facts, explicit `source_image_compared=true`, `confirmed_value` / `confirmed_unit`, per-fact source-aware `verify`, rejection/recovery R21 and Observation promotion checks. Stage 3 `G11-D1..D6` includes post-extraction source access, fact-sibling unit consistency and reason requirement for confusable digits. **Audit their real implementation/coverage and identify any remaining gap first**. Do not propose duplicating them as if absent.
+
+`GOLD-EX-11` in the Windows acceptance contract still requires genuine flagged real-OCR `1O5`, not silently changing to `105`. The synthetic fixture, OCR settings and expected gate are **unchanged**. A human source-confirmation process may reduce risk while **not proving** the OCR engine detected the substitution, and cannot guarantee a careless doctor will not attest wrongly. Make this distinction explicit; any proposed change to gate semantics or contract requires a separate **explicit owner decision**, not an agent rewrite.
+
+## Required Arena deliverable: bounded reviewed design, not patch
+
+1. **Reconcile the current implementation:** inspect exact pinned P3 code (OCR extraction, field parser, verification endpoints, source-file access/audit, decision and Observation mapping) and tests. Produce a table `existing control / exact file:function / what proved in CI or sandbox / what still NOT proven on Windows / remaining failure mechanism`. Distinguish true defect from an unexecuted acceptance test.
+2. **Decision tree for GOLD:** identify whether a deterministic source/OCR comparison signal exists without leaking synthetic ground truth from the fixture, and whether the existing server-side source confirmation and independent mapping gate really block unattended promotion. Explain what cannot be inferred from high OCR confidence or from `x_confs=0`. Never silently substitute the known expected `1O5` into production inference.
+3. **Compare narrow options:** (A) preserve source-aware server verification and close missing coverage/UI disclosure, if actually missing; (B) bounded multi-pass crop-disagreement as a **non-specific** review signal with clean `13.4` FP, not an automatic correctness oracle; (C) a combination only if evidence supports it. Recommend the **smallest defensible** change and identify cases where the safest recommendation is to leave a gate unproven pending owner policy.
+4. **Acceptance matrix, separate gates:** G1 OCR fidelity (may stay FAIL); G2 structured field extraction; G3 FC-3 false-clean `105` cannot be promoted *without genuine source-review procedure*; G4 auditably attributable decisions; W1 R21 rejection and immutable history; `GOLD-EX-11` literal current contract. Include positive `1O5` recognized as `105`, negative `104`, `13.4`, and missing/unreadable source, stale or cross-patient/cross-document file access, untrusted OCR-text-only confirmation, arbitrary manual source attestation, correction/rejection and idempotent retries. Include zero-Observation assertions for rejected and unverified values.
+5. **Risk/provenance review:** exactly where original image/PDF is displayed/retrieved, what is persisted and audited (typed metadata, no sensitive snippets), difference between matching `confirmed_value` to OCR vs truly comparing source pixels, how to avoid blind `Verify All`, stale browser reads, overwriting historical evidence, and unverified source claims. P6 frontend carry-forward may be specified only, **not implemented**.
+6. **Minimal proposed patch map:** exact paths/functions/contract/schema/migration impacts, bounded new unit/integration tests with RED-before/GREEN-after plan and rollback. Explain if changing P3 allowed-file scope requires owner permission. No protected checkout writes, no PR merges, no Phase 4/5 work.
+7. **Separate PowerShell 5.1 wrapper plan:** retain full stdout **and stderr**, warning messages, and **true native exit code** without `$ErrorActionPreference='Stop'` misclassifying a non-fatal deprecation warning; logs go to a fresh diagnostics-only location; avoid suppressing warnings globally. Do not mutate v1.1.3 authenticated ZIP or previous outputs.
+8. **Owner decision ledger:** clearly enumerate `APPROVE / REJECT / DEFER` questions for *implementation scope*, *literal GOLD gate semantics*, *source-confirmation UX/server boundary*, and *separate wrapper change*. Report validation tasks owner Windows must later execute (NOT RUN now).
+
+## Explicit stop conditions
+
+Do not edit/replace `report_ocr_o_confusion.txt`, rerender fixture differently to evade its canonical hash, modify `preserve_interword_spaces`, lower D2/D3 thresholds or add a hardcoded O/0 fixture lookup. Do not claim D4/D6 non-specific routing is a successful GOLD detection or promote all clean OCR to doctor-verified. Do not enable OEM0 with unreviewed traineddata or use holdout for tuning. Do not change the P3 approved R21 model, app DB, or historic evidence.
+
+**Delivery format:** one complete, self-contained Markdown design/review response with sections: pinned baseline, reproduced evidence, existing controls, failure-mode analysis, options/tradeoffs, recommended bounded fix, exact proposed files, gate/negative tests, rollback, owner decisions, executed vs not-executed checks. Post a brief linked design summary as a *comment* on draft PR #10 / issue #9 for reviewer discovery, without repository file writes absent a new owner authorization. Stop for owner review.
+
+**Expected end state of this task:** `DESIGN SUBMITTED / PENDING OWNER REVIEW` only. `GOLD-EX-11=FAIL/NOT PROVEN`, `P3=IN_REVIEW`, PRs draft/unmerged, exploratory/holdout/freeze **NOT AUTHORIZED**.
+
+**Synthetic educational demo only. NOT FOR CLINICAL USE.**

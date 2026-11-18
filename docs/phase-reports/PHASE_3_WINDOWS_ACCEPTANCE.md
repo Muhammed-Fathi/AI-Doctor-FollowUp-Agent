@@ -1,5 +1,7 @@
 # P3 Windows acceptance — executable handoff
 
+> **Evidence/status addendum (2026-11-18; NOT a replacement for this historical procedure):** The owner has now executed the real Windows 11/Python 3.12.9/Tesseract 5.4 acceptance probe on detached implementation commit `6e6fcdf02d39d3a97ca3221ef2cc84b2ba528821`. Actual result: **27 PASS / 1 FAIL (`GOLD-EX-11`) / 0 NOT RUN / 1 DERIVED; exit 2**. This document's early statements that owner Windows tests are "NOT RUN" describe its original drafting state, not the later owner-executed evidence. **Strict §9 is still binding.** The alternative P2 policy in §12 is **only proposed** and cannot overrule §9 without separate final owner ratification. See [owner Windows evidence report](P3_G11_OWNER_WINDOWS_REAL_OCR_6E6FCDF_EVIDENCE_REVIEW.md) and [decision memo](P3_GOLD_EX11_P2_OWNER_POLICY_DECISION_20261118.md).
+
 **Status of this document: a procedure, not a result.** Nothing in it has been
 executed by the implementing agent. The sandbox has no Windows, no Tesseract
 engine and a Python 3.11 interpreter, so every gate below is **NOT RUN** until the
@@ -830,3 +832,40 @@ evidence, not acceptance:
   agent does not mark PASS and does not merge.
 
 EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
+
+---
+
+## 12. PROPOSED P2 conditional acceptance annex — NOT EFFECTIVE (2026-11-18)
+
+**Status: DRAFT POLICY; NOT IN FORCE.** The owner approved exactly five *documentation* changes in [PR #10 comment 6986820279](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986820279), **not** the final deviation waiver, executable test rewrite, PR merge, or phase PASS. This annex describes what **would** become the alternative policy after independent review and separate final owner ratification. It **does not** edit or relax current §9 (especially release blocker 11) or the `gate_ocr_corruption` implementation.
+
+| Decision layer | Current P1 strict policy (EFFECTIVE) | P2 alternative for synthetic academic demo (PROPOSED ONLY) |
+|---|---|---|
+| `GOLD-EX-11` executable/JSON result | **FAIL / NOT PROVEN**, hence P3 acceptance blocked | **Same literal FAIL / NOT PROVEN**, reported as an explicit bounded technical deviation, *not* changed into PASS |
+| Windows probe exit | **2**, preserve as nonzero | **2 remains 2**; never mask, override or modify exit status; document separate conditional **policy** decision |
+| W1/W2 real-engine gates | Independently required to PASS | Independently required to PASS, including no autonomous promotion, authenticated source access, rejection and audit invariants |
+| Supported platform/security | Windows Python 3.12, Tesseract, original fixture, source hash and immutable OCR provenance required | Unchanged; source SHA/access checks, correct role/document boundaries and `GET /file` anchor checks must remain effective |
+| Human verification | Doctor reads original source, explicitly confirms values/siblings and reason before possible `doctor_verified` Observation | Unchanged **with explicit admission that source-read audit and attestation do not guarantee correct human visual comparison** |
+| Approval | Final owner acceptance/merge not granted | Still needs **later owner-authored final policy ratification**, independent review, CI on exact implementation PR head and separate phase/merge decision |
+
+### 12.1 Measured counterexample and why P2 is not a technical repair
+
+- **Frozen implementation:** `6e6fcdf02d39d3a97ca3221ef2cc84b2ba528821`; Windows Python `3.12.9`; Tesseract `5.4.0.20240606`; attached original JSON 15,283 bytes with SHA-256 `9ac465722f011d538fd8045e393328fa4a0e2b1f10afd1b8e3488aff961f08cb`.
+- **Actual OCR:** rendered source `1O5` (letter O) → engine text `105` (zero) → parser `raw_text='105'`, `normalized_value='105'`, `quality_flags=['clean']`. The parser had no preserved O to reject, so `GOLD-EX-11=FAIL` remains evidence of an unresolved upstream fidelity limitation.
+- **Actual application controls:** all **13 W1** entries (7 terminal rejection and 6 source-confirmation) and all **five W2/FC-3** entries PASS. W2 prevents automatic Observation on a false-clean 105, refuses bare/unreviewed `POST /verify` (400), and enforces doctor decision/rejection. It does **not** detect or repair `1O5→105`; a doctor may falsely attest despite a valid `GET /file`.
+- **Top-level accounting:** `PASS=27 / FAIL=1 / NOT RUN=0 / DERIVED=1`, process exit `2`; `GOLD-EX-07/08` coverage was DERIVED, not independently proven. Do not show the full run as all-green.
+
+### 12.2 Proposed P2 eligibility checklist (ALL required; no auto-accept)
+
+1. Verify exact reviewed PR #10 implementation head, complete source ancestry, file scope and clean evidence identity; check **authoritative CI PASS on the same PR head** and record supported Windows quality gate (12 PASS / 0 FAIL / 1 optional Playwright SKIP, with backend skip details disclosed). Original PR #10 is still at an older Draft head; no fast-forward is authorized by the scope approval in this annex.
+2. Preserve and attach **the original FAIL row and full 27/1/0/1 OCR JSON**, engine/version and rendered visual source hash. No mutation of fixture/source, parser, renderer, engine settings, OCR confidence threshold, or `GOLD-EX-11` function. Tests and executable gate must continue to fail on this captured false-clean reading.
+3. Verify every **real-engine W1 and W2** acceptance row independently; require `ING-02`, `PDFIUM-01`, `GOLD-EX-05/06`, OCR provenance and verified original source bytes. A missing/failed row (including `NOT RUN`) remains a blocker, never a derived PASS.
+4. Preserve **A1-Anchored** SHA/access/audit invalidation and R21 guarantees, per-fact review (not blind batch acceptance), no Observation before all required doctor confirmations, explicit confusable-digit reason and source linkage. Record that doctor **false attestation remains possible**; no safety assertion from source-read events alone.
+5. Keep the deviation **limited to local synthetic teaching/demo**; prohibit real patient reports, diagnosis/triage, care instructions and autonomous clinical decisions or communications.
+6. Obtain **separate owner-authored GitHub approval** of the final policy text, independent diff/evidence review, and then **another final owner decision** on P3 acceptance and merge. Only a merged approved policy amendment can replace §9's current blocking rule. No agent auto-acceptance or implied P4/P5 authorization.
+
+**STOP** if any requirement is unverified, scope expands, baseline hashes change, or someone attempts to mark `GOLD-EX-11` technical PASS. A P2 policy *exception*, if eventually adopted, cannot be reused as evidence that OCR detects confusable glyphs.
+
+**Present disposition:** `P2 policy=PROPOSED / owner approved drafting only`; `P3=IN_REVIEW`; `GOLD-EX-11=FAIL / NOT PROVEN`; strict **§9 still authoritative**; PR #10/#11 remain Draft/unmerged.
+
+*Educational and synthetic only; NOT FOR CLINICAL USE.*

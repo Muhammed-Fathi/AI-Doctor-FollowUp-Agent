@@ -2,10 +2,32 @@
 
 > **Project:** Multi-Agent Clinical Workflow Assistant (DEPI Graduation Project)  
 > **Repository name (proposed):** `AI-Doctor-FollowUp-Agent`  
-> **Plan version:** v0.2 / 2026-11-14 — P0 baseline submitted as `IN_REVIEW`; owner approval pending. Phase 0 evidence: `docs/phase-reports/PHASE_0_REPORT.md`  
+> **Plan baseline:** v0.2 / 2026-11-14 (historical scope/specification). **Execution status refreshed 2026-11-18**, pending documentation-PR review; see `PHASE_PROGRESS.md` for latest accepted/blocked phase states. P0/P1/P2 were owner-approved and merged on 2026-11-14.  
 > **Target:** Fully local, zero-paid-API, end-to-end educational demonstration  
 > **Source of truth:** This file, plus `PHASE_PROGRESS.md`, architecture ADRs, PR evidence, and tests  
 > **Working language:** English for implementation contracts; Arabic/English explanation in discussion
+
+## Live execution status (2026-11-18; proposed tracking update)
+
+The numbered plan below remains the **scope baseline**, not a claim that its old setup instructions are current. The authoritative phase register is [PHASE_PROGRESS.md](PHASE_PROGRESS.md); details are in `docs/phase-reports` and owner PR decisions. This section is a concise **status index**, not phase acceptance.
+
+| Phase | Deliverable category | Execution status | Completion / next gate |
+|---|---|---|---|
+| P0 | Governance and binding contracts | **PASS — owner-approved and merged** | [PR #2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2) / `4422566` |
+| P1 | Foundation, reproducible Windows startup | **PASS — owner-approved and merged** | [PR #4](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/4) / `2c85db4` |
+| P2 | Synthetic patient domain, role permissions, check-ins | **PASS — owner-approved and merged** | [PR #7](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/7) / `777f661` |
+| P3 | Document ingestion, OCR, provenance, doctor verification | **IN_REVIEW — GOLD-EX-11 FALSE-CLEAN NOT PROVEN** | Owner v1.1.3 `plan_only` and `probe_only` PASS; `canonical_baseline` independently verified **complete 3/3** (inner exit 0, original JSONL/CSV consistent, protected postflight PASS). **Positive synthetic `1O5`→OCR `105` not detected as O/0 ambiguity by any supported detector**; D4/D6 only non-specific fail-closed and falsely route clean `13.4`. [Canonical audit](../phase-reports/P3_E1_E3_V113_CANONICAL_RESULTS_INDEPENDENT_AUDIT.md). **No exploratory/holdout/freeze or P3 merge**; source-aware remediation design and owner gating required. |
+| P4 | Monitoring and deterministic demo review rules | **TODO — NOT STARTED** | Blocked on P3 owner acceptance / merge |
+| P5 | LangGraph bounded agents, Ollama drafting, approval | **TODO — NOT STARTED** | No early implementation permitted |
+| P6 | Doctor/patient UI, in-app task surfaces | **TODO — NOT STARTED** | No early implementation permitted |
+| P7 | Integrated quality, robustness, safety evaluation | **TODO — NOT STARTED** | No early implementation permitted |
+| P8 | Local demo and final handoff | **TODO — NOT STARTED** | No early implementation permitted |
+
+**Phase completion procedure (apply after every P0–P8):** Keep a `PHASE_N_REPORT.md` or scoped phase evidence report with exact implementation vs omissions, requirements/tests, Windows/CI evidence (executed vs NOT RUN), safety/limitations, source commits and rollback. Update the **single** `PHASE_PROGRESS.md` row and append a dated evidence/owner-decision entry. Update this high-level status table. A phase becomes **PASS only** after independent review, relevant owner Windows evidence, **explicit owner approval**, and the approved PR merged. No agent may self-approve or edit `main` directly. An in-review phase remains `IN_REVIEW` even if part of its implementation is complete.
+
+**Current P3 gate:** Owner v1.1.3 `plan_only` and `probe_only` both PASSED. **Canonical baseline independently audited COMPLETE: 3/3 executed, exit 0, all files consistent, protected baseline unchanged**, even though the outer PowerShell 5.1 wrapper failed to capture complete output after a Pillow warning. **BUT safety detection is NOT ACCEPTED:** true source `1O5` was read/parsed as `105`, with no supported ambiguity-specific hit; D4/D6 only generic fail-closed with a clean-control false positive. See [original-artifact canonical results audit](../phase-reports/P3_E1_E3_V113_CANONICAL_RESULTS_INDEPENDENT_AUDIT.md). **Do not advance exploratory/holdout/freeze, P3 acceptance/merge or P4/P5**. Prioritize owner-reviewed, source-aware false-clean mitigation design, preserving untouched fixtures/holdout. `GOLD-EX-11=FAIL / NOT PROVEN`.
+
+---
 
 ## 1. Product definition and boundaries
 
@@ -328,7 +350,7 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 | Demo breaks without internet | Locally cached model, database, data and dependencies; preflight/offline fallback |
 | Agent marks partial work complete | Definition of Done and evidence matrix; owner decides stage transition |
 
-## 11. Immediate next actions
+## 11. Initial P0 setup actions (historical archive — superseded by live status above)
 1. Owner creates **PRIVATE** GitHub repository named `AI-Doctor-FollowUp-Agent` (suggested) at https://github.com/new. Initialize with a README or upload the provided planning pack.
 2. Commit `README.md`, `docs/roadmap/MASTER_PLAN.md`, `docs/architecture/ARCHITECTURE.md`, and `docs/arena/ARENA_PHASE_0_PROMPT.md` as the initial *unapproved planning draft*.
 3. Owner confirms specific repo URL and intended demo laptop capacity (Windows, RAM, GPU/VRAM). These are planning inputs, not prerequisites to creating documentation.
@@ -348,4 +370,4 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 
 ---
 
-**Status:** Draft designed for implementation governance; zero implementation or test execution is claimed here. Final product and clinical validation require separate work beyond the graduation MVP.
+**Status:** Original v0.2 planning baseline retained for historical reference; P0–P2 are now approved/merged, P3 is IN_REVIEW/blocked, P4–P8 are TODO. See the live status above and `PHASE_PROGRESS.md` for tested evidence and owner decisions. No clinical validation is claimed.

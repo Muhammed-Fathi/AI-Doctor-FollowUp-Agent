@@ -1947,3 +1947,38 @@ without undermining server-side Stage 3 guards:
 **P3 remains `IN_REVIEW`.** No PASS, no self-approval, no merge, no P4/P5. One
 small contract clarification is requested in §V.3; it does not block the Windows
 handoff in §V.6.
+
+---
+
+## P3-G11 / P2 policy addendum — real owner Windows OCR evidence (PROPOSED policy only, 2026-11-18)
+
+**Source of authority:** The owner approved drafting a five-file, **docs-only** policy alignment via [their PR #10 comment 6986820279](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986820279), with the original proposed scope in [comment 6986774509](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986774509). This addendum **proposes** a narrowly bounded P2 alternative acceptance policy for the synthetic P3 academic demonstration. It is **NOT EFFECTIVE**, does not replace the current strict P1 release criterion or mark P3 PASS, and does not authorize code, fixture, OCR, PR head or merge modifications. Historical revisions, earlier expected values, and test interpretations above are retained as written.
+
+### G11-A. Exact real-engine owner evidence and one unresolved failure
+
+The owner ran `scripts/python/windows_ocr_acceptance.py` on a **fresh detached Windows worktree** at source SHA `6e6fcdf02d39d3a97ca3221ef2cc84b2ba528821` (Windows 11, Python 3.12.9, Tesseract 5.4.0.20240606; Pillow 13.0.0, pytesseract 0.3.13, pypdfium2 5.15.2). Uploaded `p3_g11_real_ocr.json`: **15,283 bytes, SHA-256 `9ac465722f011d538fd8045e393328fa4a0e2b1f10afd1b8e3488aff961f08cb`**, `repository_head` matches reviewed code, **27 PASS / 1 FAIL / 0 NOT RUN / 1 DERIVED, exit 2**. The one FAIL is **`GOLD-EX-11 OCR-produced 1O5`**, so the original P1 phase gate remains **FAIL / NOT PROVEN**.
+
+**Counterexample:** The immutable generated image visibly contains `1O5` with the letter O; real Tesseract substituted a numeric zero, yielding `105 mg/dL`. The parsed value then had `raw_text='105'`, `normalized_value='105'`, `quality_flags=['clean']`. The application/parser did **not** perform the glyph substitution, and downstream text-based corruption detection cannot reconstruct the lost O. The OCR mean confidence did not expose this ambiguity. No claim is made that the value was reliably read, clinically correct, or safe to act on. **Do not change the executable GOLD gate, source fixture, font/render, thresholds or expected outcome to manufacture PASS.**
+
+### G11-B. Independent real-engine application controls that passed
+
+- Engine/language, PNG/JPEG `GOLD-EX-05/06`, `PDFIUM-01` rasterization, and `ING-02` HTTP upload with persisted Tesseract evidence: **PASS**. `OCR-LIVE-01` measurements are recorded, not accuracy validation; `GOLD-EX-07/08` coverage is **DERIVED**, not a distinct PASS.
+- All **7 W1 R21 terminal-rejection** rows: a truly OCR-produced `104 mg/dL` candidate was doctor-rejected; document became `failed/measurement_rejected`; no Observation, rejected fact unchanged, `VI-002` open, repeated decision `409 E_FACT_ALREADY_DECIDED`.
+- All **6 W1 source-confirmation** rows: bare verification was `400 E_VALIDATION`; fresh source-file access and audit recorded; explicit confirmed `104 mg/dL` plus all required siblings produced **one** source-linked `doctor_verified` Observation, with provenance intact.
+- All **5 W2/FC-3** rows: source image containing `1O5` was misread as a mappable `105 mg/dL` candidate with real Tesseract provenance; **zero pre-verify Observations**; bare and unreviewed fake source comparison each refused `400 E_VALIDATION`; doctor R21 rejection prevents Observation and repetition; source-integrity/audit checks PASS.
+
+**Bounded interpretation:** Mandatory fresh `GET /file`, same-doctor source-access audit, original source hash check at verify/promotion, explicit confirmation/reason, and R21 rejection demonstrate **nonautonomous safety guards at the application boundary**. They **do not demonstrate detection of the source's O glyph**. A doctor can still falsely attest that the rendered `1O5` is `105`, producing a `doctor_verified` Observation after every required confirmation. Such an attestation proves a submitted decision, **not the correctness of visual inspection**; this residual human-error/confirmation-bias risk remains.
+
+### G11-C. Supported Windows regression and current governance
+
+The owner also ran the native Windows Python 3.12 `test_all.ps1` in the isolated worktree: **12 PASS, 0 FAIL, 1 optional Playwright SKIPPED, child exit 0**, including Backend Pytest, Ruff, disposable Alembic smoke, OpenAPI, Frontend TS/lint/Vitest (13 tests), production build and scan. Four Pytest skips appeared in the captured progress output; the exact Windows passed-test count and skip reasons require their own proof, so **do not substitute Arena's separate Linux 3.11 test totals as Windows PASS counts**. The transient outer PowerShell `finally` error after the completed child suite was separately cleaned up, with protected main and DB integrity checks PASS; it is not an OCR result.
+
+The owner selected an **alternative P2 policy *review path*** and then personally posted an approval to begin policy review in [PR #10 comment 6986661566](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986661566). A **separate docs drafting scope**, exactly five files, was owner-approved in [comment 6986820279](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986820279). Neither is a final ratification, a P3 acceptance, a change to `GOLD-EX-11`'s verdict, or permission to fast-forward PR #10.
+
+The proposed P2 policy would *conditionally* accept a known and openly recorded `GOLD-EX-11` technical FAIL for a **local synthetic-only educational application**, **only after** independent review of the exact contract text, green CI on a separately reviewed/finalized original PR #10 head, affirmative owner-authored policy ratification, and a further explicit owner decision to accept/merge P3. The original strict P1 criterion and executable gate stay authoritative until then. The project must never be presented as an OCR/diagnostic service validated for clinical use; no real patient records, autonomous medical interpretation, or patient messaging are authorized.
+
+For the policy's **proposed-only** details see [P2 decision memo](P3_GOLD_EX11_P2_OWNER_POLICY_DECISION_20261118.md), [Gold Fixtures proposal](../evaluation/GOLD_FIXTURES.md#12-proposed-p2-policy-alignment--measured-gold-ex-11-deviation-not-effective-2026-11-18), and [Windows handoff §12](PHASE_3_WINDOWS_ACCEPTANCE.md).
+
+**Status: `P3=IN_REVIEW` / `GOLD-EX-11=FAIL / NOT PROVEN` / `P2 policy=PROPOSED, NOT EFFECTIVE` / PR #10 and #11 DRAFT and unmerged.**
+
+*EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE.*

@@ -9,17 +9,19 @@ Doctor-centered educational demonstration. The application will take **synthetic
 > triage, or patient messaging. A human doctor approves every follow-up action. No real patient data may
 > ever be used with this project.
 
-## Status
+## Status (2026-11-18)
 
-| Phase | Status | Notes |
+| Phase | Status | Evidence |
 |---|---|---|
-| **P0 — Governance and specification baseline** | **PASS** | Merged via PR #2, merge commit `442256606fd2465439409cc9b4d42f1bec09a723`, owner-approved 2026-11-14. |
-| **P1 — Foundation and reproducible startup** | **IN_REVIEW** | Implementation PR open against `main`. Adds the FastAPI `/health` + `/version` service, the React + TypeScript + Vite status page, SQLite + Alembic baseline, hash-pinned Python locks, five Windows PowerShell scripts, and CI. Evidence and non-executed checks: [Phase 1 report](docs/phase-reports/PHASE_1_REPORT.md). |
-| P2–P8 | TODO | Must not start before P1 is accepted. |
+| **P0 — Governance and specification baseline** | **PASS / merged** | [Phase 0 report](docs/phase-reports/PHASE_0_REPORT.md), PR #2 |
+| **P1 — Foundation and reproducible startup** | **PASS / merged** | [Phase 1 report](docs/phase-reports/PHASE_1_REPORT.md), PR #4 |
+| **P2 — Synthetic patient domain and role-scoped API** | **PASS / merged** | [Phase 2 report](docs/phase-reports/PHASE_2_REPORT.md), PR #7 |
+| **P3 — Synthetic document ingestion, OCR and doctor verification** | **IN_REVIEW / BLOCKED** | Draft [PR #10](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10); [Windows E1–E3 evidence](docs/phase-reports/P3_E1_E3_V112_WINDOWS_EVIDENCE.md) and [root-cause handoff](docs/phase-reports/P3_E1_E3_V112_PROBE_ROOT_CAUSE.md) |
+| **P4–P8** | **TODO / not started** | Do not begin until the prior phase is owner-accepted |
 
-Phase 1 delivers the runnable foundation only. There is **no** patient record, authentication, document
-upload, OCR, monitoring, review rule, agent workflow or follow-up task yet, and `/health` reports the OCR and
-model dependencies as `not_configured` rather than pretending they exist.
+**Accepted implementation on `main`: P0–P2.** P3 implementation and R21 work exist on **unmerged branches**. Owner Windows v1.1.2 `plan_only` PASSED but `probe_only` returned exit **13** (historical v1.1.2 diagnostic bugs). The revised and independently audited v1.1.3 harness now passed **both** real Windows `plan_only` **and** `probe_only` (exit 0 each); see [v1.1.3 Windows probe evidence](docs/phase-reports/P3_E1_E3_V113_WINDOWS_PROBE_ONLY_EVIDENCE.md). **Canonical baseline has now completed on owner Windows (3/3, inner exit 0)**; independent audit found **the one corrupted positive `1O5`→`105` was missed by all ambiguity-specific detectors**. D4/D6 only raised non-specific review and also falsely flagged clean `13.4`; [full canonical results audit](docs/phase-reports/P3_E1_E3_V113_CANONICAL_RESULTS_INDEPENDENT_AUDIT.md). `GOLD-EX-11` remains **FAIL / NOT PROVEN**; no exploratory/holdout/rules freeze, P3 release/merge or P4 work is authorized until separately approved safety remediation and evidence.
+
+For current status and exact owner decisions, use [PHASE_PROGRESS.md](docs/roadmap/PHASE_PROGRESS.md) and the [MASTER_PLAN.md](docs/roadmap/MASTER_PLAN.md) status index. Older P1-only setup examples and descriptions below are historical foundation documentation, not proof of P3 acceptance.
 
 ### What you can run today
 
@@ -79,8 +81,7 @@ Implemented in P1 and pinned to exact versions: FastAPI, Pydantic, pydantic-sett
 SQLAlchemy, Alembic, pytest, Ruff, PyYAML (backend); React, TypeScript, Vite, Vitest,
 Testing Library, ESLint (frontend). Python 3.12 and Node 22+ (Vite 7 engine constraint).
 
-Planned for later phases and **not installed**: LangGraph + a local Ollama model with a labelled
-fallback (P5), `pypdf` + Tesseract OCR (P3), Playwright browser E2E (P6/P7).
+**Phase-specific:** P3 uses local PDF/OCR components under review and has not passed its real-engine diagnostic gate; P5 LangGraph/Ollama remains planned, with deterministic fallback; optional Playwright E2E remains a later testing scope. Dependencies and execution claims are version-/branch-specific and must be checked against the relevant phase reports.
 
 Registry metadata, licenses, hashes and lock strategy are recorded in
 [docs/contracts/DEPENDENCIES.md](docs/contracts/DEPENDENCIES.md) and
@@ -108,7 +109,7 @@ AI-Doctor-FollowUp-Agent/
 `-- .github/workflows/     ci.yml (backend on 3.12, frontend on Node 22)
 ```
 
-`data/synthetic/` and the P2+ application modules do not exist yet.
+The tree above was documented during P1. P2 synthetic data and patient/auth modules are accepted; P3 document modules and acceptance diagnostics are under review on unmerged branches. See the phase tracker rather than inferring current implementation from the old schematic.
 
 ## Verification honesty
 
