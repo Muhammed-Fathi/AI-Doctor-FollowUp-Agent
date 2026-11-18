@@ -18,6 +18,7 @@ this service, *and* by a ``BEFORE INSERT`` trigger installed by migration 0003
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
@@ -54,7 +55,12 @@ from app.db.models import (
     FactVerification,
     Observation,
 )
-from app.services.documents import EVENT_DOCUMENT_EXTRACTED, EVENT_DOCUMENT_FILE_READ, quality
+from app.services.documents import (
+    EVENT_DOCUMENT_EXTRACTED,
+    EVENT_DOCUMENT_FILE_READ,
+    quality,
+    storage,
+)
 from app.services.documents.field_parser import normalize_corrected_value
 from app.services.documents.mapping import (
     MappingDecision,
@@ -340,6 +346,7 @@ def _maybe_promote_document(
     doctor_user_id: str,
     decided_at: str,
     conflict_tolerance: float,
+    upload_dir: str | None = None,
 ) -> tuple[bool, str | None]:
     """Promote a fully decided document to one observation, if the rules allow.
 
@@ -387,6 +394,7 @@ def _maybe_promote_document(
         source_fact=anchor,
         doctor_user_id=doctor_user_id,
         decided_at=decided_at,
+        upload_dir=upload_dir,
     )
 
 
@@ -397,6 +405,7 @@ def _create_observation_from_mapping(
     source_fact: ExtractedFact,
     doctor_user_id: str,
     decided_at: str,
+    upload_dir: str | None = None,
 ) -> tuple[bool, str | None]:
     """Insert the mapped observation for ``document`` if the rule allows it.
 
@@ -439,6 +448,8 @@ def _create_observation_from_mapping(
         if not _doctor_accessed_source_file(
             db, document_id=document.id, doctor_user_id=doctor_user_id
         ):
+            return False, "ocr_source_review_required"
+        if not _stored_source_intact(document, upload_dir=upload_dir):
             return False, "ocr_source_review_required"
 
         checked_facts = list({fact.id: fact for fact in [source_fact, *ocr_facts]}.values())
@@ -579,8 +590,22 @@ def _confirmed_text_matches(field_name: str, expected: str | None, supplied: str
     return False
 
 
+def _stored_source_intact(document: Document, *, upload_dir: str | None = None) -> bool:
+    """Return ``True`` when the stored file exists inside ``upload_dir`` and matches size/SHA-256."""
+    effective_upload_dir = upload_dir if upload_dir is not None else get_settings().upload_dir
+    try:
+        target = storage.resolve_for_read(document.stored_path, upload_dir=effective_upload_dir)
+        content = target.read_bytes()
+    except (FileNotFoundError, ValueError, OSError):
+        return False
+    return (
+        len(content) == document.size_bytes
+        and hashlib.sha256(content).hexdigest() == document.sha256
+    )
+
+
 def _doctor_accessed_source_file(db: Session, *, document_id: str, doctor_user_id: str) -> bool:
-    """Return True if the deciding doctor fetched GET /file strictly after latest extraction."""
+    """Return True if the deciding doctor has an un-invalidated intact GET /file after extraction."""
     latest_attempt_created_at = db.execute(
         select(ExtractionAttempt.created_at)
         .where(ExtractionAttempt.document_id == document_id)
@@ -606,25 +631,44 @@ def _doctor_accessed_source_file(db: Session, *, document_id: str, doctor_user_i
         return False
 
     read_created_at, read_rowid = latest_read
-    if read_created_at > latest_attempt_created_at:
-        return True
     if read_created_at < latest_attempt_created_at:
         return False
+    if read_created_at == latest_attempt_created_at:
+        latest_extracted = db.execute(
+            select(AuditEvent.created_at, literal_column("rowid"))
+            .where(
+                AuditEvent.event_type == EVENT_DOCUMENT_EXTRACTED,
+                AuditEvent.subject_type == "document",
+                AuditEvent.subject_id == document_id,
+            )
+            .order_by(AuditEvent.created_at.desc(), literal_column("rowid").desc())
+            .limit(1)
+        ).first()
+        if latest_extracted is None:
+            return False
+        ext_created_at, ext_rowid = latest_extracted
+        if ext_created_at != latest_attempt_created_at or read_rowid <= ext_rowid:
+            return False
 
-    latest_extracted = db.execute(
+    # A1-Anchored S1: any document-level file-read ERROR at or after the doctor's
+    # latest OK invalidates the prior review anchor until a newer intact GET /file OK.
+    latest_error = db.execute(
         select(AuditEvent.created_at, literal_column("rowid"))
         .where(
-            AuditEvent.event_type == EVENT_DOCUMENT_EXTRACTED,
+            AuditEvent.event_type == EVENT_DOCUMENT_FILE_READ,
             AuditEvent.subject_type == "document",
             AuditEvent.subject_id == document_id,
+            AuditEvent.outcome == AuditOutcome.ERROR.value,
         )
         .order_by(AuditEvent.created_at.desc(), literal_column("rowid").desc())
         .limit(1)
     ).first()
-    if latest_extracted is None:
-        return False
-    ext_created_at, ext_rowid = latest_extracted
-    return ext_created_at == latest_attempt_created_at and read_rowid > ext_rowid
+    if latest_error is not None:
+        err_created_at, err_rowid = latest_error
+        if (err_created_at, err_rowid) >= (read_created_at, read_rowid):
+            return False
+
+    return True
 
 
 def _numeric_equal(left: str, right: str) -> bool:
@@ -678,6 +722,7 @@ def _validate_ocr_confirmation(
     source_image_compared: bool,
     confirmed_value: str | None,
     confirmed_unit: str | None,
+    upload_dir: str | None = None,
 ) -> tuple[str | None, str | None]:
     """Enforce Stage 3 source-comparison & audit-reason rules on all OCR facts.
 
@@ -720,6 +765,13 @@ def _validate_ocr_confirmation(
             400,
             ErrorCode.VALIDATION,
             "Inspect the source document via GET /file after extraction before confirming an OCR fact.",
+        )
+    if not _stored_source_intact(document, upload_dir=upload_dir):
+        raise ApiError(
+            400,
+            ErrorCode.VALIDATION,
+            "The stored source document is missing or failed integrity verification; "
+            "re-inspect or re-upload the intact document before verifying OCR facts.",
         )
     if not source_image_compared:
         raise ApiError(
@@ -970,6 +1022,7 @@ def record_decision(
     corrected_unit: str | None = None,
     reason: str | None = None,
     conflict_tolerance: float | None = None,
+    upload_dir: str | None = None,
     source_image_compared: bool = False,
     confirmed_value: str | None = None,
     confirmed_unit: str | None = None,
@@ -1037,6 +1090,7 @@ def record_decision(
         source_image_compared=source_image_compared,
         confirmed_value=confirmed_value,
         confirmed_unit=confirmed_unit,
+        upload_dir=upload_dir,
     )
 
     decided_at = format_utc(now or utc_now())
@@ -1114,6 +1168,7 @@ def record_decision(
             if conflict_tolerance is not None
             else get_settings().conflict_tolerance
         ),
+        upload_dir=upload_dir,
     )
 
     return VerificationOutcome(

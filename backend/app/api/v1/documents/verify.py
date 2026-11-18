@@ -122,6 +122,7 @@ def verify_fact(
         corrected_unit=payload.corrected_unit,
         reason=payload.reason,
         conflict_tolerance=settings.conflict_tolerance,
+        upload_dir=settings.upload_dir,
         source_image_compared=payload.source_image_compared,
         confirmed_value=payload.confirmed_value,
         confirmed_unit=payload.confirmed_unit,

@@ -1019,11 +1019,14 @@ def test_main_emits_unique_w1_verdicts_when_fixture_is_unmappable(monkeypatch, c
 
     payload = json.loads(out_json.read_text(encoding="utf-8"))
     gates = [row["gate"] for row in payload["gates"]]
-    assert gates == [f"W1 R21 rejection: {name}" for name in module.W1_CASES] + [
+    w1_gates = [f"W1 R21 rejection: {name}" for name in module.W1_CASES] + [
         f"W1 source confirmation: {name}" for name in module.W1_POSITIVE_CASES
     ]
+    w2_gates = [f"W2 FC-3 source-aware: {name}" for name in module.W2_CASES]
+    assert gates == w1_gates + w2_gates
     assert len(gates) == len(set(gates))
-    assert all(row["status"] == module.FAIL for row in payload["gates"])
+    assert all(row["status"] == module.FAIL for row in payload["gates"][: len(w1_gates)])
+    assert all(row["status"] == module.NOT_RUN for row in payload["gates"][len(w1_gates) :])
 
 
 def test_the_probe_registers_w1_as_a_gate():
@@ -1440,6 +1443,283 @@ def test_w1_negative_runner_fails_if_provenance_or_audit_safety_breaks():
     evidence.provenance_detail = {"reason": "span mismatch"}
     rows = module.assess_w1(evidence)
     assert any(row.status == module.FAIL for row in rows)
+
+
+def _w2_pass_evidence():
+    """Non-vacuous W2/FC-3 evidence describing substituted 105 on the real 1O5 fixture."""
+    module = _module()
+    candidate = {
+        "fact_id": "fact-value-105",
+        "raw_text": "105",
+        "normalized_value": "105",
+        "unit": "mg/dL",
+        "confidence": 0.94,
+        "verification_status": "pending",
+        "extractor": "tesseract",
+        "requires_source_confirmation": True,
+    }
+    return module, module.W2Evidence(
+        fixture_has_1o5=True,
+        upload_sha256_matches=True,
+        tesseract_attempt_succeeded=True,
+        page_text_extractor="tesseract",
+        page_text_hash_matches=True,
+        candidate=candidate,
+        non_value_fact_count=4,
+        all_facts_pending=True,
+        all_facts_tesseract=True,
+        all_facts_require_source=True,
+        extracted_fields=("reference_text", "report_date", "test_name", "unit", "value"),
+        mapping_eligible=True,
+        mapping_reason="eligible for glucose 105.0 mg/dL at 2026-11-02T00:00:00Z",
+        attempts=({"path": "tesseract", "succeeded": True},),
+        pre_verify_observation_count=0,
+        bare_verify_status=400,
+        bare_verify_code="E_VALIDATION",
+        unreviewed_flag_verify_status=400,
+        unreviewed_flag_verify_code="E_VALIDATION",
+        post_refusal_observation_count=0,
+        post_refusal_decision_count=0,
+        rejection_status=200,
+        document_status="failed",
+        failure_code="measurement_rejected",
+        post_rejection_observations=(),
+        redecision_status=409,
+        redecision_code="E_FACT_ALREADY_DECIDED",
+        vi002_open_count=1,
+        audit_events_safe=True,
+    )
+
+
+def test_the_probe_registers_w2_as_a_gate():
+    """W2 (FC-3 non-vacuous source-aware acceptance) must be wired into the probe."""
+    module = _module()
+    for name in (
+        "W2_SOURCE_NAME",
+        "W2_CASES",
+        "W2Evidence",
+        "assess_w2",
+        "gate_w2_fc3",
+        "_w2_run",
+    ):
+        assert hasattr(module, name), name
+
+    assert module.W2_SOURCE_NAME == "report_ocr_o_confusion.txt"
+    source = SCRIPT.read_text(encoding="utf-8")
+    main_body = source[source.index("def main(argv") :]
+    assert "_w2_run" in main_body
+    # GOLD-EX-11 gate_ocr_corruption must remain intact and independent of W2.
+    assert "GOLD-EX-11" in source
+    assert "gate_ocr_corruption" in main_body
+
+
+def test_w2_passes_only_when_all_non_vacuous_preconditions_and_guards_hold():
+    """W2/FC-3 passes only when real 1O5 fixture, mappable 105, and safety guards all hold."""
+    module, evidence = _w2_pass_evidence()
+    rows = module.assess_w2(evidence)
+
+    assert len(rows) == len(module.W2_CASES)
+    assert [row.gate for row in rows] == [
+        f"W2 FC-3 source-aware: {name}" for name in module.W2_CASES
+    ]
+    assert [row.status for row in rows] == [module.PASS] * len(module.W2_CASES)
+
+
+def test_w2_not_run_when_engine_absent_or_1o5_preserved_or_unmappable(capsys):
+    """Missing engine, preserved literal 1O5, or unmappable OCR yields NOT RUN — never PASS."""
+    module = _module()
+    results: list = []
+    module.gate_w2_fc3(results, None)
+    capsys.readouterr()
+    assert len(results) == len(module.W2_CASES)
+    assert {row.status for row in results} == {module.NOT_RUN}
+
+    # Preserved literal 1O5 -> unparseable/None candidate -> NOT RUN (never vacuous PASS).
+    _, preserved = _w2_pass_evidence()
+    preserved.candidate = None
+    preserved.candidate_absence = "OCR preserved literal 1O5; no mappable numeric 105 value fact"
+    rows_preserved = module.assess_w2(preserved)
+    assert [row.status for row in rows_preserved] == [module.NOT_RUN] * len(module.W2_CASES)
+    assert module.PASS not in {row.status for row in rows_preserved}
+
+    # Missing sibling labels -> mapping blocked / non_value_fact_count == 0 -> NOT RUN.
+    _, no_siblings = _w2_pass_evidence()
+    no_siblings.non_value_fact_count = 0
+    rows_no_sib = module.assess_w2(no_siblings)
+    assert [row.status for row in rows_no_sib] == [module.NOT_RUN] * len(module.W2_CASES)
+
+    _, unmappable = _w2_pass_evidence()
+    unmappable.mapping_eligible = False
+    unmappable.mapping_reason = "extracted facts are not mappable (unmapped_test_name)"
+    rows_unmap = module.assess_w2(unmappable)
+    assert [row.status for row in rows_unmap] == [module.NOT_RUN] * len(module.W2_CASES)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("fixture_has_1o5", False),
+        ("upload_sha256_matches", False),
+        ("tesseract_attempt_succeeded", False),
+        ("page_text_extractor", "pypdf"),
+        ("page_text_hash_matches", False),
+        ("all_facts_pending", False),
+        ("all_facts_tesseract", False),
+        ("all_facts_require_source", False),
+        ("pre_verify_observation_count", 1),
+        ("bare_verify_status", 200),
+        ("bare_verify_code", "E_OTHER"),
+        ("unreviewed_flag_verify_status", 200),
+        ("unreviewed_flag_verify_code", "E_OTHER"),
+        ("post_refusal_observation_count", 1),
+        ("post_refusal_decision_count", 1),
+        ("rejection_status", 400),
+        ("document_status", "verified"),
+        ("failure_code", "all_facts_rejected"),
+        ("post_rejection_observations", ("obs-leak",)),
+        ("redecision_status", 200),
+        ("vi002_open_count", 0),
+        ("audit_events_safe", False),
+    ],
+)
+def test_w2_fails_when_any_precondition_or_safety_invariant_breaks(field, value):
+    """Any broken fixture integrity, promotion leak, or refusal failure flips W2 to FAIL."""
+    module, evidence = _w2_pass_evidence()
+    setattr(evidence, field, value)
+    rows = module.assess_w2(evidence)
+    assert any(row.status == module.FAIL for row in rows), (
+        f"breaking {field}={value!r} must FAIL at least one W2 row"
+    )
+    assert module.NOT_RUN not in {row.status for row in rows} or field in (
+        "tesseract_attempt_succeeded",
+    )
+
+
+def test_w2_runner_end_to_end_real_http_simulated_105_and_preserved_1o5(monkeypatch, capsys):
+    """Offline end-to-end _w2_run: passes on substituted 105 + siblings, NOT RUN on preserved 1O5."""
+    from app.core.config import reset_settings_cache
+    from app.db.session import cached_engine_urls
+
+    module = _module()
+    sentinels = {
+        "DATABASE_URL": "sqlite:///sentinel-before-w2.db",
+        "APP_ENV": "test",
+        "UPLOAD_DIR": "/tmp/sentinel-w2-uploads",
+        "DEMO_SEED_PASSWORD": "sentinel-demo-value",
+    }
+    for key, value in sentinels.items():
+        monkeypatch.setenv(key, value)
+    reset_settings_cache()
+    urls_before = cached_engine_urls()
+
+    # Subcase A: engine substitutes 1O5 -> 105 on the real 1O5 fixture image -> all 5 W2 PASS.
+    substituted_105 = (
+        "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD\n"
+        "Demo Patient A            Ref: DEMO-A-001            Report date: 2026-11-02\n"
+        "Test: Fasting glucose     Value: 105 mg/dL\n"
+        "Reference range: 70 - 99 mg/dL\n"
+    )
+    _mock_intake_ocr(monkeypatch, substituted_105)
+    results_pass: list = []
+    module._w2_run(results_pass, engine_present=True)
+    capsys.readouterr()
+
+    assert [row.gate for row in results_pass] == [
+        f"W2 FC-3 source-aware: {name}" for name in module.W2_CASES
+    ]
+    assert [row.status for row in results_pass] == [module.PASS] * len(module.W2_CASES)
+    assert cached_engine_urls() == urls_before
+
+    # Subcase B: engine preserves literal 1O5 -> NOT RUN across W2 (and NEVER vacuous PASS).
+    preserved_1o5 = (
+        REPO_ROOT / "data" / "synthetic" / "documents" / "sources" / module.W2_SOURCE_NAME
+    ).read_text(encoding="utf-8")
+    _mock_intake_ocr(monkeypatch, preserved_1o5)
+    results_preserved: list = []
+    module._w2_run(results_preserved, engine_present=True)
+    capsys.readouterr()
+
+    assert [row.gate for row in results_preserved] == [
+        f"W2 FC-3 source-aware: {name}" for name in module.W2_CASES
+    ]
+    assert [row.status for row in results_preserved] == [module.NOT_RUN] * len(module.W2_CASES)
+    assert module.PASS not in {row.status for row in results_preserved}
+
+    # Subcase C: unmapped Hemoglobin 13.4 g/dL OCR output -> NOT RUN, never vacuous PASS.
+    hgb_text = (
+        "SYNTHETIC DEMO DATA - NOT A REAL MEDICAL RECORD\n"
+        "Demo Patient A            Ref: DEMO-A-001            Report date: 2026-11-02\n"
+        "Test: Hemoglobin          Value: 13.4 g/dL\n"
+        "Reference range: 12.0 - 15.5 g/dL\n"
+    )
+    _mock_intake_ocr(monkeypatch, hgb_text)
+    results_unmapped: list = []
+    module._w2_run(results_unmapped, engine_present=True)
+    capsys.readouterr()
+
+    assert [row.status for row in results_unmapped] == [module.NOT_RUN] * len(module.W2_CASES)
+    assert module.PASS not in {row.status for row in results_unmapped}
+
+    # GOLD-EX-11 gate_ocr_corruption still FAILS on 105 and only PASSES on literal 1O5.
+    corruption_res: list = []
+    _mock_intake_ocr(monkeypatch, substituted_105)
+    # Run pure extract_ocr path via run_ocr mock on gate_ocr_corruption
+    from app.services.documents import ocr as ocr_module
+
+    monkeypatch.setattr(ocr_module, "resolve_engine", lambda cmd: "/fake/tesseract")
+    monkeypatch.setattr(
+        ocr_module,
+        "run_ocr",
+        lambda image, *, tesseract_cmd, language, preprocessing=None: ocr_module.OcrResult(
+            text=substituted_105, confidence=0.94, tool_version="5.3.0.sim"
+        ),
+    )
+    module.gate_ocr_corruption(corruption_res, engine_present=True)
+    capsys.readouterr()
+    assert len(corruption_res) == 1
+    assert corruption_res[0].gate == "GOLD-EX-11 OCR-produced 1O5"
+    assert corruption_res[0].status == module.FAIL
+
+    for key, value in sentinels.items():
+        assert os.environ.get(key) == value
+
+
+def test_main_fails_w2_when_engine_present_and_1o5_fixture_tampered(monkeypatch, capsys, tmp_path):
+    """If the W2 1O5 fixture is missing or stripped of '1O5', main fails W2 cleanly."""
+    import json
+
+    module = _module()
+    fake_sources = tmp_path / "sources"
+    fake_sources.mkdir()
+    shutil_src = REPO_ROOT / "data" / "synthetic" / "documents" / "sources" / module.W1_SOURCE_NAME
+    (fake_sources / module.W1_SOURCE_NAME).write_text(
+        shutil_src.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (fake_sources / module.W2_SOURCE_NAME).write_text(
+        "SYNTHETIC\nTest: Fasting glucose     Value: 105 mg/dL\n", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(module, "SOURCES", fake_sources)
+    monkeypatch.setattr(module, "gate_environment", lambda r: None)
+    monkeypatch.setattr(module, "gate_engine", lambda r: "/fake/tesseract")
+    monkeypatch.setattr(module, "gate_ocr_live", lambda r, engine_present: None)
+    monkeypatch.setattr(module, "gate_ocr_corruption", lambda r, engine_present: None)
+    monkeypatch.setattr(module, "gate_rasterizer", lambda r: None)
+    monkeypatch.setattr(module, "gate_api_ocr_upload", lambda r, engine_present: None)
+    monkeypatch.setattr(module, "_w1_run", lambda r, engine_present: None)
+    monkeypatch.setattr(module, "_w1_positive_run", lambda r, engine_present: None)
+
+    out_json = tmp_path / "w2_tamper.json"
+    exit_code = module.main(["windows_ocr_acceptance.py", "--json", str(out_json)])
+    capsys.readouterr()
+    assert exit_code == 2
+    payload = json.loads(out_json.read_text(encoding="utf-8"))
+    w2_rows = [row for row in payload["gates"] if row["gate"].startswith("W2 FC-3 source-aware:")]
+    assert [row["gate"] for row in w2_rows] == [
+        f"W2 FC-3 source-aware: {name}" for name in module.W2_CASES
+    ]
+    assert all(row["status"] == module.FAIL for row in w2_rows)
+    assert module.PASS not in {row["status"] for row in w2_rows}
 
 
 HANDOFF = REPO_ROOT / "docs" / "phase-reports" / "PHASE_3_WINDOWS_ACCEPTANCE.md"

@@ -20,9 +20,16 @@ existence: the ``404`` detail is the same for "absent" and "not yours".
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Security
+import hashlib
+from collections.abc import Iterator
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Request, Security
 from fastapi.responses import Response
-from sqlalchemy import select
+from sqlalchemy import Connection, Engine, select
+from sqlalchemy.orm import Session
 
 from app.api.v1.auth.dependencies import (
     AppSettings,
@@ -32,7 +39,7 @@ from app.api.v1.auth.dependencies import (
     RequestId,
     bearer_scheme,
 )
-from app.core.enums import AuditOutcome, DocumentStatus, ExtractionPath
+from app.core.enums import ActorType, AuditOutcome, DocumentStatus, ExtractionPath
 from app.core.errors import EXTRACTION_PENDING_DETAIL, ApiError, ErrorCode, document_error
 from app.db.models import DocumentPageText, ExtractedFact, ExtractionAttempt
 from app.schemas.document import (
@@ -80,6 +87,74 @@ ROUTE_READ_TEXT = "GET /api/v1/documents/{document_id}/text"
 
 #: Neutral wording for an absent *or* out-of-scope document.
 NOT_FOUND_DETAIL = "This document is not available."
+
+_FILE_READ_ERROR_SLOT_ATTR = "_p3_file_read_error_slot"
+_ERROR_REASON_SOURCE_UNAVAILABLE = "source_unavailable"
+_ERROR_REASON_INTEGRITY_MISMATCH = "integrity_mismatch"
+
+
+@dataclass(frozen=True, slots=True)
+class _DeferredFileReadError:
+    """Sanitized intent persisted after FastAPI rolls back the request session."""
+
+    bind: Engine | Connection
+    actor_type: ActorType
+    actor_id: str | None
+    patient_id: str
+    document_id: str
+    request_id: str
+    now: datetime
+    mime_type: str
+    reason: str
+
+
+@dataclass(slots=True)
+class _FileReadErrorSlot:
+    """Mutable per-request carrier shared with the outer route-local dependency."""
+
+    intent: _DeferredFileReadError | None = None
+
+
+def _persist_deferred_file_read_error(intent: _DeferredFileReadError) -> None:
+    """Persist ``AuditOutcome.ERROR`` in a fresh transaction after request rollback."""
+    with Session(bind=intent.bind, autoflush=False, expire_on_commit=False) as audit_db:
+        append_audit_event(
+            audit_db,
+            event_type=EVENT_DOCUMENT_FILE_READ,
+            actor_type=intent.actor_type,
+            actor_id=intent.actor_id,
+            outcome=AuditOutcome.ERROR,
+            request_id=intent.request_id,
+            now=intent.now,
+            patient_id=intent.patient_id,
+            subject_type="document",
+            subject_id=intent.document_id,
+            detail_fragments=(
+                ROUTE_READ_FILE,
+                f"mime_type={intent.mime_type}",
+                f"reason={intent.reason}",
+            ),
+        )
+        audit_db.commit()
+
+
+def _deferred_file_read_error_audit(request: Request) -> Iterator[_FileReadErrorSlot]:
+    """Outer route-local dependency ensuring ERROR audit writes run after ``DbSession`` rollback."""
+    slot = _FileReadErrorSlot()
+    setattr(request.state, _FILE_READ_ERROR_SLOT_ATTR, slot)
+    try:
+        yield slot
+    finally:
+        intent = slot.intent
+        slot.intent = None
+        if intent is not None:
+            _persist_deferred_file_read_error(intent)
+
+
+def _optional_file_read_error_slot(request: Request) -> _FileReadErrorSlot | None:
+    """Return the route-local error audit slot during HTTP requests, or ``None`` directly."""
+    slot = getattr(request.state, _FILE_READ_ERROR_SLOT_ATTR, None)
+    return slot if isinstance(slot, _FileReadErrorSlot) else None
 
 
 def _recovery_eligible(document) -> bool:
@@ -455,6 +530,7 @@ def read_document_text(
         "The stored name is resolved through the storage guard, so a tampered row "
         "cannot escape the upload directory."
     ),
+    dependencies=[Depends(_deferred_file_read_error_audit)],
     response_class=Response,
     responses={
         200: {
@@ -473,8 +549,20 @@ def read_file(
     settings: AppSettings,
     now: Now,
     request_id: RequestId,
+    error_slot: Annotated[
+        _FileReadErrorSlot | None, Depends(_optional_file_read_error_slot)
+    ] = None,
 ) -> Response:
-    """Stream the original upload, scope-checked first."""
+    """Stream the original upload, scope-checked first and integrity-checked.
+
+    When called through FastAPI HTTP routing, ``error_slot`` is populated by the
+    outer route-local dependency so missing or integrity-mismatched source reads
+    persist ``AuditOutcome.ERROR`` only after ``DbSession`` has rolled back and
+    released any SQLite write lock. Direct Python calls without FastAPI DI pass
+    ``error_slot=None``, still enforce single-buffer SHA-256 verification and
+    neutral ``404`` failure without emitting ``AuditOutcome.OK`` or committing/rolling
+    back ``db``, and do not run FastAPI's post-rollback deferred audit cleanup.
+    """
     document = load_document(db, document_id)
     if document is None:
         raise _not_found()
@@ -484,10 +572,38 @@ def read_file(
         payload = resolve_for_read(
             document.stored_path, upload_dir=settings.upload_dir
         ).read_bytes()
-    except (FileNotFoundError, UnsafePathError, ValueError):
+    except (FileNotFoundError, UnsafePathError, ValueError, OSError):
+        if error_slot is not None:
+            error_slot.intent = _DeferredFileReadError(
+                bind=db.get_bind(),
+                actor_type=principal.actor_type,
+                actor_id=principal.user_id,
+                patient_id=document.patient_id,
+                document_id=document.id,
+                request_id=request_id,
+                now=now,
+                mime_type=document.mime_type,
+                reason=_ERROR_REASON_SOURCE_UNAVAILABLE,
+            )
         # The row exists but the bytes do not (or the name is unsafe): report the
         # same neutral 404 rather than leaking a filesystem detail.
         raise _not_found() from None
+
+    payload_sha256 = hashlib.sha256(payload).hexdigest()
+    if payload_sha256 != document.sha256:
+        if error_slot is not None:
+            error_slot.intent = _DeferredFileReadError(
+                bind=db.get_bind(),
+                actor_type=principal.actor_type,
+                actor_id=principal.user_id,
+                patient_id=document.patient_id,
+                document_id=document.id,
+                request_id=request_id,
+                now=now,
+                mime_type=document.mime_type,
+                reason=_ERROR_REASON_INTEGRITY_MISMATCH,
+            )
+        raise _not_found()
 
     append_audit_event(
         db,
@@ -509,6 +625,8 @@ def read_file(
         headers={
             "Content-Disposition": f'inline; filename="{document.original_filename}"',
             "Cache-Control": "no-store",
+            "ETag": f'"{payload_sha256}"',
+            "X-Content-Type-Options": "nosniff",
         },
     )
 

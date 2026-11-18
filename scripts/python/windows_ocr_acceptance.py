@@ -599,7 +599,7 @@ def _seed_password(settings) -> str:
     return str(configured) or "acceptance-only-password"
 
 
-def _isolated_app(tmp: str) -> dict:
+def _isolated_app(tmp: str, *, source_name: str | None = None) -> dict:
     """Build a throwaway settings/app/session seam over a temporary SQLite file.
 
     Extracted from ``gate_api_ocr_upload`` so the R21 rejection gate (``W1``) drives
@@ -684,7 +684,9 @@ def _isolated_app(tmp: str) -> dict:
             "session_factory": lambda: Session(engine),
             "patient_token": patient_token,
             "doctor_token": doctor_token,
-            "image_bytes": fixtures.build_legible_scan_image(W1_SOURCE_NAME, fmt="PNG"),
+            "image_bytes": fixtures.build_legible_scan_image(
+                source_name or W1_SOURCE_NAME, fmt="PNG"
+            ),
         }
     except Exception:
         engine.dispose()
@@ -2185,6 +2187,526 @@ def _w1_positive_run(results: list[Result], *, engine_present: bool) -> None:
             )
 
 
+# --- W2: non-vacuous source-aware acceptance on real `1O5` fixture (FC-3) ----
+
+W2_SOURCE_NAME = "report_ocr_o_confusion.txt"
+
+W2_CASES = (
+    "source fixture intact",
+    "OCR mappable 105 candidate",
+    "no autonomous promotion",
+    "unreviewed verify refused",
+    "R21 rejection blocks promotion",
+)
+
+
+@dataclass
+class W2Evidence:
+    """Measured evidence for the non-vacuous W2 / FC-3 gate on real ``1O5``."""
+
+    fixture_has_1o5: bool = False
+    upload_sha256_matches: bool = False
+    tesseract_attempt_succeeded: bool = False
+    page_text_extractor: str | None = None
+    page_text_hash_matches: bool = False
+    candidate: dict | None = None
+    candidate_absence: str = ""
+    non_value_fact_count: int = 0
+    all_facts_pending: bool = False
+    all_facts_tesseract: bool = False
+    all_facts_require_source: bool = False
+    extracted_fields: tuple[str, ...] = ()
+    extracted_facts: tuple[dict, ...] = ()
+    verification_issues: tuple[dict, ...] = ()
+    mapping_eligible: bool = True
+    mapping_reason: str = ""
+    attempts: tuple[dict, ...] = ()
+    pre_verify_observation_count: int = 0
+    bare_verify_status: int | None = None
+    bare_verify_code: str | None = None
+    unreviewed_flag_verify_status: int | None = None
+    unreviewed_flag_verify_code: str | None = None
+    post_refusal_observation_count: int = 0
+    post_refusal_decision_count: int = 0
+    rejection_status: int | None = None
+    document_status: str | None = None
+    failure_code: str | None = None
+    post_rejection_observations: tuple[str, ...] = ()
+    redecision_status: int | None = None
+    redecision_code: str | None = None
+    vi002_open_count: int = 0
+    audit_events_safe: bool = False
+    precondition_failure: str = ""
+
+
+def assess_w2(evidence: W2Evidence) -> list[Result]:
+    """Turn measured W2/FC-3 evidence into non-vacuous per-requirement verdicts."""
+    gate = "W2 FC-3 source-aware"
+
+    def rows(status: str, detail: str, data: dict | None = None) -> list[Result]:
+        return [Result(f"{gate}: {name}", status, detail, dict(data or {})) for name in W2_CASES]
+
+    extracted_summary = {
+        "extracted_fields": list(evidence.extracted_fields),
+        "extracted_facts": list(evidence.extracted_facts),
+        "verification_issues": list(evidence.verification_issues),
+        "attempts": list(evidence.attempts),
+        **({"mapping_reason": evidence.mapping_reason} if evidence.mapping_reason else {}),
+    }
+
+    if evidence.precondition_failure:
+        return rows(FAIL, evidence.precondition_failure, extracted_summary)
+
+    if not evidence.fixture_has_1o5:
+        return rows(
+            FAIL,
+            f"W2 fixture {W2_SOURCE_NAME} is missing or tampered (literal '1O5' required)",
+            extracted_summary,
+        )
+    if not evidence.upload_sha256_matches:
+        return rows(
+            FAIL, "uploaded document SHA-256 does not match W2 PNG bytes", extracted_summary
+        )
+    if (
+        not evidence.tesseract_attempt_succeeded
+        or evidence.page_text_extractor != "tesseract"
+        or not evidence.page_text_hash_matches
+    ):
+        return rows(
+            FAIL,
+            "missing or mismatched persisted tesseract extraction attempt / page text provenance",
+            extracted_summary,
+        )
+
+    if evidence.candidate is None:
+        return rows(
+            NOT_RUN,
+            evidence.candidate_absence
+            or "real OCR preserved literal '1O5' or produced no mappable 105 mg/dL value fact",
+            extracted_summary,
+        )
+
+    if evidence.non_value_fact_count == 0:
+        return rows(
+            NOT_RUN,
+            "real OCR produced only a value fact without sibling labels; non-vacuous FC-3 requires sibling layout",
+            extracted_summary,
+        )
+
+    if not evidence.mapping_eligible or not evidence.candidate.get("normalized_value"):
+        return rows(
+            NOT_RUN,
+            evidence.mapping_reason
+            or "extracted OCR facts are not mapping-eligible for an Observation",
+            {"candidate": evidence.candidate, **extracted_summary},
+        )
+
+    if (
+        evidence.candidate.get("normalized_value") != "105"
+        or evidence.candidate.get("unit") != "mg/dL"
+    ):
+        return rows(
+            NOT_RUN,
+            f"expected substituted 105 mg/dL glucose candidate on 1O5 fixture, got "
+            f"{evidence.candidate.get('normalized_value')!r} {evidence.candidate.get('unit')!r}",
+            {"candidate": evidence.candidate, **extracted_summary},
+        )
+
+    candidate = evidence.candidate
+    fixture_ok = (
+        evidence.fixture_has_1o5
+        and evidence.upload_sha256_matches
+        and evidence.tesseract_attempt_succeeded
+        and evidence.page_text_extractor == "tesseract"
+        and evidence.page_text_hash_matches
+    )
+    candidate_ok = (
+        evidence.all_facts_pending
+        and evidence.all_facts_tesseract
+        and evidence.all_facts_require_source
+        and evidence.mapping_eligible
+        and candidate.get("normalized_value") == "105"
+        and candidate.get("unit") == "mg/dL"
+    )
+    no_auto_ok = evidence.pre_verify_observation_count == 0
+    refusal_ok = (
+        evidence.bare_verify_status == 400
+        and evidence.bare_verify_code == "E_VALIDATION"
+        and evidence.unreviewed_flag_verify_status == 400
+        and evidence.unreviewed_flag_verify_code == "E_VALIDATION"
+        and evidence.post_refusal_observation_count == 0
+        and evidence.post_refusal_decision_count == 0
+    )
+    rejection_ok = (
+        evidence.rejection_status == 200
+        and evidence.document_status == "failed"
+        and evidence.failure_code == W1_FAILURE_CODE
+        and not evidence.post_rejection_observations
+        and evidence.redecision_status == 409
+        and evidence.redecision_code == "E_FACT_ALREADY_DECIDED"
+        and evidence.vi002_open_count >= 1
+        and evidence.audit_events_safe
+    )
+
+    return [
+        Result(
+            f"{gate}: source fixture intact",
+            PASS if fixture_ok else FAIL,
+            f"fixture_has_1o5={evidence.fixture_has_1o5} "
+            f"sha_match={evidence.upload_sha256_matches} "
+            f"tesseract={evidence.tesseract_attempt_succeeded} "
+            f"page_ext={evidence.page_text_extractor!r} "
+            f"page_hash={evidence.page_text_hash_matches}",
+            {"attempts": list(evidence.attempts)},
+        ),
+        Result(
+            f"{gate}: OCR mappable 105 candidate",
+            PASS if candidate_ok else FAIL,
+            f"value={candidate.get('normalized_value')!r} unit={candidate.get('unit')!r} "
+            f"siblings={evidence.non_value_fact_count} pending={evidence.all_facts_pending} "
+            f"tesseract={evidence.all_facts_tesseract} req_src={evidence.all_facts_require_source}",
+            {"candidate": candidate},
+        ),
+        Result(
+            f"{gate}: no autonomous promotion",
+            PASS if no_auto_ok else FAIL,
+            f"pre_verify_observations={evidence.pre_verify_observation_count}",
+        ),
+        Result(
+            f"{gate}: unreviewed verify refused",
+            PASS if refusal_ok else FAIL,
+            f"bare=({evidence.bare_verify_status}, {evidence.bare_verify_code!r}) "
+            f"unreviewed_flag=({evidence.unreviewed_flag_verify_status}, {evidence.unreviewed_flag_verify_code!r}) "
+            f"post_obs={evidence.post_refusal_observation_count} "
+            f"post_decisions={evidence.post_refusal_decision_count}",
+        ),
+        Result(
+            f"{gate}: R21 rejection blocks promotion",
+            PASS if rejection_ok else FAIL,
+            f"rej={evidence.rejection_status} doc={evidence.document_status!r} "
+            f"code={evidence.failure_code!r} obs={list(evidence.post_rejection_observations)} "
+            f"redec=({evidence.redecision_status}, {evidence.redecision_code!r}) "
+            f"vi002={evidence.vi002_open_count} audit_safe={evidence.audit_events_safe}",
+        ),
+    ]
+
+
+def gate_w2_fc3(results: list[Result], objects: dict | None) -> None:
+    """W2 / FC-3: non-vacuous source-aware acceptance on the real ``1O5`` fixture."""
+    if objects is None:
+        for name in W2_CASES:
+            _record(
+                results,
+                Result(f"W2 FC-3 source-aware: {name}", NOT_RUN, "no Tesseract engine available"),
+            )
+        return
+
+    import hashlib
+
+    from fastapi.testclient import TestClient
+    from sqlalchemy import select
+
+    from app.db import models as db_models
+
+    evidence = W2Evidence()
+    source_path = SOURCES / W2_SOURCE_NAME
+    if not source_path.is_file():
+        evidence.precondition_failure = f"missing committed W2 fixture {W2_SOURCE_NAME}"
+        for row in assess_w2(evidence):
+            _record(results, row)
+        return
+    fixture_text = source_path.read_text(encoding="utf-8", errors="replace")
+    evidence.fixture_has_1o5 = "1O5" in fixture_text
+    if not evidence.fixture_has_1o5:
+        for row in assess_w2(evidence):
+            _record(results, row)
+        return
+
+    client = objects["test_client"] if "test_client" in objects else TestClient(objects["app"])
+    doctor_headers = {"Authorization": f"Bearer {objects['doctor_token']}"}
+    patient_headers = {"Authorization": f"Bearer {objects['patient_token']}"}
+    models = objects.get("models", db_models)
+    session_factory = objects["session_factory"]
+    expected_sha256 = hashlib.sha256(objects["image_bytes"]).hexdigest()
+
+    with client as http:
+        upload = http.post(
+            "/api/v1/documents/upload",
+            headers=patient_headers,
+            files={"file": ("ocr_1o5.png", objects["image_bytes"], "image/png")},
+        )
+        if upload.status_code != 202:
+            evidence.precondition_failure = (
+                f"upload answered {upload.status_code}: {upload.text[:300]}"
+            )
+            for row in assess_w2(evidence):
+                _record(results, row)
+            return
+        document_id = upload.json()["document_id"]
+
+        extraction = http.get(
+            f"/api/v1/documents/{document_id}/extraction",
+            headers=doctor_headers,
+        )
+        if extraction.status_code != 200:
+            evidence.precondition_failure = (
+                f"extraction answered {extraction.status_code}: {extraction.text[:300]}"
+            )
+            for row in assess_w2(evidence):
+                _record(results, row)
+            return
+
+        body = extraction.json()
+        evidence.attempts = tuple(
+            {"path": a["path"], "succeeded": a["succeeded"]} for a in body["attempts"]
+        )
+        facts = body["facts"]
+        evidence.extracted_fields = tuple(sorted(f["field_name"] for f in facts))
+        evidence.extracted_facts = tuple(
+            {
+                "field_name": f.get("field_name"),
+                "raw_text": f.get("raw_text"),
+                "normalized_value": f.get("normalized_value"),
+                "unit": f.get("unit"),
+                "quality_flags": list(f.get("quality_flags") or ()),
+                "extractor": (f.get("evidence") or {}).get("extractor"),
+            }
+            for f in facts
+        )
+        evidence.verification_issues = tuple(
+            {
+                "issue_type": issue.get("issue_type"),
+                "reason_code": issue.get("reason_code"),
+            }
+            for issue in body.get("verification_issues", ())
+        )
+        evidence.non_value_fact_count = sum(1 for f in facts if f.get("field_name") != "value")
+        evidence.all_facts_pending = bool(facts) and all(
+            f.get("verification_status") == "pending" for f in facts
+        )
+        evidence.all_facts_tesseract = bool(facts) and all(
+            (f.get("evidence") or {}).get("extractor") == "tesseract" for f in facts
+        )
+        evidence.all_facts_require_source = bool(facts) and all(
+            f.get("requires_source_confirmation") is True for f in facts
+        )
+
+        with session_factory() as session:
+            doc = session.execute(
+                select(models.Document).where(models.Document.id == document_id)
+            ).scalar_one()
+            evidence.upload_sha256_matches = doc.sha256 == expected_sha256
+            attempts_db = list(
+                session.execute(
+                    select(models.ExtractionAttempt).where(
+                        models.ExtractionAttempt.document_id == document_id
+                    )
+                ).scalars()
+            )
+            evidence.tesseract_attempt_succeeded = any(
+                a.path == "tesseract" and a.succeeded == 1 for a in attempts_db
+            )
+            page_rows = list(
+                session.execute(
+                    select(models.DocumentPageText)
+                    .where(models.DocumentPageText.document_id == document_id)
+                    .order_by(models.DocumentPageText.page_index)
+                ).scalars()
+            )
+            evidence.page_text_extractor = page_rows[0].extractor if page_rows else None
+            evidence.page_text_hash_matches = bool(page_rows) and all(
+                pr.text_length == len(pr.text)
+                and pr.text_sha256 == hashlib.sha256(pr.text.encode("utf-8")).hexdigest()
+                for pr in page_rows
+            )
+            fact_ids = [f["fact_id"] for f in facts]
+            pre_obs = (
+                list(
+                    session.execute(
+                        select(models.Observation).where(
+                            models.Observation.source_fact_id.in_(fact_ids)
+                        )
+                    ).scalars()
+                )
+                if fact_ids
+                else []
+            )
+            evidence.pre_verify_observation_count = len(pre_obs)
+
+        candidate = _w1_candidate(facts)
+        eligible, mapping_detail = _w1_mapping_eligibility(body)
+        evidence.mapping_eligible = eligible
+        evidence.mapping_reason = mapping_detail
+
+        if candidate is None:
+            evidence.candidate_absence = (
+                "OCR preserved '1O5' or produced no mappable 105 mg/dL `value` fact "
+                f"({mapping_detail}); fields={list(evidence.extracted_fields)} "
+                f"facts={list(evidence.extracted_facts)}"
+            )
+            for row in assess_w2(evidence):
+                _record(results, row)
+            return
+
+        evidence.candidate = {
+            "fact_id": candidate["fact_id"],
+            "raw_text": candidate["raw_text"],
+            "normalized_value": candidate.get("normalized_value"),
+            "unit": candidate.get("unit"),
+            "confidence": candidate.get("confidence"),
+            "verification_status": candidate["verification_status"],
+            "extractor": (candidate.get("evidence") or {}).get("extractor"),
+            "requires_source_confirmation": candidate.get("requires_source_confirmation"),
+        }
+
+        if (
+            not eligible
+            or evidence.non_value_fact_count == 0
+            or candidate.get("normalized_value") != "105"
+            or candidate.get("unit") != "mg/dL"
+        ):
+            for row in assess_w2(evidence):
+                _record(results, row)
+            return
+
+        # 1. Negative controls BEFORE any GET /file: bare verify & unreviewed flag both refused.
+        bare = http.post(
+            f"/api/v1/documents/{document_id}/verify",
+            headers=doctor_headers,
+            json={"fact_id": candidate["fact_id"], "decision": "verified"},
+        )
+        evidence.bare_verify_status = bare.status_code
+        try:
+            evidence.bare_verify_code = bare.json().get("code")
+        except ValueError:
+            evidence.bare_verify_code = None
+
+        unreviewed = http.post(
+            f"/api/v1/documents/{document_id}/verify",
+            headers=doctor_headers,
+            json={
+                "fact_id": candidate["fact_id"],
+                "decision": "verified",
+                "source_image_compared": True,
+                "confirmed_value": "105",
+                "confirmed_unit": "mg/dL",
+                "reason": "unreviewed attestation before GET /file",
+            },
+        )
+        evidence.unreviewed_flag_verify_status = unreviewed.status_code
+        try:
+            evidence.unreviewed_flag_verify_code = unreviewed.json().get("code")
+        except ValueError:
+            evidence.unreviewed_flag_verify_code = None
+
+        mid_read = _w1_read(session_factory, models, document_id, candidate["fact_id"])
+        evidence.post_refusal_observation_count = len(mid_read["promoted_observations"])
+        evidence.post_refusal_decision_count = int(mid_read["snapshot"]["decision_count"])
+
+        # 2. R21 rejection on substituted 105 blocks promotion & re-decision without needing GET /file.
+        rejection = http.post(
+            f"/api/v1/documents/{document_id}/verify",
+            headers=doctor_headers,
+            json={
+                "fact_id": candidate["fact_id"],
+                "decision": "rejected",
+                "reason": "source scan carries ambiguous 1O5 character; reject OCR 105",
+            },
+        )
+        evidence.rejection_status = rejection.status_code
+
+        stored = _w1_read(session_factory, models, document_id, candidate["fact_id"])
+        evidence.document_status = stored["document_status"]
+        evidence.failure_code = stored["failure_code"]
+        evidence.post_rejection_observations = stored["promoted_observations"]
+        evidence.vi002_open_count = len(_w1_open_vi002(stored["issues"]))
+
+        again = http.post(
+            f"/api/v1/documents/{document_id}/verify",
+            headers=doctor_headers,
+            json={
+                "fact_id": candidate["fact_id"],
+                "decision": "verified",
+                "reason": "second decision must be refused",
+            },
+        )
+        evidence.redecision_status = again.status_code
+        try:
+            evidence.redecision_code = again.json().get("code")
+        except ValueError:
+            evidence.redecision_code = None
+
+        # 3. Audit safety: zero OCR text tokens leaked into AuditEvent.safe_detail.
+        sensitive_tokens = ("105", "1O5", "Fasting glucose", "Reference range", "mg/dL")
+        with session_factory() as session:
+            page_texts = list(
+                session.execute(
+                    select(models.DocumentPageText).where(
+                        models.DocumentPageText.document_id == document_id
+                    )
+                ).scalars()
+            )
+            audit_rows = list(session.execute(select(models.AuditEvent)).scalars())
+        audit_safe = True
+        for audit in audit_rows:
+            detail = audit.safe_detail or ""
+            if any(tok in detail for tok in sensitive_tokens):
+                audit_safe = False
+            for pt in page_texts:
+                if pt.text and pt.text in detail:
+                    audit_safe = False
+        evidence.audit_events_safe = audit_safe
+
+        for row in assess_w2(evidence):
+            _record(results, row)
+
+
+def _w2_run(results: list[Result], *, engine_present: bool) -> None:
+    """Own W2/FC-3 end to end on the real ``1O5`` fixture in an isolated temporary DB."""
+    if not engine_present:
+        gate_w2_fc3(results, None)
+        return
+
+    tmp = tempfile.mkdtemp(prefix="p3-w2-")
+    saved_env = {name: os.environ.get(name) for name in _PROBE_ENV_KEYS}
+    seam = None
+    try:
+        seam = _isolated_app(tmp, source_name=W2_SOURCE_NAME)
+        gate_w2_fc3(results, seam)
+    except Exception as error:
+        detail = f"unexpected {type(error).__name__}: {error}\n{traceback.format_exc(limit=3)}"
+        recorded_any = False
+        for name in W2_CASES:
+            gate = f"W2 FC-3 source-aware: {name}"
+            if not _verdicts_for(results, gate):
+                _record(results, Result(gate, FAIL, detail))
+                recorded_any = True
+        if not recorded_any:
+            _record(results, Result("W2 FC-3 source-aware error", FAIL, detail))
+    finally:
+        teardown_seam = (
+            dict(seam)
+            if seam is not None
+            else {
+                "engine": None,
+                "database_url": f"sqlite:///{(Path(tmp) / 'accept.db').as_posix()}",
+            }
+        )
+        teardown_seam["saved_env"] = saved_env
+        teardown_seam["tmp"] = tmp
+        problems = _w1_teardown(teardown_seam)
+        if problems:
+            _record(
+                results,
+                Result(
+                    "W2 FC-3 source-aware cleanup",
+                    FAIL,
+                    "; ".join(problems),
+                    {"cleanup_errors": problems},
+                ),
+            )
+
+
 def main(argv: list[str]) -> int:
     """Run every Windows-only gate and return 0 only if none is NOT RUN/FAIL."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -2253,6 +2775,12 @@ def main(argv: list[str]) -> int:
             gate = f"W1 source confirmation: {name}"
             if not _verdicts_for(results, gate):
                 _record(results, Result(gate, FAIL, detail))
+
+    _guarded(
+        results,
+        "W2 FC-3 source-aware",
+        lambda: _w2_run(results, engine_present=engine_present),
+    )
 
     print()
     print("=" * 78)
