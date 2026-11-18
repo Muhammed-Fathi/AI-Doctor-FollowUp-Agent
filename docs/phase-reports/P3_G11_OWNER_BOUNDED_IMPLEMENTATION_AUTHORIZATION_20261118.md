@@ -80,3 +80,42 @@ Only the following **six** implementation/test repository paths are authorized:
 4. PR #11 remains independent Draft documentation; no merges. No change to protected Windows acceptance checkout/database or existing evidence.
 
 **No action in this addendum is an OCR/P3 acceptance, P2 waiver, merge approval, or permission for a seventh changed implementation file.** This is a workflow correction in response to the owner's expressed preference to keep the already active Arena session and existing P3 PR, not a redefinition of scientific findings.
+
+---
+
+## G. Owner-delegated blocker resolution — seventh file and SQLite audit transaction (2026-11-18)
+
+**Latest owner instruction:** “شوف الي انت شايفه صح واعمله”. This ChatGPT-authored section records the user's instruction to select the safest bounded unblock path; it is NOT an owner-authored GitHub signature. Section G adds one narrowly allowed file and one conditional design-proving activity, superseding only the prior six-file limit. Section F (SAME existing Arena session/branch) and all P1 scientific/merge/holdout restrictions still apply.
+
+### G1. Arena-reported clean starting point
+
+Arena reports the active `arena/752cca1f-ai-doctor-followup-agent` aligned and clean at `af2bfd226cc53b5c4665c160a6d8310abcce8b53`; 204/204 file bytes preserved. Tests ACTUALLY run by Arena on that baseline: 94 targeted PASS, full 789 PASS (395 P3), Ruff PASS and OpenAPI PASS. No code modifications on Step 2. These results are reported by Arena, not independently rerun by ChatGPT.
+
+### G2. Explicit narrowly expanded scope: exactly SEVEN files
+
+**OD-5b: APPROVED.** The previous six authorized code/test paths in Section C remain unchanged. Add ONLY a seventh path:
+
+`docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md`
+
+Authorized changes to this document: update the genuine post-change backend/P3 collected and executed counts, paired headline text and exact two changed P3 test-file table rows, plus a short accurately labeled A1/W2 status note if necessary. Do not weaken, skip or remove `test_handoff_test_count_matches_the_suite_it_describes`. Historical 789/395 baseline counts remain correctly identified as historical; only claim new PASS counts after executing the corresponding tests. RED can temporarily fail the documentation count check; final GREEN must not. **No eighth path, no blanket docs permission, no PR #11 merge authority.**
+
+### G3. SQLite lock: conditional proof of deferred ERROR audit, not a blanket redesign
+
+Arena's empirical probe found a real `sqlite3.OperationalError: database is locked`: `resolve_session` flushes `UserSession.last_used_at` before the authenticated file route, so a concurrent `Session(bind=db.get_bind())` ERROR-audit commit cannot acquire a second SQLite writer lock. Do **NOT** implement this known-failing pattern, retry it, sleep around it, weaken audit guarantees, or commit/rollback the original request session's unrelated state.
+
+**OD-2b: APPROVED — tightly scoped PROOF-OF-CONCEPT ONLY within previously allowed `backend/app/api/v1/documents/read.py` and the two authorized P3 test modules.** Evaluate an *outer, route-local FastAPI yield dependency* that records an enum-only error-audit intent during authenticated missing/mismatched `GET /file`, then durably writes the ERROR event using a fresh DB transaction **only after the existing `get_db_session` dependency has rolled back/closed and released the SQLite writer lock**. A dependency registered earlier is NOT proof of teardown order; demonstrate execution order on the repository's pinned FastAPI version with actual HTTP TestClient and instrumented offline tests before implementing the final A1 code.
+
+**Mandatory empirical acceptance checks:**
+1. `404 E_NOT_FOUND` response remains neutral; the error-audit intent occurs **only after authorized, scoped file lookup**. No `document.file_read OK` event for missing or corrupt source.
+2. Prove complete request-session rollback and lock release **before** separate `AuditOutcome.ERROR` commit; no unrelated `last_used_at` or pending ORM state gets committed, no SQLite deadlock; persisted event is durable, append-only, idempotent per request, without document text/paths in detail.
+3. Test both real file-backed SQLite and the supported in-memory/StaticPool database setup (if used), including exact request correlation/actor/doc scope, and reliable response/error behavior when the deferred audit itself fails.
+4. Test the real HTTP dependency lifecycle, and explicitly distinguish direct Python calls of `read_file` (where FastAPI dependency cleanup does not execute). Do not claim they are operationally identical or break existing direct-call expectations silently.
+5. Once proof tests PASS, proceed within the same seven allowed files to A1-Anchored (current `GET /file` response SHA, S1 stale anchor invalidation, S2 live SHA recheck at OCR verify/promotion, good re-read recovery, actual `settings.upload_dir`), plus non-vacuous real-HTTP design `W2/FC-3` and its **offline tests only**. Preserve R21 `rejected`, no spurious `13.4 g/dL` mapping, and full sibling verification for M6.
+
+**STOP:** If correct FastAPI teardown order, durable ERROR audit without collateral commits, safe SQLite handling, or direct-call compatibility cannot be proven inside the SEVEN approved paths, stop with exact test evidence. **Do not** independently edit `accounts.py`, `db/session.py`, `services/audit.py`, schema/migrations, helpers, auth or an eighth file. Request a separate owner decision before any expansion or alternate design.
+
+### G4. All previous governance boundaries remain
+
+Continue in the SAME Arena session and original branch `arena/752cca1f-ai-doctor-followup-agent`; no new branch or PR. After RED/green offline changes, push only to this active branch and stop for independent review. Later FF-only advancement of original PR #10 head requires a separate owner decision. P1 strict `GOLD-EX-11=FAIL / NOT PROVEN`, P3 `IN_REVIEW`. No P2 amendment, original fixture/threshold edits, protected DB, real Windows OCR, canonical/exploratory/holdout/freeze, PS wrapper, merge to main or P4/P5. **This is bounded implementation scope approval, not acceptance.**
+
+**Status:** `OWNER-DELEGATED SEVEN-PATH SCOPE + EXPERIMENTAL DEFERRED-AUDIT PROOF AUTHORIZED; NO STEP 2 IMPLEMENTATION COMPLETION CLAIMED`.
