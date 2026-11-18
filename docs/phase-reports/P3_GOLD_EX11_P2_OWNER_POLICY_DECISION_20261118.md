@@ -55,7 +55,8 @@ P2 policy is **one approved direction for drafting**, not blanket permission to 
 - [x] W1/W2/ING/PDFIUM real-engine successes and residual risk documented.
 - [x] **Owner posted the P2 policy *review-process* approval** in PR #10 ([comment `6986661566`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986661566), displayed under account `Muhammed-Fathi`): approves the conditional direction, acknowledges the exact `1O5→105` failure and residual false-attestation risk, and **explicitly disallows final P3 acceptance or merge** at this step. The owner confirmed in chat that they posted it. This is a different gate from final ratification.
 - [ ] **Owner personally ratifies the final, fully drafted P2 policy exception and its exact contract/handoff scope on PR #10** after reviewing the amendment. Neither the earlier process-only comment nor an assistant-authored connector comment is a final policy amendment approval.
-- [ ] Explicit owner approval of a minimal documentation-only contract/handoff alignment with scope declared in advance; keep old technical gates untouched.
+- [x] **Owner separately approved the exact five-path documentation drafting scope** under account `Muhammed-Fathi` in [PR #10 comment `6986820279`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986820279), referring to [scope proposal `6986774509`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986774509). Draft changes are on existing Draft PR #11 **only**, marked **PROPOSED / NOT EFFECTIVE**. No production/fixtures/test edits authorized.
+- [ ] **Independent review of the exact five-document draft** and an explicit owner-authored final **policy** ratification of the agreed acceptance exception (separate from the owner-approved drafting scope).
 - [ ] Source/evidence audit of the **final PR #10 candidate**; if needed update its old head `18a53b2...` to a reviewed implementation SHA **FF-only and separately authorized**, no force push; original draft state preserved until owner decision.
 - [ ] Green CI on the **exact final PR #10 implementation head**, verified by authoritative Actions checks.
 - [ ] Any required supported-Windows P3 acceptance supplementary fixture/Alembic checks (distinct from successful `test_all.ps1`) recorded; optional Playwright and four pytest skips declared, not silently passed.
@@ -67,7 +68,29 @@ If a required item is not satisfied, **STOP** at `P3=IN_REVIEW` and keep the tec
 
 This **docs-only** decision record belongs to existing Draft PR #11 (`docs/p3-e1e3-windows-evidence-20261118`), not the implementation branch or `main`. Do not open a new branch or PR. **No source, tests, OCR or fixture edits**, no Windows rerun, no holdout/canonical rerun, no PR #10 pointer manipulation, no merges or phase P4/P5 commencement were authorized by this owner instruction.
 
-**Decision ledger now:** `P2 POLICY PATH = OWNER-POSTED REVIEW-PROCESS APPROVAL CONFIRMED / FINAL POLICY AMENDMENT PENDING`; `GOLD-EX-11 = FAIL / NOT PROVEN`; `P3 = IN_REVIEW`; `PR #10 = DRAFT, OLD HEAD`; `PR #11 = DRAFT DOCS`; no final acceptance.
+**Decision ledger now:** `P2 POLICY PATH = OWNER-POSTED PROCESS AND FIVE-DOC DRAFTING APPROVAL VERIFIED / FINAL POLICY AMENDMENT PENDING`; `GOLD-EX-11 = FAIL / NOT PROVEN`; `P3 = IN_REVIEW`; `PR #10 = DRAFT, OLD HEAD`; `PR #11 = DRAFT DOCS`; no final acceptance.
+
+
+## 7. Five-document proposed-policy draft completed — final ratification NOT YET EFFECTIVE (2026-11-18)
+
+**Owner GitHub authorization reviewed:** [PR #10 comment `6986820279`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986820279), from `Muhammed-Fathi`, explicitly approves only the five-file, docs-only alignment scope of [`6986774509`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986774509). The owner says the revised policy **must remain PROPOSED until separate final review and ratification**; PR #10 must not be fast-forwarded, merged or marked P3 PASS under this authorization.
+
+Exactly five named documentation paths are authorized on Draft PR #11: this decision memo; `docs/roadmap/PHASE_PROGRESS.md`; `docs/evaluation/GOLD_FIXTURES.md`; `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md`; and `docs/phase-reports/PHASE_3_REPORT.md`. The new appendices and tracking paragraphs describe the **alternative application-layer conditional policy** without altering the original measured GOLD verdict, strict P1 §9 technical blocker, historical Case C fixtures, source bytes, OCR/HTTP tests, API contracts, or the existing implementation branch.
+
+**Explicit effective-policy separation:**
+
+| Item | Owner approved | Still pending |
+|---|---|---|
+| Start reviewing P2 alternate policy | Yes — [PR #10 `6986661566`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986661566) | Final policy text/exception assent |
+| Draft exactly five documentation files | Yes — [PR #10 `6986820279`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986820279) | Independent diff review and explicit final policy ratification |
+| Original P1 `GOLD-EX-11` | **FAIL / NOT PROVEN** remains the real measured result | No reinterpretation as PASS permitted; current strict blocker persists until an approved/merged policy amendment |
+| P3 implementation | Exact owner-tested candidate `6e6fcdf02d39d3a97ca3221ef2cc84b2ba528821`; no new code changes | Separate authority for strict FF-only PR #10 head update from old `18a53b2...`, final CI/Windows reconciliation and owner phase acceptance/merge |
+| Product scope | Local synthetic academic demo, human review, preserved source and audits | No clinical validation, real patient use, diagnosis/triage or next-phase permission |
+
+**Evidence:** Windows Tesseract output **27 PASS / 1 FAIL / 0 NOT RUN / 1 DERIVED, exit 2**, `1O5` rendered → OCR `105`; source JSON 15,283 bytes, SHA-256 `9ac465722f011d538fd8045e393328fa4a0e2b1f10afd1b8e3488aff961f08cb`. W1/W2 passing guards cannot guarantee accurate visual review by the doctor. This is an exception proposal for educational scope, **not a claim of OCR accuracy or patient safety**.
+
+**Drafting completion is not P3 closure.** The only permitted next operations are read-only independent review and, after an explicit new owner decision, separately scoped final policy/PR-head/CI actions. No final assent, fast-forward, merge, holdout, Windows rerun or `P3=PASS` is implied.
+
 
 ---
 *Educational synthetic demo. NOT FOR CLINICAL USE.*
