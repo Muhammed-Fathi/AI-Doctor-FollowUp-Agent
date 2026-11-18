@@ -1,6 +1,6 @@
 # Phase Progress Tracker
 
-> **Current status: P0 PASS; P1 PASS (owner-approved and merged 2026-11-14); P2 PASS (owner-approved and merged 2026-11-14 at `777f6618c62560be41cce394218c87b0c683981f`). P3 `IN_REVIEW` — Stages 1–5 implementation exists on a separate P3 acceptance branch; owner Windows `plan_only` v1.1.2 PASS, `probe_only` INCOMPLETE (exit 13; two diagnostic harness issues). No P3 PASS, no PR #10 merge, no P4/P5.**
+> **Current status: P0 PASS; P1 PASS (owner-approved and merged 2026-11-14); P2 PASS (owner-approved and merged 2026-11-14 at `777f6618c62560be41cce394218c87b0c683981f`). P3 `IN_REVIEW` — Stages 1–5 implementation exists on a separate P3 acceptance branch; owner Windows v1.1.2 `plan_only` PASS and `probe_only` INCOMPLETE (exit 13); v1.1.3 ZIP/source independently audited and ONLY `plan_only` conditionally authorized, **NOT RUN on owner Windows**. No P3 PASS, no PR #10 merge, no P4/P5.**
 >
 > Phase 0 (Governance and Specifications) completed its documentation review process and was merged into `main` through [PR #2](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/2).
 >
@@ -982,3 +982,18 @@ behaviour at this SHA remains unverified — the last real Windows evidence is `
 **New engineering handoff:** Arena should prepare an isolated diagnostic harness v1.1.3 with two fixes, regression tests and a separately pinned authenticated Draft Release; preserve all v1.1.2 evidence. Start with [root-cause report](../phase-reports/P3_E1_E3_V112_PROBE_ROOT_CAUSE.md), then the [Windows evidence register](../phase-reports/P3_E1_E3_V112_WINDOWS_EVIDENCE.md). This addendum does **not** authorize direct source changes, acceptance, merge or execution of any subsequent mode.
 
 **Governance / file-scope note:** This documentation-only proposal was requested by the owner to maintain GitHub reports and per-phase status. It is in a separate draft PR targeting the P3 acceptance branch for owner review; documents outside the default P3 implementation allowlist are **proposed scope exceptions pending an explicit owner decision in the PR**, not self-approved by the agent. The owner may authorize and merge documentation separately; only an owner can ratify the phase.
+
+---
+
+## P3 E1–E3 v1.1.3 — Independent source audit (2026-11-18; Windows mode not run)
+
+**Phase gate remains P3 IN_REVIEW; GOLD-EX-11 FAIL / NOT PROVEN; P3 draft PR #10 not merged.**
+
+- Authenticated Draft Release ID `449889565` at pinned `af2bfd226cc5`; owner recovered ZIP into a **new** diagnostics-only evidence folder, reporting `AUTHENTICATED BUNDLE RECOVERY: PASS` and `PROTECTED BASELINE POSTFLIGHT: PASS` without running modes.
+- Independent ZIP size, archive integrity and **all five member hashes MATCH**: 85,170-byte ZIP SHA-256 `d620208ff0811b7ec6372bc96174cd302daed4dc37664acd104aba5d27cc3cb5`. PowerShell launcher is **byte-identical** to v1.1.2. Source diff introduces grounded bbox localization, sibling `lstm_choices_*` parsing, split failure attribution and Python-level plan postflight.
+- Independent replay against **real owner-supplied v1.1.2 Windows hOCR**: geometry localized `word_1_20`, expected synthetic `1O5` versus OCR `105`; 138 choice groups parsed (123 multi), no malformed groups, `O` alternative confidence `0.0` below threshold; output remains `genuine_no_o_zero_alternative` (NOT a corrected clinical value). Exact synthetic sources from accepted Git commit verified.
+- Independent sandbox checks: Python syntax **PASS**, **6 of 8** new diagnostic tests reproduced with exact synthetic source texts; two higher-level tests **could not pass in this review sandbox because the complete pinned Git worktree/blobs are absent**, yielding preflight exit 10. The full 44-unit suite therefore **was NOT independently reproduced**. Arena reported 44/44 in its own environment, separately attributed.
+- **Conditional approval for owner Windows v1.1.3 `plan_only` ONLY**, after exact hash checks and fresh diagnostics-only extraction. `probe_only`, `canonical_baseline`, exploratory, holdout, freeze-rules remain **NOT AUTHORIZED/NOT RUN**. Owner must upload v1.1.3 plan-only log for independent review before any next gate.
+- Full report: [P3_E1_E3_V113_INDEPENDENT_SOURCE_AUDIT.md](../phase-reports/P3_E1_E3_V113_INDEPENDENT_SOURCE_AUDIT.md).
+
+No owner P3 acceptance, scope exception or PR merge is implied by this documentation addendum. The docs-only PR #11 remains DRAFT and awaits explicit owner scope/merge decision.
