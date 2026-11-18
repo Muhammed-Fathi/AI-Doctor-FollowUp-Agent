@@ -69,3 +69,16 @@ Owner discovered **one** canonical run folder:
 **Required next action:** Upload those exact four existing files **plus the original 1,096-byte outer log** for independent in-depth content consistency and scientific assessment. No rerun, no retuning, no overwrites, no new diagnostic modes. `GOLD-EX-11` remains `FAIL / NOT PROVEN` until acceptance-specific evidence is evaluated; P3 stays `IN_REVIEW`.
 
 No code/fixtures, database, or executable source was changed by this documentation-only follow-up.
+
+
+---
+
+## Final original-artifact resolution (2026-11-18)
+
+**This section supersedes the earlier “file presence / content audit pending” conclusions.** The owner supplied all five original files from the **same** immutable canonical run. The independent review actually parsed the manifest, metrics, all three JSONL records and the CSV, and reconciled specimen identities and D1–D6 states/flags across formats.
+
+**Resolved:** The internal harness successfully finished `canonical_baseline` at exit **0**, with `3/3 completed`, `COMPLETE`, 3/3 image and TSV parity PASS, preflight/postflight PASS, protected DB and pinned worktree unchanged. The 1,096-byte parent PowerShell 5.1 log remained truncated at `[PREFLIGHT OK]` due to stderr `DeprecationWarning` being converted into `NativeCommandError` by the **outer wrapper**; it did not indicate an incomplete internal experiment. Both the original log and the independently verified internal completion are preserved in the record.
+
+**Remaining blocker is not this wrapper incident:** On the single positive `CANON_GOLD_EX_11`, source `1O5` was read/parsed as `105` without a *specific* O/0 detector flag. D4/D6 only produced non-specific fail-closed review (and the clean `13.4` sample was also non-specifically routed). **`GOLD-EX-11=FAIL / NOT PROVEN` and `P3=IN_REVIEW`.** No additional experiment is authorized.
+
+**Detailed independent report with exact uploaded SHA256 digests and per-detector confusion:** [P3_E1_E3_V113_CANONICAL_RESULTS_INDEPENDENT_AUDIT.md](P3_E1_E3_V113_CANONICAL_RESULTS_INDEPENDENT_AUDIT.md). The previous notice to upload files is historical and **already satisfied**; do not ask the owner for those same files again. No rerun required.
