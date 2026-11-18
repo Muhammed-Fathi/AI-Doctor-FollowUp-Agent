@@ -119,3 +119,15 @@ Arena's empirical probe found a real `sqlite3.OperationalError: database is lock
 Continue in the SAME Arena session and original branch `arena/752cca1f-ai-doctor-followup-agent`; no new branch or PR. After RED/green offline changes, push only to this active branch and stop for independent review. Later FF-only advancement of original PR #10 head requires a separate owner decision. P1 strict `GOLD-EX-11=FAIL / NOT PROVEN`, P3 `IN_REVIEW`. No P2 amendment, original fixture/threshold edits, protected DB, real Windows OCR, canonical/exploratory/holdout/freeze, PS wrapper, merge to main or P4/P5. **This is bounded implementation scope approval, not acceptance.**
 
 **Status:** `OWNER-DELEGATED SEVEN-PATH SCOPE + EXPERIMENTAL DEFERRED-AUDIT PROOF AUTHORIZED; NO STEP 2 IMPLEMENTATION COMPLETION CLAIMED`.
+
+---
+
+## H. Owner-selected P2 alternative acceptance path after real Windows GOLD failure (2026-11-18)
+
+**Newer owner instruction:** In ChatGPT, the project owner said **“طب يلا اعتمد”** as a direct response to the recommendation to adopt the **P2 *conditional policy path*** instead of further non-evidentiary OCR patching, while keeping `GOLD-EX-11` visibly failing and requiring further governed acceptance steps. **This section transcribes that owner conversation; it is not an owner-authored GitHub PR ratification.**
+
+**Supersession is limited:** Historical section B / OD-1 and section G / G4 correctly record that **P1 remained strict and P2 was deferred at the time of A1/W2 authorization**. The owner's *newer selection* supersedes **only the decision to continue deferring discussion/preparation of policy P2**. It **does not by itself replace the effective P1 scientific contract**, invalidate the GOLD negative result, extend the original seven-file implementation allowlist, approve any changed acceptance test or documentation contract, or authorize merging PR #10. No retrospective reclassification of test evidence is permitted.
+
+**The governed decision candidate** with Windows evidence, explicit known deviation, residual risk, required future owner-authored ratification and objective pre-merge exit conditions is [P3-GOLD-P2 policy memo](P3_GOLD_EX11_P2_OWNER_POLICY_DECISION_20261118.md). That memo belongs to **existing docs-only Draft PR #11**, with the selection noted in `docs/roadmap/PHASE_PROGRESS.md`.
+
+**Until independently reviewed and formally adopted:** `GOLD-EX-11=FAIL / NOT PROVEN`; `P3=IN_REVIEW`; `P2 policy = SELECTED IN CHAT / FORMAL AMENDMENT PENDING`. Implementation commit `6e6fcdf02d39d3a97ca3221ef2cc84b2ba528821` remains frozen for review; original implementation PR #10 head `18a53b2...` remains untouched Draft; no merge, speculative OCR rerun, clinical validation or next-phase change authorized.
