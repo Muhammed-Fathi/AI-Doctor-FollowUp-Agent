@@ -40,3 +40,32 @@ Read-only inspection script prepared separately for the owner:
 **Governance:** P3 remains `IN_REVIEW`, GOLD-EX-11 `FAIL / NOT PROVEN`. `exploratory`, `holdout`, frozen rules, phase acceptance/merge and P4/P5 remain NOT AUTHORIZED. Docs-only PR #11 is still a draft; no file-scope exception or merge is implied.
 
 EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE.
+
+
+---
+
+## Follow-up — owner read-only disk inspection (2026-11-18)
+
+**Evidence status upgraded from “no files inspected” to “all four evidence files present; summary claims complete”; full specimen scientific assessment remains PENDING.** This follow-up supersedes the earlier *unknown file-presence* statement only; it does not replace an independent review of actual file contents.
+
+Owner ran `Inspect-AI-Doctor-v113-CANONICAL-EVIDENCE-READONLY.ps1`, explicitly reporting **`DIAGNOSTIC MODES: NONE`**, `PROTECTED READ-ONLY CHECK: PASS`, pinned clean worktree HEAD `af2bfd226cc53b5c4665c160a6d8310abcce8b53`, and unchanged protected DB SHA `6728a3d4bdc69b88816dc89b14eadb66808da36efa9bdf0312a77bec9144029b`.
+
+Owner discovered **one** canonical run folder:
+
+`E:\DEPI\P3-Diagnostics\run_20261118T121739_753329Z_canonical_baseline_0e5a8b3d`
+
+| Existing evidence file | Reported file size | Interpretation |
+|---|---:|---|
+| `manifest.json` | 17,456 bytes | Present, contents not yet uploaded |
+| `metrics_summary.json` | 54,330 bytes | Present, contents not yet uploaded |
+| `records.jsonl` | 46,463 bytes | Present, **3 nonblank lines** (record contents not yet uploaded) |
+| `records.csv` | 1,625 bytes | Present, contents not yet uploaded |
+| Original outer `canonical_baseline_output.txt` | 1,096 bytes | Only runtime and `[PREFLIGHT OK]` present; warning stopped parent logging |
+
+**Read-only inspector-reported fields:** `HARNESS_VERSION=1.1.3`, `SPLIT=canonical_baseline`, `SUMMARY_EXIT_CODE=0`, `COMPLETE=True`, `COVERAGE_STATUS=COMPLETE`, `POSTFLIGHT_PASSED=True`, `PROTECTED_DB_UNCHANGED=True`, and `RECORDS_JSONL_NONBLANK_LINES=3`.
+
+**Narrow conclusion:** the harness apparently completed and wrote the expected three specimen records **despite** the parent PowerShell `NativeCommandError`. The saved summary's internal exit code is 0, **but that is not the missing outer wrapper exit code**. No independent validation of specimen outcomes, classification confusion matrix, guardrails or per-record provenance is possible without the existing four files.
+
+**Required next action:** Upload those exact four existing files **plus the original 1,096-byte outer log** for independent in-depth content consistency and scientific assessment. No rerun, no retuning, no overwrites, no new diagnostic modes. `GOLD-EX-11` remains `FAIL / NOT PROVEN` until acceptance-specific evidence is evaluated; P3 stays `IN_REVIEW`.
+
+No code/fixtures, database, or executable source was changed by this documentation-only follow-up.
