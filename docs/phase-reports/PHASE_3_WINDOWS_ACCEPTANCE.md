@@ -1,5 +1,7 @@
 # P3 Windows acceptance — executable handoff
 
+> **CURRENT OWNER POLICY CHECKPOINT (2026-11-19):** The exact bounded P2 text was re-ratified for integration review by [owner P2 policy re-ratification #6991001412](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6991001412) at docs SHA `95797e7da5a5bec6fdc1deadbdc765e3ee5ca814`. The owner merged PR #11 into the implementation branch and updated Draft PR #10 without force to `4ec7d469d76ad89ffb7e27fbe18864bdc216ba46`. [Push CI #44409171082](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44409171082) and [PR CI #44409180856](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44409180856) both completed SUCCESS on that **pre-reconciliation** head (Backend Python 3.12 + Frontend Node 22). This five-file docs-only reconciliation is separately authorized ([owner docs-only reconciliation authorization #6993612930](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6993612930)) and **needs new exact-head CI and independent review**. The original Windows `GOLD-EX-11=FAIL / NOT PROVEN` (27 PASS / 1 FAIL / 0 NOT RUN / 1 DERIVED; OCR exit 2; evidence SHA-256 `9ac465722f011d538fd8045e393328fa4a0e2b1f10afd1b8e3488aff961f08cb` (15,283 bytes)) remains a technical FAIL, not a pass. W1/W2 source-confirmation gates do not prove correct OCR glyph detection or prevent false human attestation. **P2 policy TEXT is owner-ratified but NOT YET OPERATIONALLY EFFECTIVE; P3=IN_REVIEW; PR #10 remains DRAFT/UNMERGED to main.** A separate final owner decision and approved main merge are required before any bounded synthetic educational P3 acceptance. NOT FOR CLINICAL USE.
+
 > **Evidence/status addendum (2026-11-18; NOT a replacement for this historical procedure):** The owner has now executed the real Windows 11/Python 3.12.9/Tesseract 5.4 acceptance probe on detached implementation commit `6e6fcdf02d39d3a97ca3221ef2cc84b2ba528821`. Actual result: **27 PASS / 1 FAIL (`GOLD-EX-11`) / 0 NOT RUN / 1 DERIVED; exit 2**. This document's early statements that owner Windows tests are "NOT RUN" describe its original drafting state, not the later owner-executed evidence. **Strict §9 is still binding.** The alternative P2 policy in §12 is **only proposed** and cannot overrule §9 without separate final owner ratification. See [owner Windows evidence report](P3_G11_OWNER_WINDOWS_REAL_OCR_6E6FCDF_EVIDENCE_REVIEW.md) and [decision memo](P3_GOLD_EX11_P2_OWNER_POLICY_DECISION_20261118.md).
 
 **Status of this document: a procedure, not a result.** Nothing in it has been
@@ -748,6 +750,8 @@ producing the `1O5` reading. See §9: a preserved `GOLD-EX-11` failure is a
 
 ## 9. Release blockers (any one blocks P3 acceptance)
 
+> **Current interpretation:** These are the original **strict P1 technical requirements**. `GOLD-EX-11` still fails that technical requirement. The owner-ratified conditional P2 policy may allow a *separately approved, bounded synthetic educational application acceptance despite this known deviation*, only after all §12.2 evidence gates and final owner authorization/merge. Until then P3 is IN_REVIEW, and no other requirement is waived.
+
 1. The `origin` ref reported by `ls-remote` does not resolve to the reviewed SHA
    (or that SHA is not an ancestor of the branch tip), the detached `HEAD` in the
    acceptance worktree is not exactly the reviewed SHA, or the worktree is not
@@ -768,16 +772,14 @@ producing the `1O5` reading. See §9: a preserved `GOLD-EX-11` failure is a
     that the real engine's OCR `value` fact is rejected end to end; a `NOT RUN`
     means that was not demonstrated, which blocks acceptance exactly like a `FAIL`
     (only its cause differs: no usable candidate versus a wrong result).
-11. **`GOLD-EX-11` is not `PASS`.** This is a **release blocker**, not a known
-    deviation to be noted and accepted.
+11. **`GOLD-EX-11` is not `PASS`.** Under strict P1 this remains an unresolved **technical release blocker**. Owner-ratified P2 allows a future *separate owner acceptance decision* to consider this disclosed technical deviation for synthetic-only education (§12); neither the executable GOLD test nor the recorded FAIL becomes PASS.
 
 ### On `GOLD-EX-11` specifically
 
 `GOLD-EX-11` currently stands at **`FAIL / NOT PROVEN`**. The OCR reading of the
 committed `report_ocr_o_confusion.txt` source still yields `1O5`, and P3's
 acceptance criterion is that the pipeline flags it rather than repairing it to
-`105`. Until a real-engine run shows the flagged behaviour, this gate **blocks
-final P3 acceptance**.
+`105`. Until a real-engine run shows the flagged behaviour, this gate **blocks strict P1 technical acceptance**. Under P2 a separate owner may conditionally accept the disclosed deviation for synthetic-only application use after all §12.2 checks, final review and main merge; no such final P3 approval is recorded yet.
 
 Three things this document deliberately does *not* do:
 
@@ -795,7 +797,7 @@ Three things this document deliberately does *not* do:
   repaired into a plausible one.
 
 So a run where every other gate is green and `GOLD-EX-11` is `FAIL` is a run with
-**one release blocker**, and it must be reported that way.
+**one strict P1 technical release blocker**. Conditional P2 acceptance, if later granted, must still report this deviation as a genuine OCR test FAIL.
 
 `OCR-LIVE-01` is a blocker only in the sense that it must be **recorded** — a low
 confidence number is data, not a defect.
@@ -819,10 +821,7 @@ Get-Item 'E:\DEPI\AI-Doctor-FollowUp-Agent\data\runtime\app.db' |
 A run in which every gate is green still leaves these open — a green run is
 evidence, not acceptance:
 
-- **`GOLD-EX-11` remains a P3 acceptance blocker** unless it genuinely turns
-  `PASS` (see §9). If it is still `FAIL / NOT PROVEN` after your run, the run has
-  not established P3 acceptance, however many other rows are green. Report it as a
-  blocker; do not carry it forward as a known deviation.
+- **`GOLD-EX-11` remains a strict P1 technical blocker** unless it genuinely turns `PASS` (see §9). A green CI or W1/W2 run does not prove OCR fidelity. Under the independently owner-ratified P2 text (§12), a separate final owner decision may instead conditionally accept that **disclosed technical deviation** for an educational application; that would never be a GOLD test PASS.
 - Owner decision **D-14** (recorded in `docs/roadmap/PHASE_PROGRESS.md`) is applied
   to `DEMO_REVIEW_RULES.md` §4/§6.1: `VI-002` counts **active** candidates only,
   excluding a superseded original with valid `corrected_from_fact_id` lineage.
@@ -837,16 +836,18 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 
 ## 12. PROPOSED P2 conditional acceptance annex — NOT EFFECTIVE (2026-11-18)
 
-**Status: DRAFT POLICY; NOT IN FORCE.** The owner approved exactly five *documentation* changes in [PR #10 comment 6986820279](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986820279), **not** the final deviation waiver, executable test rewrite, PR merge, or phase PASS. This annex describes what **would** become the alternative policy after independent review and separate final owner ratification. It **does not** edit or relax current §9 (especially release blocker 11) or the `gate_ocr_corruption` implementation.
+> **Historical draft heading retained for links.** Current policy text is owner-re-ratified for integration review ([owner P2 policy re-ratification #6991001412](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6991001412)); this revised documentation still needs independent review and new-head CI, and final P3 acceptance is not yet approved or merged into `main`.
 
-| Decision layer | Current P1 strict policy (EFFECTIVE) | P2 alternative for synthetic academic demo (PROPOSED ONLY) |
+**CURRENT POLICY STATUS: OWNER-RATIFIED TEXT, NOT YET OPERATIONALLY IN FORCE.** Draft-only approval [#6986820279](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986820279) was followed by ratification ([owner P2 policy re-ratification #6991001412](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6991001412)) and docs reconciliation authorization ([owner docs-only reconciliation authorization #6993612930](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6993612930)). Strict GOLD executable and Windows result remain unchanged; this bounded conditional educational policy still requires final owner P3 acceptance, main merge, independent review and new exact-head CI.
+
+| Decision layer | Current P1 strict policy (EFFECTIVE) | P2 conditional academic policy (OWNER-RATIFIED; NOT YET EFFECTIVE) |
 |---|---|---|
 | `GOLD-EX-11` executable/JSON result | **FAIL / NOT PROVEN**, hence P3 acceptance blocked | **Same literal FAIL / NOT PROVEN**, reported as an explicit bounded technical deviation, *not* changed into PASS |
 | Windows probe exit | **2**, preserve as nonzero | **2 remains 2**; never mask, override or modify exit status; document separate conditional **policy** decision |
 | W1/W2 real-engine gates | Independently required to PASS | Independently required to PASS, including no autonomous promotion, authenticated source access, rejection and audit invariants |
 | Supported platform/security | Windows Python 3.12, Tesseract, original fixture, source hash and immutable OCR provenance required | Unchanged; source SHA/access checks, correct role/document boundaries and `GET /file` anchor checks must remain effective |
 | Human verification | Doctor reads original source, explicitly confirms values/siblings and reason before possible `doctor_verified` Observation | Unchanged **with explicit admission that source-read audit and attestation do not guarantee correct human visual comparison** |
-| Approval | Final owner acceptance/merge not granted | Still needs **later owner-authored final policy ratification**, independent review, CI on exact implementation PR head and separate phase/merge decision |
+| Approval | Final owner acceptance/merge not granted | Policy text re-ratified; this reconciliation needs new-head review/CI, and a separate final owner P3 phase/merge decision |
 
 ### 12.1 Measured counterexample and why P2 is not a technical repair
 
@@ -857,15 +858,15 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 
 ### 12.2 Proposed P2 eligibility checklist (ALL required; no auto-accept)
 
-1. Verify exact reviewed PR #10 implementation head, complete source ancestry, file scope and clean evidence identity; check **authoritative CI PASS on the same PR head** and record supported Windows quality gate (12 PASS / 0 FAIL / 1 optional Playwright SKIP, with backend skip details disclosed). Original PR #10 is still at an older Draft head; no fast-forward is authorized by the scope approval in this annex.
+1. Verify exact reviewed PR #10 implementation head, complete source ancestry, file scope and clean evidence identity; check **authoritative CI PASS on the same PR head** and record supported Windows quality gate (12 PASS / 0 FAIL / 1 optional Playwright SKIP, with backend skip details disclosed). PR #10 was later moved with separate owner authorization to `4ec7d469d76ad89ffb7e27fbe18864bdc216ba46`, where Backend/Frontend CI passed. A new docs reconciliation commit requires its own fresh exact-head CI.
 2. Preserve and attach **the original FAIL row and full 27/1/0/1 OCR JSON**, engine/version and rendered visual source hash. No mutation of fixture/source, parser, renderer, engine settings, OCR confidence threshold, or `GOLD-EX-11` function. Tests and executable gate must continue to fail on this captured false-clean reading.
 3. Verify every **real-engine W1 and W2** acceptance row independently; require `ING-02`, `PDFIUM-01`, `GOLD-EX-05/06`, OCR provenance and verified original source bytes. A missing/failed row (including `NOT RUN`) remains a blocker, never a derived PASS.
 4. Preserve **A1-Anchored** SHA/access/audit invalidation and R21 guarantees, per-fact review (not blind batch acceptance), no Observation before all required doctor confirmations, explicit confusable-digit reason and source linkage. Record that doctor **false attestation remains possible**; no safety assertion from source-read events alone.
 5. Keep the deviation **limited to local synthetic teaching/demo**; prohibit real patient reports, diagnosis/triage, care instructions and autonomous clinical decisions or communications.
-6. Obtain **separate owner-authored GitHub approval** of the final policy text, independent diff/evidence review, and then **another final owner decision** on P3 acceptance and merge. Only a merged approved policy amendment can replace §9's current blocking rule. No agent auto-acceptance or implied P4/P5 authorization.
+6. The exact P2 policy text was owner re-ratified ([owner P2 policy re-ratification #6991001412](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6991001412)). This reconciliation still requires independent diff/evidence review and new-head CI, then a **separate owner-authored final conditional P3 acceptance and main-merge decision** before any bounded educational policy can be operationally effective. Original strict §9 technical FAIL stays visible. No agent auto-acceptance or implied P4/P5 authorization.
 
 **STOP** if any requirement is unverified, scope expands, baseline hashes change, or someone attempts to mark `GOLD-EX-11` technical PASS. A P2 policy *exception*, if eventually adopted, cannot be reused as evidence that OCR detects confusable glyphs.
 
-**Present disposition:** `P2 policy=PROPOSED / owner approved drafting only`; `P3=IN_REVIEW`; `GOLD-EX-11=FAIL / NOT PROVEN`; strict **§9 still authoritative**; PR #10/#11 remain Draft/unmerged.
+**Present disposition (2026-11-19):** `P2 TEXT OWNER-RATIFIED / NOT YET OPERATIONALLY EFFECTIVE`; `P3=IN_REVIEW`; `GOLD-EX-11=FAIL / NOT PROVEN`, OCR exit 2; PR #11 MERGED into implementation branch, PR #10 DRAFT/UNMERGED to main. Independent reconciliation review, exact-head CI and separate final owner P3 acceptance remain pending.
 
 *Educational and synthetic only; NOT FOR CLINICAL USE.*

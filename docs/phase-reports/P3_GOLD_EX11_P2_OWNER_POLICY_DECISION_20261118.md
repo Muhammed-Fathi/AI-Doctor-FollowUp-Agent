@@ -1,5 +1,7 @@
 # P3 / GOLD-EX-11 — P2 alternative acceptance-policy decision (owner selection)
 
+> **CURRENT OWNER POLICY CHECKPOINT (2026-11-19):** The exact bounded P2 text was re-ratified for integration review by [owner P2 policy re-ratification #6991001412](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6991001412) at docs SHA `95797e7da5a5bec6fdc1deadbdc765e3ee5ca814`. The owner merged PR #11 into the implementation branch and updated Draft PR #10 without force to `4ec7d469d76ad89ffb7e27fbe18864bdc216ba46`. [Push CI #44409171082](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44409171082) and [PR CI #44409180856](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44409180856) both completed SUCCESS on that **pre-reconciliation** head (Backend Python 3.12 + Frontend Node 22). This five-file docs-only reconciliation is separately authorized ([owner docs-only reconciliation authorization #6993612930](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6993612930)) and **needs new exact-head CI and independent review**. The original Windows `GOLD-EX-11=FAIL / NOT PROVEN` (27 PASS / 1 FAIL / 0 NOT RUN / 1 DERIVED; OCR exit 2; evidence SHA-256 `9ac465722f011d538fd8045e393328fa4a0e2b1f10afd1b8e3488aff961f08cb` (15,283 bytes)) remains a technical FAIL, not a pass. W1/W2 source-confirmation gates do not prove correct OCR glyph detection or prevent false human attestation. **P2 policy TEXT is owner-ratified but NOT YET OPERATIONALLY EFFECTIVE; P3=IN_REVIEW; PR #10 remains DRAFT/UNMERGED to main.** A separate final owner decision and approved main merge are required before any bounded synthetic educational P3 acceptance. NOT FOR CLINICAL USE.
+
 **Decision ID:** `P3-GOLD-P2-2026-11-18`  
 **Date:** 2026-11-18  
 **Project:** AI Doctor Follow-Up Agent — local educational synthetic-data demonstration, **NOT FOR CLINICAL USE**.  
@@ -29,6 +31,8 @@
 
 ## 3. Candidate bounded P2 acceptance rule — proposed contract amendment, NOT active yet
 
+> **Historical draft heading retained:** owner later re-ratified exact conditional P2 text ([owner P2 policy re-ratification #6991001412](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6991001412)); it remains not operationally effective before separate final P3 approval/main merge.
+
 At the **application-boundary**, for **this synthetic-only P3 implementation and reviewed SHA**, owner may consider a **conditional acceptance despite `GOLD-EX-11` remaining technical FAIL**, **if and only if** all of the following are independently confirmed on the exact accepted review head:
 
 1. **Transparency:** show literal `GOLD-EX-11=FAIL / NOT PROVEN`, OCR `1O5→105` counterexample and residual false-attestation risk in the phase report, handoff, demo limitations and PR approval statement. **Never** describe this gate as `PASS`, OCR fidelity as validated, or the product as suitable for clinical use.
@@ -54,11 +58,11 @@ P2 policy is **one approved direction for drafting**, not blanket permission to 
 - [x] Independent Windows OCR evidence and exact SHA recorded; `GOLD-EX-11` technical **FAIL** preserved.
 - [x] W1/W2/ING/PDFIUM real-engine successes and residual risk documented.
 - [x] **Owner posted the P2 policy *review-process* approval** in PR #10 ([comment `6986661566`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986661566), displayed under account `Muhammed-Fathi`): approves the conditional direction, acknowledges the exact `1O5→105` failure and residual false-attestation risk, and **explicitly disallows final P3 acceptance or merge** at this step. The owner confirmed in chat that they posted it. This is a different gate from final ratification.
-- [ ] **Owner personally ratifies the final, fully drafted P2 policy exception and its exact contract/handoff scope on PR #10** after reviewing the amendment. Neither the earlier process-only comment nor an assistant-authored connector comment is a final policy amendment approval.
+- [x] **Owner re-ratified the exact conditional P2 policy text for integration review** at docs SHA `95797e7da5a5bec6fdc1deadbdc765e3ee5ca814` ([owner P2 policy re-ratification #6991001412](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6991001412)). This does not authorize final P3 acceptance, main merge, or bypass new-head review/CI.
 - [x] **Owner separately approved the exact five-path documentation drafting scope** under account `Muhammed-Fathi` in [PR #10 comment `6986820279`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986820279), referring to [scope proposal `6986774509`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986774509). Draft changes are on existing Draft PR #11 **only**, marked **PROPOSED / NOT EFFECTIVE**. No production/fixtures/test edits authorized.
-- [ ] **Independent review of the exact five-document draft** and an explicit owner-authored final **policy** ratification of the agreed acceptance exception (separate from the owner-approved drafting scope).
-- [ ] Source/evidence audit of the **final PR #10 candidate**; if needed update its old head `18a53b2...` to a reviewed implementation SHA **FF-only and separately authorized**, no force push; original draft state preserved until owner decision.
-- [ ] Green CI on the **exact final PR #10 implementation head**, verified by authoritative Actions checks.
+- [x] **Earlier five-document P2 policy draft independently reviewed and exact amended text re-ratified** ([owner P2 policy re-ratification #6991001412](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6991001412)). The current final five-doc reconciliation still requires independent review.
+- [x] **Previous PR #10 source/evidence and FF-only alignment verified** through pre-reconciliation SHA `4ec7d469d76ad89ffb7e27fbe18864bdc216ba46`; PR remains Draft. Fresh verification of this new docs commit is still required.
+- [x] **Backend and Frontend CI on pre-reconciliation PR #10 head** `4ec7d469d76ad89ffb7e27fbe18864bdc216ba46` completed success (runs `44409171082` and `44409180856`). New CI on this reconciliation HEAD is still REQUIRED.
 - [ ] Any required supported-Windows P3 acceptance supplementary fixture/Alembic checks (distinct from successful `test_all.ps1`) recorded; optional Playwright and four pytest skips declared, not silently passed.
 - [ ] Reviewers approve a final amended acceptance decision; **only owner** authorizes `P3=PASS` and merge. No agent self-approval, no automatic phase transition.
 
@@ -66,12 +70,14 @@ If a required item is not satisfied, **STOP** at `P3=IN_REVIEW` and keep the tec
 
 ## 6. PR workflow / no-code boundary
 
-This **docs-only** decision record belongs to existing Draft PR #11 (`docs/p3-e1e3-windows-evidence-20261118`), not the implementation branch or `main`. Do not open a new branch or PR. **No source, tests, OCR or fixture edits**, no Windows rerun, no holdout/canonical rerun, no PR #10 pointer manipulation, no merges or phase P4/P5 commencement were authorized by this owner instruction.
+This **docs-only** decision record was originally drafted on PR #11, subsequently owner-merged into the implementation branch. The current five-document reconciliation belongs to existing Draft PR #10 under [owner docs-only reconciliation authorization #6993612930](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6993612930), not `main`. Do not open new branch or PR. **No source, tests, OCR or fixture edits**, no Windows rerun, no holdout/canonical rerun, no PR #10 pointer manipulation, no merges or phase P4/P5 commencement were authorized by this owner instruction.
 
-**Decision ledger now:** `P2 POLICY PATH = OWNER-POSTED PROCESS AND FIVE-DOC DRAFTING APPROVAL VERIFIED / FINAL POLICY AMENDMENT PENDING`; `GOLD-EX-11 = FAIL / NOT PROVEN`; `P3 = IN_REVIEW`; `PR #10 = DRAFT, OLD HEAD`; `PR #11 = DRAFT DOCS`; no final acceptance.
+**Decision ledger (2026-11-19):** `P2 TEXT OWNER RE-RATIFIED, NOT OPERATIONALLY EFFECTIVE`; `GOLD-EX-11=FAIL / NOT PROVEN`; `P3=IN_REVIEW`; PR #11 MERGED, PR #10 DRAFT/UNMERGED to main. New-head review/CI and final owner phase decision remain outstanding.
 
 
 ## 7. Five-document proposed-policy draft completed — final ratification NOT YET EFFECTIVE (2026-11-18)
+
+> **Historical drafting-stage record** retained; this section's then-pending items were superseded by owner re-ratification and integration. Current status is the header above and §8 below.
 
 **Owner GitHub authorization reviewed:** [PR #10 comment `6986820279`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986820279), from `Muhammed-Fathi`, explicitly approves only the five-file, docs-only alignment scope of [`6986774509`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986774509). The owner says the revised policy **must remain PROPOSED until separate final review and ratification**; PR #10 must not be fast-forwarded, merged or marked P3 PASS under this authorization.
 
@@ -94,3 +100,19 @@ Exactly five named documentation paths are authorized on Draft PR #11: this deci
 
 ---
 *Educational synthetic demo. NOT FOR CLINICAL USE.*
+
+
+## 8. Verified post-integration ledger (2026-11-19)
+
+| Gate | Current disposition |
+|---|---|
+| Conditional P2 policy text | Owner re-ratified for integration review at `95797e7da5a5bec6fdc1deadbdc765e3ee5ca814` ([owner P2 policy re-ratification #6991001412](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6991001412)); NOT YET OPERATIONALLY EFFECTIVE |
+| PR #11 | Owner MERGED to implementation branch at `4ec7d469d76ad89ffb7e27fbe18864bdc216ba46` |
+| PR #10 branch | Guarded FF completed at `4ec7d469d76ad89ffb7e27fbe18864bdc216ba46`, remains DRAFT/UNMERGED to main |
+| Prior CI | Backend/Frontend push and PR runs on `4ec7d469d76ad89ffb7e27fbe18864bdc216ba46`: SUCCESS |
+| Present five-file reconciliation | Owner authorized ([owner docs-only reconciliation authorization #6993612930](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6993612930)); independent review and new exact-head CI pending |
+| Real Windows OCR | **GOLD-EX-11 FAIL / NOT PROVEN**, 27 PASS / 1 FAIL / 0 NOT RUN / 1 DERIVED; OCR exit 2; evidence SHA-256 `9ac465722f011d538fd8045e393328fa4a0e2b1f10afd1b8e3488aff961f08cb` (15,283 bytes) |
+| Windows quality | `test_all.ps1` 12 PASS / 0 FAIL / 1 optional Playwright SKIP; four backend pytest skip reasons to review |
+| Final P3 owner acceptance and main merge | **PENDING separate owner decision**; P3 IN_REVIEW |
+
+W1/W2 do not prove detection of source O/zero substitution, and a doctor may falsely attest after retrieving the original source. No clinical use, real patient documents, autonomous diagnosis, treatment, or external communication. **EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE.**
