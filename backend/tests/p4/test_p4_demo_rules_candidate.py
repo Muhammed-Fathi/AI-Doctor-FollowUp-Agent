@@ -98,18 +98,23 @@ def test_case_b_emits_exactly_one_dr005() -> None:
         obs("g", "2026-11-03T08:00:00Z", 84, "heart_rate", "bpm"),
         obs("h", "2026-10-02T08:00:00Z", 98, "glucose", "mg/dL"),
         obs(
-            "i", "2026-11-02T08:00:00Z", 104,
-            "glucose", "mg/dL", trust="doctor_verified",
+            "i",
+            "2026-11-02T08:00:00Z",
+            104,
+            "glucose",
+            "mg/dL",
+            trust="doctor_verified",
         ),
     )
     assert len(result.flags) == 1
     flag = result.flags[0]
     assert (flag.rule_id, flag.workflow_hint, flag.trust_basis) == (
-        "DR-005", "change_to_review", "self_reported",
+        "DR-005",
+        "change_to_review",
+        "self_reported",
     )
     assert flag.message == (
-        "Systolic BP differs from the previous recorded value "
-        "by 12 mmHg (self-reported)."
+        "Systolic BP differs from the previous recorded value by 12 mmHg (self-reported)."
     )
     assert flag.evidence == ("observation:b", "observation:c")
     assert flag.demo_only is True
@@ -132,8 +137,12 @@ def test_case_a_stable_produces_no_flags() -> None:
 def test_case_c_blocks_before_review_and_after_correction_has_no_flag() -> None:
     first = obs("baseline", "2026-10-10T08:00:00Z", 96, "glucose", "mg/dL")
     after = obs(
-        "corrected", "2026-11-03T08:00:00Z", 105,
-        "glucose", "mg/dL", trust="doctor_verified",
+        "corrected",
+        "2026-11-03T08:00:00Z",
+        105,
+        "glucose",
+        "mg/dL",
+        trust="doctor_verified",
     )
     with pytest.raises(CandidateRuleError) as error:
         run(first, after, blocked=3)
@@ -187,7 +196,10 @@ def test_dr005_uses_absolute_change_without_direction() -> None:
 
 def test_mixed_provenance_and_order_independence() -> None:
     before = obs(
-        "a", "2026-10-15T08:00:00Z", 120, trust="doctor_verified",
+        "a",
+        "2026-10-15T08:00:00Z",
+        120,
+        trust="doctor_verified",
     )
     current = obs("b", "2026-11-03T08:00:00Z", 140)
     assert run(before, current) == run(current, before)
@@ -258,7 +270,10 @@ def test_wrong_patient_cannot_be_included() -> None:
         run(
             obs("a", "2026-11-01T08:00:00Z", 120),
             obs(
-                "other", "2026-11-01T08:00:00Z", 150, patient=OTHER,
+                "other",
+                "2026-11-01T08:00:00Z",
+                150,
+                patient=OTHER,
             ),
         )
     assert error.value is not None
@@ -270,7 +285,10 @@ def test_tampered_comparison_rejected_before_emitting() -> None:
         obs("b", "2026-11-03T08:00:00Z", 135),
     )
     original = compare_observation_history(
-        rows, patient_id=PATIENT, as_of_utc=AS_OF, baseline_lookback_days=90,
+        rows,
+        patient_id=PATIENT,
+        as_of_utc=AS_OF,
+        baseline_lookback_days=90,
     )
     altered = MonitoringResult((), original.excluded)
     with pytest.raises(CandidateRuleError) as error:
@@ -291,7 +309,12 @@ def test_policy_can_disable_every_subset_rule() -> None:
     )
     assert result.flags == ()
     assert result.disabled_rule_ids == (
-        "DR-001", "DR-003", "DR-005", "DR-006", "DR-008", "DR-009",
+        "DR-001",
+        "DR-003",
+        "DR-005",
+        "DR-006",
+        "DR-008",
+        "DR-009",
     )
 
 
