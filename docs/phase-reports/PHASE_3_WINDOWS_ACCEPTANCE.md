@@ -971,3 +971,16 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 > failure in this CI was the outdated handoff-count assertion; the new P4
 > behavioral tests showed no failures. No P3 executable, scanner, past owner
 > acceptance or GOLD-EX-11 OCR result is modified here.
+
+
+> **P4-4/R4 provisional offline GOLD-A/B/C/D collection checkpoint (2026-11-19).**
+> Owner approved R1-A (defer P4-3 persistence until genuine P5 workflow_run
+> identity) and R4 (isolated synthetic offline golden component tests).
+> Previously CI-measured whole-backend collection: **988 backend / 443 P3**.
+> The new `test_p4_gold_abcd_offline_replay.py` declares nine tests, so provisional
+> collected count **997 backend / 443 P3**; conditional integrity token
+> **997 passed**, of which **443** are the P3 suite. This is a *collection
+> expectation only*, NOT a claim of 997 passing tests. Exact-head CI must
+> independently measure and pass; correct here append-only if wrong. The
+> historical P3 Windows/OCR results, P3 test code, baseline and
+> GOLD-EX-11=FAIL / NOT PROVEN remain completely unchanged.

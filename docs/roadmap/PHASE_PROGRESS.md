@@ -1215,3 +1215,13 @@ A read-only GitHub comparison verified the frozen implementation `6e6fcdf...` is
 **Current owner decision:** **CONDITIONALLY ACCEPTED — SYNTHETIC EDUCATIONAL ONLY**, after [PR #10 merge](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10) (`006ecf417f023428ab90c35cbb0638995c246774`) and [post-merge CI SUCCESS](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44430671695). The [final closure and acceptance evidence record](../phase-reports/P3_FINAL_CONDITIONAL_ACCEPTANCE_20261119.md) is authoritative for this status. All earlier open-PR/in-review progress notes above are retained as **historical** states and are superseded as current status.
 
 **Scientific exception stays open:** Real Tesseract `1O5`→`105`, `GOLD-EX-11=FAIL / NOT PROVEN`, OCR exit 2; original 27 PASS / 1 FAIL / 0 NOT RUN / 1 DERIVED. This decision accepts a bounded synthetic academic application despite that disclosed deviation; it is **not** P1 strict technical PASS, source-glyph validation, clinical use, or permission to start P4/P5. Playwright E2E remains owner-deferred to P6.
+
+
+## P4 owner decision — R1-A and R4 scoped authorization (2026-11-19)
+
+Following owner-merged [PR #23](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/23) at `main@d100df80ebaf8a0dd8b98128ea936e495fbb320a`, the owner stated in chat: **"تم دمج PR #23، وموافق على R1-A وR4"**.
+
+- **R1-A = OWNER-SELECTED:** defer P4-3 `review_item` / `evidence_link` durable storage, audit, and review API until the P5-owned real `workflow_run` identity exists; leave `review_item.workflow_run_id NOT NULL FK` unchanged, no fake runs or phase crossover. This prevents claiming P4 full acceptance at present.
+- **R4 = OWNER-AUTHORIZED FOR OFFLINE TESTING ONLY:** synthetic GOLD-A/B/C/D expected fixtures and migrated SQLite candidate-rule tests, no runtime gate, API, agent, source-image/OCR validation, treatment, notifications, or live policy.
+- **R2 & R3 remain OPEN:** trusted full-run evidence/VI tool interface and numerical demo-policy `OQ-R01` require independent future owner review; green test results cannot silently ratify them.
+- **Status:** P4 **IN_REVIEW**, P5 NOT STARTED, P3 real `GOLD-EX-11 = FAIL / NOT PROVEN` stays disclosed. NOT FOR CLINICAL USE.
