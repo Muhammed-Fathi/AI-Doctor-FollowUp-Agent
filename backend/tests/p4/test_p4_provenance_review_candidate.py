@@ -120,10 +120,16 @@ def test_dr006_does_not_infer_independent_compatible_sources(
 
 def test_dr006_tolerance_must_be_explicit_and_strictly_exceeded() -> None:
     rows = (record("a", 120), record("b", 130))
-    assert run(*rows, candidate=policy(enabled_rule_ids=("DR-006",), conflict_tolerance="10")).flags == ()
-    assert [flag.rule_id for flag in run(
-        *rows, candidate=policy(enabled_rule_ids=("DR-006",), conflict_tolerance="9.9")
-    ).flags] == ["DR-006"]
+    assert (
+        run(*rows, candidate=policy(enabled_rule_ids=("DR-006",), conflict_tolerance="10")).flags
+        == ()
+    )
+    assert [
+        flag.rule_id
+        for flag in run(
+            *rows, candidate=policy(enabled_rule_ids=("DR-006",), conflict_tolerance="9.9")
+        ).flags
+    ] == ["DR-006"]
 
 
 def test_dr006_one_source_fact_two_claimed_documents_rejected() -> None:
@@ -137,8 +143,12 @@ def test_dr006_one_source_fact_two_claimed_documents_rejected() -> None:
 
 def test_dr008_exact_duplicate_distinct_records_no_creation_order_needed() -> None:
     result = run(
-        record("a", 130, created_at=None, trust="self_reported_validated", source="patient_checkin"),
-        record("b", 130, created_at=None, trust="self_reported_validated", source="patient_checkin"),
+        record(
+            "a", 130, created_at=None, trust="self_reported_validated", source="patient_checkin"
+        ),
+        record(
+            "b", 130, created_at=None, trust="self_reported_validated", source="patient_checkin"
+        ),
         candidate=policy(enabled_rule_ids=("DR-008",)),
     )
     assert [flag.rule_id for flag in result.flags] == ["DR-008"]
@@ -146,19 +156,29 @@ def test_dr008_exact_duplicate_distinct_records_no_creation_order_needed() -> No
     assert result.flags[0].message == (
         "A repeated or out-of-order entry was detected for Systolic BP (self-reported)."
     )
-    assert len([item for item in result.excluded if item.reason == "creation_time_unavailable"]) == 2
+    assert (
+        len([item for item in result.excluded if item.reason == "creation_time_unavailable"]) == 2
+    )
 
 
 def test_dr008_creation_order_strictly_later_while_measurement_earlier() -> None:
     result = run(
-        record("early-record", 120, measured_at="2026-11-05T08:00:00Z", created_at="2026-11-06T09:00:00Z"),
-        record("late-record", 130, measured_at="2026-11-04T08:00:00Z", created_at="2026-11-07T09:00:00Z"),
+        record(
+            "early-record",
+            120,
+            measured_at="2026-11-05T08:00:00Z",
+            created_at="2026-11-06T09:00:00Z",
+        ),
+        record(
+            "late-record",
+            130,
+            measured_at="2026-11-04T08:00:00Z",
+            created_at="2026-11-07T09:00:00Z",
+        ),
         candidate=policy(enabled_rule_ids=("DR-008",)),
     )
     assert [f.rule_id for f in result.flags] == ["DR-008"]
-    assert result.flags[0].evidence == (
-        "observation:early-record", "observation:late-record"
-    )
+    assert result.flags[0].evidence == ("observation:early-record", "observation:late-record")
 
 
 @pytest.mark.parametrize(
@@ -277,7 +297,9 @@ def test_permutation_and_replay_determinism() -> None:
 def test_max_items_per_measure_fails_closed_no_partial_output() -> None:
     with pytest.raises(CandidateRuleError) as err:
         run(
-            record("a", 120), record("b", 130), record("c", 140),
+            record("a", 120),
+            record("b", 130),
+            record("c", 140),
             candidate=policy(enabled_rule_ids=("DR-006",), max_items_per_type=2),
         )
     assert err.value.code == "E_RULE_POLICY_INVALID"
@@ -294,7 +316,8 @@ def test_duplicate_record_id_and_many_rows_fails_closed() -> None:
 
 def test_disabled_rules_reported_without_activation() -> None:
     result = run(
-        record("a", 120), record("b", 130),
+        record("a", 120),
+        record("b", 130),
         candidate=policy(enabled_rule_ids=()),
     )
     assert result.flags == ()

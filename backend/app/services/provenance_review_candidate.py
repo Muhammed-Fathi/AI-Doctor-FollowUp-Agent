@@ -301,8 +301,8 @@ def evaluate_offline_provenance_candidates(
             )
 
         if "DR-008" in enabled:
-            exact_duplicate = (
-                measured_a == measured_b and _value(first.value) == _value(second.value)
+            exact_duplicate = measured_a == measured_b and _value(first.value) == _value(
+                second.value
             )
             out_of_order = (
                 created_a is not None
@@ -339,8 +339,14 @@ def evaluate_offline_provenance_candidates(
             raise CandidateRuleError("E_RULE_POLICY_INVALID", "Candidate item cap exceeded.")
 
     return CandidateProvenanceResult(
-        flags=tuple(sorted(outputs, key=lambda item: (_ORDER[item.workflow_hint], item.rule_id, item.evidence))),
-        excluded=tuple(sorted(set(exclusions), key=lambda item: (item.observation_id, item.reason))),
+        flags=tuple(
+            sorted(
+                outputs, key=lambda item: (_ORDER[item.workflow_hint], item.rule_id, item.evidence)
+            )
+        ),
+        excluded=tuple(
+            sorted(set(exclusions), key=lambda item: (item.observation_id, item.reason))
+        ),
         disabled_rule_ids=tuple(sorted(_RULES - enabled)),
         policy_version=policy.policy_version,
     )
