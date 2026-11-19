@@ -1,6 +1,6 @@
 """P4-2A offline candidate review rules; NOT an enabled agent tool or policy.
 
-Only DR-001/003/005 are implemented. DR-006/008/009 and the proposed
+Only DR-001/003/005/009 are implemented. DR-006/008 and the proposed
 official demo policy await a separate owner review. The module has no API,
 database, workflow, task, or notification integration.
 
@@ -16,7 +16,7 @@ from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 
 from app.core.clock import parse_utc, to_utc
-from app.core.enums import MeasureType
+from app.core.enums import MEASURE_PLAUSIBLE_BANDS, MeasureType, TrustLevel
 from app.services.monitoring import (
     MonitoringInputError,
     MonitoringResult,
@@ -24,7 +24,7 @@ from app.services.monitoring import (
     compare_observation_history,
 )
 
-_SUPPORTED = frozenset({"DR-001", "DR-003", "DR-005"})
+_SUPPORTED = frozenset({"DR-001", "DR-003", "DR-005", "DR-009"})
 _ALL_ACTIVE = frozenset({"DR-001", "DR-003", "DR-005", "DR-006", "DR-008", "DR-009"})
 _LABELS = {
     "systolic_bp": "Systolic BP",
@@ -94,9 +94,12 @@ def _threshold(value: Decimal | str | int) -> Decimal:
 def _check_policy(policy: CandidateDemoPolicy, clock: datetime) -> dict[str, Decimal]:
     if not isinstance(policy, CandidateDemoPolicy):
         raise CandidateRuleError("E_RULE_POLICY_INVALID", "Unknown policy type.")
-    if not isinstance(policy.policy_version, str) or not re.fullmatch(
-        r"candidate-p4-2a-\d+\.\d+\.\d+", policy.policy_version
-    ):
+    version = (
+        re.fullmatch(r"candidate-p4-2a-(\d+)\.(\d+)\.(\d+)", policy.policy_version)
+        if isinstance(policy.policy_version, str)
+        else None
+    )
+    if version is None:
         raise CandidateRuleError("E_RULE_POLICY_INVALID", "Not a candidate policy.")
     if policy.demo_only is not True:
         raise CandidateRuleError("E_RULE_POLICY_INVALID", "Only test policies are accepted.")
@@ -116,6 +119,8 @@ def _check_policy(policy: CandidateDemoPolicy, clock: datetime) -> dict[str, Dec
         raise CandidateRuleError("E_RULE_POLICY_INVALID", "Invalid rule list.")
     if len(set(rules)) != len(rules) or any(x not in _SUPPORTED for x in rules):
         raise CandidateRuleError("E_RULE_POLICY_INVALID", "Retired or unimplemented rule.")
+    if "DR-009" in rules and tuple(int(n) for n in version.groups()) < (0, 2, 0):
+        raise CandidateRuleError("E_RULE_POLICY_INVALID", "New candidate rule requires version bump.")
     return {
         "systolic_bp": _threshold(policy.demo_delta_systolic_mmHg),
         "diastolic_bp": _threshold(policy.demo_delta_diastolic_mmHg),
@@ -272,6 +277,37 @@ def evaluate_candidate_review_subset(
                             f"by {amount} {comp.unit}."
                         ),
                         evidence=(current.id, comp.baseline_observation_id),
+                        trust=trust,
+                    )
+                )
+    # DR-009 evaluates each *admissible* recorded value, including historical
+    # rows. This is a deterministic typo/unit-check prompt, not a care boundary.
+    # A warning-labelled value stays admissible; its trust label never changes.
+    if "DR-009" in enabled:
+        skipped = {entry.observation_id for entry in expected.excluded}
+        for row in sorted(observations, key=lambda entry: entry.id):
+            if row.id in skipped:
+                continue
+            band = MEASURE_PLAUSIBLE_BANDS[MeasureType(row.measure_type)]
+            value = Decimal(str(row.value))
+            if value < Decimal(str(band[0])) or value > Decimal(str(band[1])):
+                trust = (
+                    "doctor_verified"
+                    if row.trust_level == TrustLevel.DOCTOR_VERIFIED.value
+                    else "self_reported"
+                )
+                output.append(
+                    _flag(
+                        patient_id=patient_id,
+                        policy=policy,
+                        rule="DR-009",
+                        reason="implausible_value",
+                        hint="data_quality",
+                        message=(
+                            "A recorded value is outside the demo plausibility range "
+                            "and may be a typo."
+                        ),
+                        evidence=(row.id,),
                         trust=trust,
                     )
                 )
