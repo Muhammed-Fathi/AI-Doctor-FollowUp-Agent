@@ -882,3 +882,16 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 **Present disposition (2026-11-19):** `P2 TEXT OWNER-RATIFIED / NOT YET OPERATIONALLY EFFECTIVE`; `P3=IN_REVIEW`; `GOLD-EX-11=FAIL / NOT PROVEN`, OCR exit 2; PR #11 MERGED into implementation branch, PR #10 DRAFT/UNMERGED to main. Independent reconciliation review, exact-head CI and separate final owner P3 acceptance remain pending.
 
 *Educational and synthetic only; NOT FOR CLINICAL USE.*
+
+
+> **P4-2a downstream collection-only checkpoint (2026-11-19; PR P4-2a, NOT P3 re-test).**
+> The historical P3 count stays **837 backend / 443 P3**; P4-1 added 22
+> tests and a separate P4-2a validator test file proposes another 22.
+> Expected **whole-backend collection** at this P4-2a head: 881 cases,
+> of which **443** belong to the unchanged P3 suite. The handoff integrity
+> gate requires the paired candidate token **881 passed**, of which **443** are the P3 suite
+> **only if** the new exact-head backend test run actually succeeds. These are
+> expected collection figures, not a claim of successful execution. Earlier
+> 859/443 was the P4-1 checkpoint, not a replacement for the 837/443
+> historical P3 evidence. Any mismatch must fail CI rather than silently
+> modifying P3 tests or scanner requirements.
