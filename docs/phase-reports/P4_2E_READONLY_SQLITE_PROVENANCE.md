@@ -37,3 +37,9 @@ There is **no genuine P4-4 run** to associate a document's active or superseded 
 - No `main` mutation/merge/agent approvals. Rollback: close the isolated branch unmerged. No persisted schema or production DB changes.
 
 **P4 = IN_REVIEW. P3 GOLD-EX-11 remains FAIL / NOT PROVEN.**
+
+
+## Initial CI result and collection count correction
+
+- [PR CI 44495402318](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44495402318) at `711d1e0c34268c60c29bdb01c7b7485ca30c274f` completed **FAIL** at the already-existing handoff-count integrity test. It reported exactly `handoff should quote the whole-backend total 977`, not our earlier provisional `976`. The progress of the other backend tests showed no additional failure; the frontend job succeeded.
+- The P4-2e Windows handoff now **appends** the corrected **977 total / 443 P3** collected-count token; a subsequent exact-head CI **must still pass**. Neither historical P3 tests/fixtures nor scanner checks have been weakened. This note distinguishes collected tests from an observed PASS count.
