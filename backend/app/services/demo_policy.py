@@ -101,7 +101,9 @@ def _decimal(value: object, field: str, low: Decimal, high: Decimal) -> Decimal:
     return number
 
 
-def _switches(value: object, allowed: tuple[str, ...], field: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+def _switches(
+    value: object, allowed: tuple[str, ...], field: str
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
     if not isinstance(value, list) or len(value) != len(allowed):
         raise DemoPolicyError(f"{field}: expected complete closed catalogue.")
     found: dict[str, bool] = {}
@@ -160,12 +162,24 @@ def validate_demo_policy(raw: object) -> DemoPolicyCandidate:
         notice=_NOTICE,
         baseline_lookback_days=_whole_number(p["baseline_lookback_days"], "lookback", 1, 365),
         stale_measurement_days=_whole_number(p["stale_measurement_days"], "staleness", 1, 365),
-        demo_delta_systolic_mmHg=_decimal(p["demo_delta_systolic_mmHg"], "delta_sbp", Decimal("0.001"), Decimal("1000000")),
-        demo_delta_diastolic_mmHg=_decimal(p["demo_delta_diastolic_mmHg"], "delta_dbp", Decimal("0.001"), Decimal("1000000")),
-        demo_delta_heart_rate_bpm=_decimal(p["demo_delta_heart_rate_bpm"], "delta_hr", Decimal("0.001"), Decimal("1000000")),
-        demo_delta_glucose_mgdl=_decimal(p["demo_delta_glucose_mgdl"], "delta_glucose", Decimal("0.001"), Decimal("1000000")),
-        ocr_confidence_floor=_decimal(p["ocr_confidence_floor"], "ocr_floor", Decimal("0"), Decimal("1")),
-        conflict_tolerance=_decimal(p["conflict_tolerance"], "conflict_tolerance", Decimal("0"), Decimal("1000000")),
+        demo_delta_systolic_mmHg=_decimal(
+            p["demo_delta_systolic_mmHg"], "delta_sbp", Decimal("0.001"), Decimal("1000000")
+        ),
+        demo_delta_diastolic_mmHg=_decimal(
+            p["demo_delta_diastolic_mmHg"], "delta_dbp", Decimal("0.001"), Decimal("1000000")
+        ),
+        demo_delta_heart_rate_bpm=_decimal(
+            p["demo_delta_heart_rate_bpm"], "delta_hr", Decimal("0.001"), Decimal("1000000")
+        ),
+        demo_delta_glucose_mgdl=_decimal(
+            p["demo_delta_glucose_mgdl"], "delta_glucose", Decimal("0.001"), Decimal("1000000")
+        ),
+        ocr_confidence_floor=_decimal(
+            p["ocr_confidence_floor"], "ocr_floor", Decimal("0"), Decimal("1")
+        ),
+        conflict_tolerance=_decimal(
+            p["conflict_tolerance"], "conflict_tolerance", Decimal("0"), Decimal("1000000")
+        ),
         max_items_per_type=_whole_number(p["max_items_per_type"], "max_items", 1, 20),
         enabled_rules=enabled_rules,
         disabled_rules=disabled_rules,
