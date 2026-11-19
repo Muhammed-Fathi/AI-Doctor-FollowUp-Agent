@@ -28,3 +28,26 @@ GitHub Actions Python 3.12 Ruff lint/format, pytest, OpenAPI, Alembic smoke, sec
 5. Full `GOLD-A/B/C/D` integration, cross-patient API tests, Windows acceptance and separate owner P4 sign-off remain future requirements.
 
 **Do not deploy/activate, self-approve, or merge automatically.** This code has no browser/task/notification/LLM action, no clinical interpretation, no real patient data. Owner reviews all changes and chooses merge after successful exact-head CI.
+
+
+## Initial exact-head integrated CI finding and correction
+
+- At PR head `7f64295bc5f8736a078fc90664004a7b8881f239`, GitHub Actions
+  [push run 44487173238](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44487173238)
+  returned FAIL at the existing P3 handoff integrity test
+  `test_handoff_test_count_matches_the_suite_it_describes`, specifically
+  `handoff should quote the whole-backend total 967`. All other pytest
+  progress markers completed without a displayed failing test; the
+  P4-2d test code has no reported assertion failure in this run.
+- This documentation-only correction **appends** the conditional measured
+  `967 backend / 443 P3` collection expectation to the P3 handoff without
+  replacing any historical evidence. The phrase `967 passed` is retained only
+  as the pairing token that the historical test requires; **it does not claim
+  passing tests until the next exact-head CI is green**.
+- The new PR now proposes four paths instead of three:
+  `backend/app/services/provenance_review_candidate.py`,
+  `backend/tests/p4/test_p4_provenance_review_candidate.py`,
+  `docs/phase-reports/P4_2D_DR006_DR008_OFFLINE_CANDIDATES.md` and
+  `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md` (append-only).
+- The next CI must pass on the **new final SHA**. No P3 code, past acceptance,
+  live OCR result, or scan policy was weakened.
