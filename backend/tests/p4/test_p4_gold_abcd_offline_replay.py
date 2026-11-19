@@ -13,7 +13,6 @@ import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from hashlib import sha256
-from pathlib import Path
 from uuid import UUID, uuid5
 
 import pytest
@@ -21,7 +20,6 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.enums import Role
-from app.core.errors import ApiError
 from app.core.paths import REPO_ROOT
 from app.core.policies import Principal
 from app.db.models import (
