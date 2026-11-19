@@ -923,3 +923,26 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 > Keep original 837/443 historical P3, owner Windows 833 passed / 4 skipped,
 > and real GOLD-EX-11 FAIL / NOT PROVEN untouched. No P3 executable, scanner,
 > fixture or strict OCR policy changes are introduced by this addendum.
+
+
+> **P4-2e downstream collection checkpoint (2026-11-19; internal read-only SQLite projection ONLY).**
+> P4-2d collected 967 backend / 443 P3 tests. The proposed new P4-2e
+> `test_p4_readonly_provenance.py` adds **9 expected collected** tests:
+> **976 backend / 443 P3**, subject to exact-head CI collection verification.
+> Conditional integrity-pair token: **976 passed**, of which **443** are the P3 suite
+> (test-checking *syntax only*: this is **NOT** a claim of 976 successful
+> tests until exact-head CI confirms them). No historic P3 source, fixture,
+> scanner or Windows OCR outcome is modified; preserve real GOLD-EX-11
+> FAIL / NOT PROVEN and original owner-accepted scope.
+
+
+> **P4-2e actual exact-head collection correction (2026-11-19; appending, no historic overwrite).**
+> GitHub Actions [PR run #44495402318](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44495402318)
+> reached full Python pytest and the existing handoff integrity assertion
+> **measured 977 collected backend cases** (P3 remains **443**). Our earlier
+> **976** was a provisional, inaccurate estimate; it was never a green test
+> claim. Correct conditional integrity token: **977 passed**, of which **443** are the P3 suite
+> (**collection-check text only** until an exact-head successful CI run).
+> The single CI failure was the outdated handoff count assertion, not a
+> failure in the new source-projection behavioral tests. No P3 executable,
+> acceptance policy, historical counts or OCR test outcome was changed.
