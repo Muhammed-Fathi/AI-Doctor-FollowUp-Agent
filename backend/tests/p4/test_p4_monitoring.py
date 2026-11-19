@@ -10,7 +10,7 @@ import pytest
 from app.services.monitoring import (
     MonitoringInputError,
     ObservationSnapshot,
-    compare_observations,
+    compare_observation_history,
 )
 
 AS_OF = datetime(2026, 11, 14, 12, tzinfo=UTC)
@@ -42,7 +42,7 @@ def row(
 
 
 def run(*items: ObservationSnapshot, days: int = 90, clock: datetime = AS_OF):
-    return compare_observations(
+    return compare_observation_history(
         items, patient_id=PATIENT_A, as_of_utc=clock, baseline_lookback_days=days
     )
 
@@ -89,7 +89,7 @@ def test_req_mon_01_exact_boundary_is_included() -> None:
 def test_req_data_04_rejected_and_incompatible_unit_do_not_shift_baseline() -> None:
     result = run(
         row("valid", "2026-10-20T08:00:00Z", 146),
-        row("rejected", "2026-11-01T08:00:00Z", 190, validation="rejected"),
+        row("rejected", "2026-11-01T08:00:00Z", "NaN", validation="rejected"),
         row("unit", "2026-11-02T08:00:00Z", 200, unit="bpm"),
         row("current", "2026-11-03T08:00:00Z", 158),
     )
@@ -119,7 +119,7 @@ def test_req_mon_02_missing_and_future_time_are_reported_not_hidden() -> None:
 def test_req_data_04_self_reported_and_mixed_are_never_mislabelled() -> None:
     mixed = run(
         row("old", "2026-10-20T08:00:00Z", 146, trust="doctor_verified"),
-        row("current", "2026-11-03T08:00:00Z", 158),
+        row("current", "2026-11-03T08:00:00Z", 158, validation="ok_with_warning"),
     )
     assert mixed.comparisons[0].trust_basis == "mixed"
     verified = run(
@@ -144,6 +144,9 @@ def test_req_mon_03_same_timestamp_duplicate_does_not_become_baseline() -> None:
     )
     assert result.comparisons[0].current_observation_id == "b"
     assert result.comparisons[0].baseline_observation_id is None
+    with pytest.raises(MonitoringInputError) as duplicate:
+        run(row("same", "2026-10-01T08:00:00Z", 140), row("same", AS_OF, 150))
+    assert duplicate.value.code == "E_VALIDATION"
 
 
 def test_req_mon_01_result_is_order_independent_and_clock_injected() -> None:
@@ -157,6 +160,14 @@ def test_req_sec_01_cross_patient_fails_before_returning_any_data() -> None:
     with pytest.raises(MonitoringInputError, match="scope") as error:
         run(row("valid", "2026-11-03T08:00:00Z", 158), row("other", AS_OF, 145, patient=PATIENT_B))
     assert error.value.code == "E_SCOPE_VIOLATION"
+    with pytest.raises(MonitoringInputError) as blank:
+        compare_observation_history(
+            (row("id", AS_OF, 145),),
+            patient_id="",
+            as_of_utc=AS_OF,
+            baseline_lookback_days=90,
+        )
+    assert blank.value.code == "E_VALIDATION"
 
 
 @pytest.mark.parametrize("label", ["verified", "untrusted", ""])
