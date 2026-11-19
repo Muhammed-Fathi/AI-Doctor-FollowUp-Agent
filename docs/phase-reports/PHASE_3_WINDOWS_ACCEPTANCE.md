@@ -515,6 +515,21 @@ note which gate skipped and why (the Playwright smoke legitimately skips unless
 > passed. Do not revise the P3 837 historical run to 859, weaken its assertions,
 > or claim the separate Windows P3 result (833 passed, four skips) changed.
 
+> **P4-2a combined collection checkpoint (2026-11-19; after PR #16 owner merge, PR #17 still under review).**
+> The accepted P3 history remains 837 backend / 443 P3. P4-1 collected 859/443;
+> merged offline P4-2A PR #16 recorded 886/443. Standalone validator PR #17
+> independently recorded 882/443 on the old P4-1 base. Expected combined
+> collection on this reconciled branch is **909** backend / **443** P3,
+> calculated as 886 + (882 - 859), **subject to exact-head pytest verification**.
+> Only if complete backend tests pass is the paired candidate statement valid:
+> **909 passed**, of which **443** are the P3 suite
+> This sentence is a conditional expected test-gate token, not a claim that
+> the combined CI has succeeded. Never rewrite the historical 837/443, P3
+> Windows 833 passed / 4 skipped, or GOLD-EX-11 scientific FAIL.
+
+> **P4-2A candidate-only test-collection note (2026-11-19, unmerged feature PR).**
+> After the owner merged P4-1 (PR #15, reviewed head 6c254457a62826656382945898ac790dacc4ffc7), the repository collected **859** backend cases, including the same **443** P3 cases; the historical P3-only baseline below remains **837**. This P4-2A candidate has **26 focused test cases in the isolated local probe** and does not change P3 tests or fixtures. At new GitHub CI head a5d7f27bc, the **actual full backend collection check measured 886**, not the earlier arithmetic estimate of 885; no previous PASS is claimed. The next candidate's expected successful full-suite result is **886 passed**, of which **443** are the P3 suite **IF AND ONLY IF** its full backend CI succeeds. This is not a representation of already-executed results; historical P3 Windows **833 passed / 4 skipped** stays unchanged. The collection-integrity test checks that candidate expected total and must not be weakened.
+
 Expected backend figure at this commit: **837 passed**, of which **443** are the P3
 suite (`backend/tests/p3`). Verified by collection and by a full run on the
 reviewed commit, not estimated:
@@ -882,16 +897,3 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 **Present disposition (2026-11-19):** `P2 TEXT OWNER-RATIFIED / NOT YET OPERATIONALLY EFFECTIVE`; `P3=IN_REVIEW`; `GOLD-EX-11=FAIL / NOT PROVEN`, OCR exit 2; PR #11 MERGED into implementation branch, PR #10 DRAFT/UNMERGED to main. Independent reconciliation review, exact-head CI and separate final owner P3 acceptance remain pending.
 
 *Educational and synthetic only; NOT FOR CLINICAL USE.*
-
-
-> **P4-2a downstream collection-only checkpoint (2026-11-19; PR P4-2a, NOT P3 re-test).**
-> The historical P3 count stays **837 backend / 443 P3**; P4-1 added 22
-> tests and a separate P4-2a validator file adds 22 authored test functions.
-> GitHub pytest actually collected **882 whole-backend cases** on the pre-fix P4-2a head, not the earlier 881 estimate;
-> of which **443** belong to the unchanged P3 suite. The handoff integrity
-> gate requires the paired candidate token **882 passed**, of which **443** are the P3 suite
-> **only if** the new exact-head backend test run actually succeeds. These are
-> expected collection figures, not a claim of successful execution. Earlier
-> 859/443 was the P4-1 checkpoint, not a replacement for the 837/443
-> historical P3 evidence. Any mismatch must fail CI rather than silently
-> modifying P3 tests or scanner requirements.

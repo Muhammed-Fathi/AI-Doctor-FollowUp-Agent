@@ -25,7 +25,7 @@ The nine declared parameter names must all be present, typed and bounded. Non-fi
 
 ## Verification record and required CI
 
-The authored candidate test file has **22 test functions**, but the GitHub CI collection check at `103339e2d99693533feee27d3fd204286701a86f` found **882 total backend tests**, not the arithmetic estimate 881. The one-case collection discrepancy is recorded and must not be misrepresented as a new PASS. Historical P3 reviewed figures are 837 backend / 443 P3; P4-1 collected 859 / 443; expected candidate collection after P4-2a is **882 / 443**, subject to official pytest collection and full workflow execution. **882 passed is NOT an observed result; collection is not a passing test run.** The P3 handoff receives an append-only, clearly conditional P4-2a count note rather than having its prior evidence overwritten.
+The authored validator file has **22 test functions**. On PR #17's original independent branch, Pytest collected **882 backend cases**, not the incorrect arithmetic estimate 881. This is historical standalone pre-reconciliation evidence, not the combined collection count. The historical P3 count remains 837 whole backend / 443 P3; P4-1 collected 859 / 443. New merged-with-PR16 counts must be measured separately by authoritative CI before any owner merge.
 
 Before an interim owner merge, verify exact-head Python 3.12 Ruff lint/format, all backend tests, Alembic smoke, OpenAPI check, repository artefact/secret scan and frontend CI. A later independent review must inspect claims, pure side-effect boundary and policies. Local Windows/OCR runs and the full P4 gold rule matrix have not been executed by this work.
 
@@ -41,3 +41,14 @@ Before an interim owner merge, verify exact-head Python 3.12 Ruff lint/format, a
 ## Decision boundary
 
 If CI and review pass, the owner may merge the bounded policy-validation increment. That is **not** acceptance of P4 or approval of policy thresholds, an AI agent graph, clinical use, or phase advancement. **No agent merge. NOT FOR CLINICAL USE.**
+
+
+## P4-2a post-PR16 reconciliation checkpoint — 2026-11-19
+
+**Current reconciled candidate (NOT yet approved/merged):** PR #16 was owner-merged to `main@0d0bb30dace6717c4435de29f9be981ddda010cb` and supplied the isolated, offline DR-001/003/005 candidate engine, while this PR #17 supplies **only** the strict versioned demo-policy candidate validator. Both components are **quarantined**; no runtime policy activation, LangGraph agent, API, data migration, LLM, medical decision or notifications.
+
+The reconciled commit intentionally uses the **exact main Git tree** as its starting point and adds PR #17's three new file paths plus this report and an append-only P3 handoff collection note. No PR #16 source/test/report content is dropped or overwritten. Preserve `GOLD-EX-11 = FAIL / NOT PROVEN` and prior P3 records.
+
+Collection count: `main` after PR #16 has independently measured **886 backend tests** / 443 P3, while standalone PR #17 (from P4-1) had measured **882** / 443. Against common P4-1 baseline **859**, additive composition forecasts `886 + (882 - 859) = 909` backend tests with 443 P3. **909 is a provisional expected collection count, not an observed CI PASS**. The GitHub CI on this new combined HEAD must collect and execute the real suite. On discrepancy, stop, measure and correct only the new candidate note without changing historical P3 numbers or validation tests.
+
+Mandatory before owner-controlled merge: Python 3.12 Ruff lint/format, backend pytest, repository scan, Alembic smoke, OpenAPI and Node 22 Frontend **SUCCESS** at the reconciled exact HEAD. The `P4-2a` validator is separate from the offline subset evaluator in PR #16; a later owner-approved integration must reconcile candidate policy ID schemas and full DR catalogue. **P4 remains IN_REVIEW and PR #17 must not be merged automatically.** No arbitrary demo numbers are approved by this history merge. Synthetic/educational only, NOT FOR CLINICAL USE.
