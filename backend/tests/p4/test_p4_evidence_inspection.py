@@ -196,9 +196,7 @@ def test_pending_document_does_not_become_approved_run(db: Session) -> None:
     assert not result.selected_document_preflight.candidate_documents_clear
     assert result.run_gate_status == "unavailable"
     assert any(item.observation_id == observation.id for item in result.source_exclusions)
-    assert any(
-        item.reason == "verified_lineage_unavailable" for item in result.source_exclusions
-    )
+    assert any(item.reason == "verified_lineage_unavailable" for item in result.source_exclusions)
     with pytest.raises(ApiError) as denied:
         call(db, (observation.id,), document_ids=(doc.id,))
     assert denied.value.status_code == 400
@@ -310,8 +308,11 @@ def test_uncommitted_changes_and_naive_clock_fail_closed(db: Session) -> None:
     owner_id = patient(db).id
     with pytest.raises(ApiError) as invalid:
         call(
-            db, (current.id,), principal=doctor,
-            patient_id=owner_id, as_of_utc=datetime(2026, 11, 14),
+            db,
+            (current.id,),
+            principal=doctor,
+            patient_id=owner_id,
+            as_of_utc=datetime(2026, 11, 14),
         )
     assert invalid.value.status_code == 400
     current.value = 555
