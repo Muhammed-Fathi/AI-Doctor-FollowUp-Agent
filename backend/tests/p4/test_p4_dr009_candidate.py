@@ -90,8 +90,7 @@ def test_dr009_synthetic_typo_uses_exact_message_and_source_label() -> None:
     )
     assert item.evidence == ("observation:typo",)
     assert item.message == (
-        "A recorded value is outside the demo plausibility range "
-        "and may be a typo (self-reported)."
+        "A recorded value is outside the demo plausibility range and may be a typo (self-reported)."
     )
     assert item.trust_basis == "self_reported"
     assert item.demo_only is True
