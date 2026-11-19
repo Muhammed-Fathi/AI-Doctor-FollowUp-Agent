@@ -1,0 +1,33 @@
+{
+  "case_id": "GOLD-C",
+  "patient_external_ref": "DEMO-C-001",
+  "demo_as_of_utc": "2026-11-14T12:00:00Z",
+  "reference": "GOLD_FIXTURES.md §4",
+  "candidate_policy_status": "test-only-unapproved",
+  "pre_verification": {
+    "pending_active_fact_count": 3,
+    "expected_open_verification_issue_ids": [
+      "VI-001",
+      "VI-002",
+      "VI-003",
+      "VI-005"
+    ],
+    "expected_unverified_message": "3 extracted value(s) are not yet verified.",
+    "expected_review_rule_ids": []
+  },
+  "post_fixture_correction": {
+    "expected_open_verification_issue_ids": [],
+    "expected_review_rule_ids": [],
+    "document_mapping": {
+      "mapped_observations": 1,
+      "measure_type": "glucose",
+      "value": 105,
+      "unit": "mg/dL",
+      "measured_at": "2026-11-03T00:00:00Z",
+      "trust_level": "doctor_verified"
+    },
+    "expected_delta": 9,
+    "trust_basis": "mixed"
+  },
+  "real_ocr_result": "GOLD-EX-11 FAIL / NOT PROVEN; this candidate test does not run Tesseract"
+}

@@ -1,0 +1,33 @@
+{
+  "case_id": "GOLD-D",
+  "patient_external_ref": "DEMO-D-001",
+  "patient_id": "44444444-4444-4444-8444-444444444444",
+  "demo_as_of_utc": "2026-11-14T12:00:00Z",
+  "reference": "GOLD_FIXTURES.md §5",
+  "candidate_policy_status": "test-only-unapproved",
+  "expected_review_rule_ids": [
+    "DR-001",
+    "DR-003",
+    "DR-005",
+    "DR-008",
+    "DR-009"
+  ],
+  "expected_review_count": 5,
+  "expected_by_rule": {
+    "DR-001": "heart_rate",
+    "DR-003": "heart_rate",
+    "DR-005": "diastolic_bp",
+    "DR-008": "systolic_bp",
+    "DR-009": "diastolic_bp"
+  },
+  "expected_deltas": {
+    "diastolic_bp": 168
+  },
+  "expected_duplicate": {
+    "measure_type": "systolic_bp",
+    "value": 130,
+    "measured_at": "2026-10-20T09:00:00Z",
+    "distinct_observation_ids": 2
+  },
+  "expected_source_conflicts": 0
+}
