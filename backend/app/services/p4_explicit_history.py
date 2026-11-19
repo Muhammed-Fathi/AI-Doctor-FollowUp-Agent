@@ -12,7 +12,6 @@ from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from app.core.clock import parse_utc, to_utc
-from app.core.enums import MeasureType
 from app.services.monitoring import (
     ExcludedObservation,
     MonitoringInputError,

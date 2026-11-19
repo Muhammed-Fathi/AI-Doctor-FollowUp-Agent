@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
 
 import pytest
