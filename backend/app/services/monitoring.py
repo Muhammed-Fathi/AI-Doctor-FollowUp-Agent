@@ -8,10 +8,10 @@ Contracts: REQ-MON-01/02, REQ-DATA-04, TOOL_CONTRACTS.md §3.4/3.5.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Iterable
 
 from app.core.clock import MAX_FUTURE_SKEW_MINUTES, parse_utc, to_utc
 from app.core.enums import MEASURE_UNITS, MeasureType, TrustLevel, ValidationState
