@@ -99,7 +99,9 @@ def inspect_selected_evidence(
     try:
         clock = to_utc(as_of_utc)
     except (TypeError, ValueError, AttributeError):
-        raise ApiError(400, ErrorCode.VALIDATION, "An aware evaluation clock is required.") from None
+        raise ApiError(
+            400, ErrorCode.VALIDATION, "An aware evaluation clock is required."
+        ) from None
     if not isinstance(principal, Principal):
         raise ApiError(403, ErrorCode.FORBIDDEN, "A server identity is required.")
 
@@ -118,9 +120,7 @@ def inspect_selected_evidence(
         if row is None or row.revoked_at is not None:
             raise ApiError(403, ErrorCode.FORBIDDEN, "An active authenticated session is required.")
         try:
-            valid_session = (
-                parse_utc(row.created_at) <= clock < parse_utc(row.expires_at)
-            )
+            valid_session = parse_utc(row.created_at) <= clock < parse_utc(row.expires_at)
         except (TypeError, ValueError, AttributeError):
             valid_session = False
         if not valid_session:
@@ -176,7 +176,9 @@ def inspect_selected_evidence(
                     excluded.append(SelectedSourceExclusion(obs_id, "source_document_not_selected"))
                     continue
                 if preflight is None or not preflight.candidate_documents_clear:
-                    excluded.append(SelectedSourceExclusion(obs_id, "selected_document_preflight_blocked"))
+                    excluded.append(
+                        SelectedSourceExclusion(obs_id, "selected_document_preflight_blocked")
+                    )
                     continue
                 if entry.trust_level != "doctor_verified":
                     excluded.append(SelectedSourceExclusion(obs_id, "stored_trust_source_mismatch"))
@@ -192,7 +194,9 @@ def inspect_selected_evidence(
         # Fail closed rather than let an ineligible explicitly selected current
         # observation silently disappear and change a downstream delta.
         if any(obs_id not in included for obs_id in currents):
-            raise ApiError(400, ErrorCode.VALIDATION, "Selected observation provenance is ineligible.")
+            raise ApiError(
+                400, ErrorCode.VALIDATION, "Selected observation provenance is ineligible."
+            )
 
         current_rows = tuple(included[obs_id] for obs_id in currents)
         history_rows = tuple(

@@ -42,9 +42,7 @@ def patient(db: Session, reference: str = "DEMO-A-001") -> Patient:
     return db.execute(select(Patient).where(Patient.external_ref == reference)).scalar_one()
 
 
-def identity(
-    db: Session, username: str = "demo_doctor", *, session_suffix: str = "1"
-) -> Principal:
+def identity(db: Session, username: str = "demo_doctor", *, session_suffix: str = "1") -> Principal:
     user = db.execute(select(User).where(User.username == username)).scalar_one()
     token_sha = sha256(f"synthetic-session-{session_suffix}".encode()).hexdigest()
     session_id = f"bbbbbbbb-bbbb-4bbb-8bbb-{int(session_suffix):012d}"
@@ -198,7 +196,9 @@ def test_pending_document_does_not_become_approved_run(db: Session) -> None:
     assert not result.selected_document_preflight.candidate_documents_clear
     assert result.run_gate_status == "unavailable"
     assert any(item.observation_id == observation.id for item in result.source_exclusions)
-    assert any(item.reason == "selected_document_preflight_blocked" for item in result.source_exclusions)
+    assert any(
+        item.reason == "selected_document_preflight_blocked" for item in result.source_exclusions
+    )
     with pytest.raises(ApiError) as denied:
         call(db, (observation.id,), document_ids=(doc.id,))
     assert denied.value.status_code == 400
@@ -228,7 +228,9 @@ def test_open_vi_issue_remains_visible_then_resolved_without_runtime_clearance(d
     db.commit()
     after = call(db, (current.id,), document_ids=(doc.id,))
     assert after.selected_document_preflight.candidate_documents_clear
-    assert [(i.issue_type, i.state) for i in after.selected_issue_states] == [("VI-002", "resolved")]
+    assert [(i.issue_type, i.state) for i in after.selected_issue_states] == [
+        ("VI-002", "resolved")
+    ]
     assert after.run_gate_completed is False
 
 
@@ -248,8 +250,12 @@ def test_no_session_expired_revoked_and_wrong_user_session_refused(db: Session) 
             db,
             (current.id,),
             principal=Principal(
-                user_id=p.user_id, username=p.username, display_name=p.display_name,
-                role=p.role, patient_id=p.patient_id, session_id="missing",
+                user_id=p.user_id,
+                username=p.username,
+                display_name=p.display_name,
+                role=p.role,
+                patient_id=p.patient_id,
+                session_id="missing",
             ),
         )
     assert missing.value.status_code == 403
@@ -269,9 +275,13 @@ def test_no_session_expired_revoked_and_wrong_user_session_refused(db: Session) 
 
 def test_missing_and_foreign_current_never_leak(db: Session) -> None:
     first = selected_systolic(db)
-    other = db.execute(
-        select(Observation).where(Observation.patient_id == patient(db, "DEMO-B-001").id)
-    ).scalars().first()
+    other = (
+        db.execute(
+            select(Observation).where(Observation.patient_id == patient(db, "DEMO-B-001").id)
+        )
+        .scalars()
+        .first()
+    )
     assert other is not None
     for unknown in ("not-present", other.id):
         with pytest.raises(ApiError) as denied:
