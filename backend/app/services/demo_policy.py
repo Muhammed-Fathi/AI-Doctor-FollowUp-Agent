@@ -155,7 +155,7 @@ def validate_demo_policy(raw: object) -> DemoPolicyCandidate:
     enabled_issues, disabled_issues = _switches(
         data["verification_issues"], _VERIFICATION_ISSUES, "verification_issues"
     )
-    # These ceilings are implementation resource bounds, NOT diagnostic cutoffs.
+    # These limits only protect demo inputs and runtime resources; not treatment guidance.
     return DemoPolicyCandidate(
         policy_version=version,
         demo_as_of_utc=clock,

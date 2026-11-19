@@ -25,7 +25,7 @@ The nine declared parameter names must all be present, typed and bounded. Non-fi
 
 ## Verification record and required CI
 
-The authored candidate test file contains **22 tests**. Historical P3 reviewed figures are 837 backend / 443 P3; P4-1 collected 859 / 443; expected candidate collection after P4-2a is **881 / 443**, subject to official pytest collection and full workflow execution. **881 passed is NOT an observed result before CI succeeds.** The P3 handoff receives an append-only, clearly conditional P4-2a count note rather than having its prior evidence overwritten.
+The authored candidate test file has **22 test functions**, but the GitHub CI collection check at `103339e2d99693533feee27d3fd204286701a86f` found **882 total backend tests**, not the arithmetic estimate 881. The one-case collection discrepancy is recorded and must not be misrepresented as a new PASS. Historical P3 reviewed figures are 837 backend / 443 P3; P4-1 collected 859 / 443; expected candidate collection after P4-2a is **882 / 443**, subject to official pytest collection and full workflow execution. **882 passed is NOT an observed result; collection is not a passing test run.** The P3 handoff receives an append-only, clearly conditional P4-2a count note rather than having its prior evidence overwritten.
 
 Before an interim owner merge, verify exact-head Python 3.12 Ruff lint/format, all backend tests, Alembic smoke, OpenAPI check, repository artefact/secret scan and frontend CI. A later independent review must inspect claims, pure side-effect boundary and policies. Local Windows/OCR runs and the full P4 gold rule matrix have not been executed by this work.
 

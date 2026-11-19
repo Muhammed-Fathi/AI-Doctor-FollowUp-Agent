@@ -886,10 +886,10 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 
 > **P4-2a downstream collection-only checkpoint (2026-11-19; PR P4-2a, NOT P3 re-test).**
 > The historical P3 count stays **837 backend / 443 P3**; P4-1 added 22
-> tests and a separate P4-2a validator test file proposes another 22.
-> Expected **whole-backend collection** at this P4-2a head: 881 cases,
+> tests and a separate P4-2a validator file adds 22 authored test functions.
+> GitHub pytest actually collected **882 whole-backend cases** on the pre-fix P4-2a head, not the earlier 881 estimate;
 > of which **443** belong to the unchanged P3 suite. The handoff integrity
-> gate requires the paired candidate token **881 passed**, of which **443** are the P3 suite
+> gate requires the paired candidate token **882 passed**, of which **443** are the P3 suite
 > **only if** the new exact-head backend test run actually succeeds. These are
 > expected collection figures, not a claim of successful execution. Earlier
 > 859/443 was the P4-1 checkpoint, not a replacement for the 837/443
