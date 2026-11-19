@@ -168,7 +168,6 @@ def test_dr009_policy_requires_versioned_opt_in() -> None:
     assert exc.value.code == "E_RULE_POLICY_INVALID"
 
 
-
 def test_dr009_policy_rejects_oversized_version_with_typed_error() -> None:
     oversized = "candidate-p4-2a-" + "9" * 5000 + ".2.0"
     with pytest.raises(CandidateRuleError) as exc:

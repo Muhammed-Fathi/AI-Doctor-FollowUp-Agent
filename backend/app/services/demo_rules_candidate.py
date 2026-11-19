@@ -95,7 +95,9 @@ def _check_policy(policy: CandidateDemoPolicy, clock: datetime) -> dict[str, Dec
     if not isinstance(policy, CandidateDemoPolicy):
         raise CandidateRuleError("E_RULE_POLICY_INVALID", "Unknown policy type.")
     version = (
-        re.fullmatch(r"candidate-p4-2a-([0-9]{1,20})\.([0-9]{1,20})\.([0-9]{1,20})", policy.policy_version)
+        re.fullmatch(
+            r"candidate-p4-2a-([0-9]{1,20})\.([0-9]{1,20})\.([0-9]{1,20})", policy.policy_version
+        )
         if isinstance(policy.policy_version, str)
         else None
     )
