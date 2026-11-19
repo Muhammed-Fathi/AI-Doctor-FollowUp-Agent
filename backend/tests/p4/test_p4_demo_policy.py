@@ -51,9 +51,7 @@ def test_all_catalogued_candidate_values_validate_without_activation() -> None:
     assert result.policy_version == "demo-policy-1.1.0"
     assert result.demo_as_of_utc == datetime(2026, 11, 14, 12, tzinfo=UTC)
     assert result.demo_delta_systolic_mmHg == Decimal("10")
-    assert result.enabled_rules == (
-        "DR-001", "DR-003", "DR-005", "DR-006", "DR-008", "DR-009"
-    )
+    assert result.enabled_rules == ("DR-001", "DR-003", "DR-005", "DR-006", "DR-008", "DR-009")
     assert result.disabled_rules == ()
 
 
