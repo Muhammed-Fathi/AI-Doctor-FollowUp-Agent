@@ -897,3 +897,15 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 **Present disposition (2026-11-19):** `P2 TEXT OWNER-RATIFIED / NOT YET OPERATIONALLY EFFECTIVE`; `P3=IN_REVIEW`; `GOLD-EX-11=FAIL / NOT PROVEN`, OCR exit 2; PR #11 MERGED into implementation branch, PR #10 DRAFT/UNMERGED to main. Independent reconciliation review, exact-head CI and separate final owner P3 acceptance remain pending.
 
 *Educational and synthetic only; NOT FOR CLINICAL USE.*
+
+
+> **P4-2b downstream collection checkpoint (2026-11-19; candidate only, NOT new P3 acceptance).**
+> Owner-merged PR #17 has post-main CI SUCCESS at 154300096b33f2a03b4b0e74811eaf9ce40be30e.
+> The combined P4-2a backend collection was 909 with P3 subset 443.
+> This isolated DR-009 candidate adds 16 test functions, giving a provisional
+> **925 backend / 443 P3** collection expectation, not an observed PASS.
+> Conditional paired integrity token **925 passed**, of which **443** are the P3 suite
+> applies ONLY if exact-head full GitHub CI demonstrates success. On mismatch
+> update this P4 checkpoint after measurement, never edit prior P3 tests,
+> provenance or scanner. Preserve historical P3 837/443, Windows 833 pass /
+> 4 skip and real GOLD-EX-11 FAIL / NOT PROVEN.
