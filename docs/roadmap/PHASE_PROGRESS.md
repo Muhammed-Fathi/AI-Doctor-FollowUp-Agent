@@ -1225,3 +1225,13 @@ Following owner-merged [PR #23](https://github.com/Muhammed-Fathi/AI-Doctor-Foll
 - **R4 = OWNER-AUTHORIZED FOR OFFLINE TESTING ONLY:** synthetic GOLD-A/B/C/D expected fixtures and migrated SQLite candidate-rule tests, no runtime gate, API, agent, source-image/OCR validation, treatment, notifications, or live policy.
 - **R2 & R3 remain OPEN:** trusted full-run evidence/VI tool interface and numerical demo-policy `OQ-R01` require independent future owner review; green test results cannot silently ratify them.
 - **Status:** P4 **IN_REVIEW**, P5 NOT STARTED, P3 real `GOLD-EX-11 = FAIL / NOT PROVEN` stays disclosed. NOT FOR CLINICAL USE.
+
+
+## P4 R2-A / C-35A / C-37A owner-scoped implementation approval (2026-11-19)
+
+After owner-merged PR #25 at `main@71bf8bab7bcd55b570e7a13a46df6d2efad905f9`, the owner wrote **"تم دمج PR #25، وموافق على R2-A وC-35A وC-37A"** in chat.
+
+- **R2-A:** approved only a subsequent P4 **internal, read-only, scoped synthetic evidence inspection**, not any full run VI gate or source-byte attestation. It must unconditionally refuse/withhold live rule clearance.
+- **C-35A:** approved separate bounded server-side history acquisition and pure explicit current-plus-history comparison for P4 component testing; no silent normative tool contract change or P5 invocation.
+- **C-37A:** approved the future **server-produced run-bound evidence** architecture, **not** creation of an evaluable run token before P5. Current internal P4 result is **non-evaluable**, with an explicit unavailable gate.
+- **Previously approved R1-A** remains binding: no P4 review-item/evidence-link persistence before legitimate P5 workflow_run, and no P5 early code. R3/OQ-R01 demo numeric policy and R21 terminal-source recovery selection remain **OPEN**. P4 **IN_REVIEW**, P3 real OCR `GOLD-EX-11=FAIL / NOT PROVEN`; **NOT FOR CLINICAL USE**.

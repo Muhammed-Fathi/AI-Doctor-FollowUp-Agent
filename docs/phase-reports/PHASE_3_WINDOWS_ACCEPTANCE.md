@@ -984,3 +984,16 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 > independently measure and pass; correct here append-only if wrong. The
 > historical P3 Windows/OCR results, P3 test code, baseline and
 > GOLD-EX-11=FAIL / NOT PROVEN remain completely unchanged.
+
+
+> **P4 R2-A / C-35A / C-37A provisional test collection checkpoint (2026-11-19).**
+> The owner approved **internal-only** scoped evidence inspection and explicit
+> current/history comparison after merging PR #25. Base suite had **997 backend
+> / 443 P3** cases. Two new P4 test modules define 18 test functions including
+> parametrization for an expected **26** new collected cases: provisional
+> **1023 backend / 443 P3**. Conditional handoff test-count token:
+> **1023 passed**, of which **443** are the P3 suite. This is an **unverified
+> collection estimate, not an assertion that 1023 tests passed**. Exact-head
+> CI must measure the actual count and correct this append-only if wrong.
+> No P3 test/executable/scanner/historical Windows decision changed.
+> Real OCR GOLD-EX-11 remains **FAIL / NOT PROVEN**.
