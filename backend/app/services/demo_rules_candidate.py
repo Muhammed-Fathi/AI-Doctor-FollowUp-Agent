@@ -120,7 +120,9 @@ def _check_policy(policy: CandidateDemoPolicy, clock: datetime) -> dict[str, Dec
     if len(set(rules)) != len(rules) or any(x not in _SUPPORTED for x in rules):
         raise CandidateRuleError("E_RULE_POLICY_INVALID", "Retired or unimplemented rule.")
     if "DR-009" in rules and tuple(int(n) for n in version.groups()) < (0, 2, 0):
-        raise CandidateRuleError("E_RULE_POLICY_INVALID", "New candidate rule requires version bump.")
+        raise CandidateRuleError(
+            "E_RULE_POLICY_INVALID", "New candidate rule requires version bump."
+        )
     return {
         "systolic_bp": _threshold(policy.demo_delta_systolic_mmHg),
         "diastolic_bp": _threshold(policy.demo_delta_diastolic_mmHg),
