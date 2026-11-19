@@ -168,6 +168,44 @@ def test_dr009_policy_requires_versioned_opt_in() -> None:
     assert exc.value.code == "E_RULE_POLICY_INVALID"
 
 
+
+def test_dr009_policy_rejects_oversized_version_with_typed_error() -> None:
+    oversized = "candidate-p4-2a-" + "9" * 5000 + ".2.0"
+    with pytest.raises(CandidateRuleError) as exc:
+        run(observation("value", 1200), policy=candidate(policy_version=oversized))
+    assert exc.value.code == "E_RULE_POLICY_INVALID"
+
+
+@pytest.mark.parametrize(
+    ("bad_timestamp", "reason"),
+    [
+        (None, "missing_timestamp"),
+        ("2026-11-14T12:06:00Z", "future_timestamp"),
+    ],
+)
+def test_dr009_excludes_missing_or_future_timestamp_with_reason(
+    bad_timestamp: str | None, reason: str
+) -> None:
+    excluded = replace(observation("excluded", 1200), measured_at=bad_timestamp)
+    clean = observation("clean", 120, validation="ok")
+    rows = (excluded, clean)
+    comparisons = compare_observation_history(
+        rows, patient_id=PATIENT, as_of_utc=AS_OF, baseline_lookback_days=90
+    )
+    assert [(item.observation_id, item.skip_reason) for item in comparisons.excluded] == [
+        ("excluded", reason)
+    ]
+    result = evaluate_candidate_review_subset(
+        patient_id=PATIENT,
+        observations=rows,
+        comparisons=comparisons,
+        policy=candidate(),
+        as_of_utc=AS_OF,
+        blocking_fact_count=0,
+    )
+    assert result.flags == ()
+
+
 def test_dr009_order_independent_and_repeatable() -> None:
     a = observation("b", 301, timestamp="2026-10-01T08:00:00Z")
     b = observation("a", 302)

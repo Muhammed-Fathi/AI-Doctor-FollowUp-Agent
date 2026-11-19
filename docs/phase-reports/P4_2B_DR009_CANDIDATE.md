@@ -14,13 +14,13 @@ The candidate DR-009 rule must be explicitly enabled under version candidate-p4-
 ## Exact proposed changed paths
 - backend/app/services/demo_rules_candidate.py — opt-in offline DR-009 proof.
 - backend/tests/p4/test_p4_demo_rules_candidate.py — fixture candidate-version bump only.
-- backend/tests/p4/test_p4_dr009_candidate.py — 16 focused synthetic tests.
+- backend/tests/p4/test_p4_dr009_candidate.py — 19 collected synthetic cases (18 test functions; two timestamp parameter variants).
 - docs/phase-reports/P4_2B_DR009_CANDIDATE.md — this stage evidence.
 - docs/phase-reports/PHASE_4_REPORT.md — append-only P4 stage entry.
 - docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md — append-only conditional collection-count note, preserving historical acceptance.
 
 ## Test status and next gates
-At authorship time the 16 new tests were **not yet executed inside the authoritative private GitHub repository**. Previous merged P4-2a baseline collected 909 backend tests, P3 subset 443. This branch's provisional expected backend count is 925 (909 + 16), subject to measured CI collection; this is **not** a claim of 925 passing. Review and record exact-head Python 3.12 Ruff lint/format, pytest, migrations smoke, OpenAPI, repository scan and Node 22 frontend outcome before any owner-controlled merge. If the collection differs, correct only the downstream P4 note, not historical P3 tests or controls.
+At initial authorship the first 16 new tests had not yet run in authoritative CI (historical checkpoint). The initial branch head subsequently passed CI. Independent review then requested explicit excluded-timestamp coverage and an oversized candidate-version fail-closed regression; this revision adds 3 collected cases, for 19 new cases total. The prior merged P4-2a baseline collected 909 backend tests, P3 subset 443. This revision's provisional backend count is **928 (909 + 19)**, subject to exact-head CI; this is **not** a claim of 928 passing. The candidate version pattern now bounds ASCII numeric components to 20 digits before int conversion, returning E_RULE_POLICY_INVALID on oversized strings. Missing and >5-minute future timestamps are tested alongside a clean record; no DR-009 flag is emitted and exclusions retain their explicit reasons. Review and record exact-head Python 3.12 Ruff lint/format, pytest, migrations smoke, OpenAPI, repository scan and Node 22 frontend outcome before any owner-controlled merge. If the collection differs, correct only the downstream P4 note, not historical P3 tests or controls.
 
 ## Deferred owner and engineering decisions
 - DR-006 verified-source timestamp compatibility and DR-008 recorded-at chronology are not sufficiently specified for a live-safe evaluator; require separate signed semantics and fixtures.
