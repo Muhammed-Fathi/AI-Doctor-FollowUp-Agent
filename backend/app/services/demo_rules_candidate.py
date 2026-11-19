@@ -150,15 +150,20 @@ def _message(base: str, trust: str) -> str:
 
 
 def _flag(
-    *, patient_id: str, policy: CandidateDemoPolicy, rule: str, reason: str,
-    hint: str, message: str, evidence: tuple[str, ...], trust: str,
+    *,
+    patient_id: str,
+    policy: CandidateDemoPolicy,
+    rule: str,
+    reason: str,
+    hint: str,
+    message: str,
+    evidence: tuple[str, ...],
+    trust: str,
 ) -> CandidateReviewFlag:
     refs = tuple(sorted({f"observation:{x}" for x in evidence}))
     if len(refs) != len(evidence) or not refs:
         raise CandidateRuleError("E_VALIDATION", "Duplicate or empty evidence.")
-    digest = sha256(
-        "|".join((patient_id, rule, *refs, trust)).encode("utf-8")
-    ).hexdigest()
+    digest = sha256("|".join((patient_id, rule, *refs, trust)).encode("utf-8")).hexdigest()
     return CandidateReviewFlag(
         rule_id=rule,
         reason_code=reason,
@@ -224,10 +229,14 @@ def evaluate_candidate_review_subset(
         if "DR-001" in enabled and not comp.comparable:
             output.append(
                 _flag(
-                    patient_id=patient_id, policy=policy, rule="DR-001",
-                    reason="missing_baseline", hint="data_quality",
+                    patient_id=patient_id,
+                    policy=policy,
+                    rule="DR-001",
+                    reason="missing_baseline",
+                    hint="data_quality",
                     message=f"No previous recorded {label} to compare against.",
-                    evidence=(current.id,), trust=trust,
+                    evidence=(current.id,),
+                    trust=trust,
                 )
             )
         if "DR-003" in enabled:
@@ -235,10 +244,14 @@ def evaluate_candidate_review_subset(
             if days > policy.stale_measurement_days:
                 output.append(
                     _flag(
-                        patient_id=patient_id, policy=policy, rule="DR-003",
-                        reason="measurement_stale", hint="data_quality",
+                        patient_id=patient_id,
+                        policy=policy,
+                        rule="DR-003",
+                        reason="measurement_stale",
+                        hint="data_quality",
                         message=f"The most recent {label} was recorded {days} days ago.",
-                        evidence=(current.id,), trust=trust,
+                        evidence=(current.id,),
+                        trust=trust,
                     )
                 )
         if "DR-005" in enabled and comp.comparable:
@@ -249,14 +262,17 @@ def evaluate_candidate_review_subset(
                 amount = format(delta.normalize(), "f")
                 output.append(
                     _flag(
-                        patient_id=patient_id, policy=policy, rule="DR-005",
+                        patient_id=patient_id,
+                        policy=policy,
+                        rule="DR-005",
                         reason="change_exceeds_demo_parameter",
                         hint="change_to_review",
                         message=(
                             f"{label} differs from the previous recorded value "
                             f"by {amount} {comp.unit}."
                         ),
-                        evidence=(current.id, comp.baseline_observation_id), trust=trust,
+                        evidence=(current.id, comp.baseline_observation_id),
+                        trust=trust,
                     )
                 )
     counts: dict[str, int] = {}
@@ -267,10 +283,12 @@ def evaluate_candidate_review_subset(
         counts[measure] = counts.get(measure, 0) + 1
         if counts[measure] > policy.max_items_per_type:
             raise CandidateRuleError("E_RULE_POLICY_INVALID", "Candidate item cap exceeded.")
-    ordered = tuple(sorted(
-        output,
-        key=lambda item: (_HINT_ORDER[item.workflow_hint], item.rule_id, item.evidence),
-    ))
+    ordered = tuple(
+        sorted(
+            output,
+            key=lambda item: (_HINT_ORDER[item.workflow_hint], item.rule_id, item.evidence),
+        )
+    )
     return CandidateReviewResult(
         flags=ordered,
         disabled_rule_ids=tuple(sorted(_ALL_ACTIVE - enabled)),
