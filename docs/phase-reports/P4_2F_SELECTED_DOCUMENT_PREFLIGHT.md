@@ -34,3 +34,10 @@ No modifications to old P3 verification pipeline, database migrations, source-im
 At authoring, **no local Python/Windows test has been run** in this assistant environment. Ten new tests give an **estimated collected** total of `987 backend / 443 P3` (up from the measured PR #21 baseline of 977). This is a provisional test-count pairing, **not 987 successful tests**. Exact-head CI must confirm the collection count and pass full pytest, Ruff lint/format, Alembic, OpenAPI, scanner, and Node frontend. Owner must run the same-head Windows `setup.ps1` + `test_all.ps1` in a separate worktree before authorizing merge. No self-approval/merge.
 
 **P4 IN_REVIEW; P3 GOLD-EX-11 FAIL / NOT PROVEN.**
+
+
+## First exact-head CI and measured count (2026-11-19)
+
+- At `bc47071` the Backend CI first failed Ruff export-name ordering. At `ba17f64` it failed Ruff formatting. Both issues were fixed on the branch, without excluding files from lint.
+- At `a782ea885262a07cd78c6b938a36a917143f2a0d` [push CI #44501826966](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44501826966) ran the full backend pytest suite and the **only reported failure** was existing test `test_handoff_test_count_matches_the_suite_it_describes`: actual **988 collected backend tests**, not provisional 987. New P4 synthetic preflight tests produced no reported assertion failures. The frontend job completed SUCCESS.
+- This patch adds an append-only correction of the conditional whole-backend collection token to **988 / 443**, while explicitly **not** asserting that 988 passed. The next exact-head CI must verify all required checks successfully. P3 historical/OCR outcomes and test/scan source are unchanged.

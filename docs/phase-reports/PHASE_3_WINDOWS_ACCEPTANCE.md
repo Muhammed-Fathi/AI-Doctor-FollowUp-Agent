@@ -957,3 +957,17 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 > CI must verify it before owner merge). This appendix does not change historical
 > P3 counts, Windows decisions, the OCR executable, scanner or GOLD-EX-11
 > FAIL / NOT PROVEN.
+
+
+> **P4-2f measured collection correction (2026-11-19; append-only).**
+> [Push CI #44501826966](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44501826966)
+> measured **988 backend collected tests**, including **443 P3** tests, at
+> P4-2f head `a782ea885262a07cd78c6b938a36a917143f2a0d`. The previous
+> 987 count was an estimate, not a verified pass. Corrected conditional
+> integrity token: **988 passed**, of which **443** are the P3 suite
+> (this sentence is only the **collection-pairing expectation** required by
+> the existing handoff-integrity test; no 988 passing test claim until
+> independent exact-head CI completes SUCCESS). The only reported pytest
+> failure in this CI was the outdated handoff-count assertion; the new P4
+> behavioral tests showed no failures. No P3 executable, scanner, past owner
+> acceptance or GOLD-EX-11 OCR result is modified here.
