@@ -946,3 +946,28 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 > The single CI failure was the outdated handoff count assertion, not a
 > failure in the new source-projection behavioral tests. No P3 executable,
 > acceptance policy, historical counts or OCR test outcome was changed.
+
+
+> **P4-2f downstream test collection checkpoint (2026-11-19; selected-document preflight only).**
+> PR #21 established **977 backend / 443 P3** collection. The new P4-2f
+> `test_p4_document_preflight.py` adds **10 expected** synthetic migrated-SQLite
+> tests; provisional whole-backend collection **987**, P3 unchanged at **443**.
+> Conditional handoff integrity token: **987 passed**, of which **443** are the P3 suite
+> (a **collection expectation**, **NOT** a claim that 987 tests passed; exact-head
+> CI must verify it before owner merge). This appendix does not change historical
+> P3 counts, Windows decisions, the OCR executable, scanner or GOLD-EX-11
+> FAIL / NOT PROVEN.
+
+
+> **P4-2f measured collection correction (2026-11-19; append-only).**
+> [Push CI #44501826966](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44501826966)
+> measured **988 backend collected tests**, including **443 P3** tests, at
+> P4-2f head `a782ea885262a07cd78c6b938a36a917143f2a0d`. The previous
+> 987 count was an estimate, not a verified pass. Corrected conditional
+> integrity token: **988 passed**, of which **443** are the P3 suite
+> (this sentence is only the **collection-pairing expectation** required by
+> the existing handoff-integrity test; no 988 passing test claim until
+> independent exact-head CI completes SUCCESS). The only reported pytest
+> failure in this CI was the outdated handoff-count assertion; the new P4
+> behavioral tests showed no failures. No P3 executable, scanner, past owner
+> acceptance or GOLD-EX-11 OCR result is modified here.
