@@ -51,3 +51,10 @@ GitHub Actions Python 3.12 Ruff lint/format, pytest, OpenAPI, Alembic smoke, sec
   `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md` (append-only).
 - The next CI must pass on the **new final SHA**. No P3 code, past acceptance,
   live OCR result, or scan policy was weakened.
+
+
+## Exact-head regression checkpoint (after count reconciliation)
+
+- [Push CI 44487703174](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44487703174) and [PR CI 44487710117](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44487710117) both **COMPLETED / SUCCESS** at `a1d7c9c73de2953986e2c8ab104b068329034034`. Python 3.12 Ruff, format, full pytest, reversible Alembic, generated OpenAPI, repository scan; Node 22 lint, typecheck, Vitest and production build all completed successfully. GitHub pytest log displays **967 passing dots, 100% progress**. This is executable evidence for the **isolated synthetic evaluator** only.
+- Exact changed paths before this final report addendum: new `provenance_review_candidate.py`, new `test_p4_provenance_review_candidate.py`, new P4-2d report, append-only `PHASE_3_WINDOWS_ACCEPTANCE.md` conditional 967/443 test-collection integrity note. Historical P3 source files, tests and OCR failure remain unmodified.
+- Final report synchronization adds `PHASE_4_REPORT.md` as a fifth documentation path. **A new exact-head CI is still required** on that final documentation SHA; older green runs alone do not prove it.
