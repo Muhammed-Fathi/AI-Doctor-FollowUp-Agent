@@ -158,15 +158,9 @@ def inspect_selected_document_verification(
         active = 0
         for doc_id in document_ids:
             doc = by_document[doc_id]
-            if (
-                doc.extraction_status != "verified"
-                or doc.failure_code is not None
-            ):
+            if doc.extraction_status != "verified" or doc.failure_code is not None:
                 blockers.add(CandidateDocumentBlock(doc_id, "document_not_verified"))
-            if (
-                not patient.external_ref
-                or doc.document_patient_ref != patient.external_ref
-            ):
+            if not patient.external_ref or doc.document_patient_ref != patient.external_ref:
                 blockers.add(CandidateDocumentBlock(doc_id, "document_identity_unresolved"))
             if any(issue.document_id == doc_id for issue in issues):
                 blockers.add(CandidateDocumentBlock(doc_id, "open_verification_issue"))
@@ -207,10 +201,10 @@ def inspect_selected_document_verification(
 
 
 __all__ = [
-    "CandidateDocumentBlock",
     "MAX_DOCUMENT_FACTS",
     "MAX_OPEN_ISSUES",
     "MAX_SELECTED_DOCUMENTS",
+    "CandidateDocumentBlock",
     "SelectedDocumentPreflight",
     "inspect_selected_document_verification",
 ]
