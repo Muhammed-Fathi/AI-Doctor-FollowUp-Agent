@@ -71,3 +71,10 @@ Independent follow-up review found an interface ambiguity in proposed `compare_o
 - **Policy governance:** all parameters in DEMO_REVIEW_RULES.md §9 remain arbitrary proposed synthetic values pending the owner OQ-R01 decision. Candidate tests pass values explicitly without activation. A live policy must be separately reviewed and versioned.
 - **Tests:** isolated local prototype using lightweight interface stubs passed 26/26 parametrized cases, but that is NOT proof of the exact new GitHub head or integrated Python 3.12. Authoritative CI Ruff, full pytest, repository scan, migrations and OpenAPI must pass at new PR head. The historical P3 document now records the authoritative **886/443** candidate green-run expectation measured by the current GitHub collection check; the earlier 885 estimate was incorrect and was never a completed PASS. The 837/443 P3-only and 859/443 earlier P4-1 snapshots stay historical. No P3 tests, fixtures or scanner controls changed. No P3 code, tests or fixtures modified.
 - **Status:** P4 stays IN_REVIEW; P4-2A does not constitute complete P4-2, final P4 acceptance or P5 implementation. P3 GOLD-EX-11 stays FAIL / NOT PROVEN under its synthetic educational conditional-acceptance decision. NOT FOR CLINICAL USE.
+
+
+## 8. P4-2b isolated DR-009 candidate (2026-11-19)
+
+The owner merged P4-2a candidate-validator [PR #17](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/17) to main at 154300096b33f2a03b4b0e74811eaf9ce40be30e; [post-merge CI #44475754026](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44475754026) completed SUCCESS. The next isolated P4 candidate adds DR-009 as an explicit test-only input-quality prompt using existing arbitrary DEMO intake bands. See [the separate P4-2b report](P4_2B_DR009_CANDIDATE.md).
+
+DR-006 and DR-008 source/time semantics, authorized tool/history inputs, policy approval, durable run identity, true verification gate and full A/B/C integration remain open. No official policy or agent/LLM activation; phase P4 remains IN_REVIEW, and P3 GOLD-EX-11 scientific failure remains recorded.

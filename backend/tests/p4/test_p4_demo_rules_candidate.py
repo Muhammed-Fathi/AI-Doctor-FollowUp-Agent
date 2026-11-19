@@ -25,7 +25,7 @@ OTHER = "22222222-2222-4222-8222-222222222222"
 
 def policy(**changes: object) -> CandidateDemoPolicy:
     initial = CandidateDemoPolicy(
-        policy_version="candidate-p4-2a-0.1.0",
+        policy_version="candidate-p4-2a-0.2.0",
         demo_only=True,
         demo_as_of_utc=AS_OF,
         baseline_lookback_days=90,
@@ -169,7 +169,7 @@ def test_dr003_stale_depends_on_explicit_clock() -> None:
         *rows,
         candidate=policy(
             demo_as_of_utc=later,
-            policy_version="candidate-p4-2a-0.1.1",
+            policy_version="candidate-p4-2a-0.2.1",
         ),
         clock=later,
     )
