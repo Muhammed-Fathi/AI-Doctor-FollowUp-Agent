@@ -191,8 +191,8 @@ def test_selected_verified_doc_and_mapped_source_keep_trust(db: Session) -> None
 
 
 def test_pending_document_does_not_become_approved_run(db: Session) -> None:
-    doc, fact, observation = doc_with_fact(db, status="needs_verification", decision=False)
     current = selected_systolic(db)
+    doc, fact, observation = doc_with_fact(db, status="needs_verification", decision=False)
     result = call(db, (current.id,), document_ids=(doc.id,))
     assert result.selected_document_preflight is not None
     assert not result.selected_document_preflight.candidate_documents_clear
@@ -206,8 +206,8 @@ def test_pending_document_does_not_become_approved_run(db: Session) -> None:
 
 
 def test_open_vi_issue_remains_visible_then_resolved_without_runtime_clearance(db: Session) -> None:
-    doc, fact, _ = doc_with_fact(db)
     current = selected_systolic(db)
+    doc, fact, _ = doc_with_fact(db)
     issue = VerificationIssue(
         patient_id=patient(db).id,
         document_id=doc.id,
