@@ -1014,3 +1014,16 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 > `verified_lineage_unavailable`; it must not be relabeled as a cleared source.
 > All tests must be rerun on a new exact head. No P3 executable, scanner,
 > historic owner result or real OCR GOLD-EX-11 outcome was changed.
+
+
+> **P4 R2-A suite-count pairing clarification (2026-11-19, append-only).**
+> [Exact-head CI #44523738265](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44523738265)
+> collected **1025** backend tests, including **443** tests from the P3 suite.
+> The existing P3 handoff integrity assertion requires this exact *conditional*
+> collection-pairing string: **1025 passed**, of which **443** are the P3 suite.
+> **This is a collection-count token ONLY, not a statement that 1025 tests
+> actually passed.** On the cited run, backend test execution had a single
+> failure: the historical handoff pairing guard was expecting this sentence.
+> The new P4 behavior tests reported no failures. All checks must rerun on the
+> following exact head and pass before any owner merge. No test was disabled,
+> no old P3 claim was overwritten, and real OCR GOLD-EX-11 stays FAIL / NOT PROVEN.
