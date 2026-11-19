@@ -515,6 +515,9 @@ note which gate skipped and why (the Playwright smoke legitimately skips unless
 > passed. Do not revise the P3 837 historical run to 859, weaken its assertions,
 > or claim the separate Windows P3 result (833 passed, four skips) changed.
 
+> **P4-2A candidate-only test-collection note (2026-11-19, unmerged feature PR).**
+> After the owner merged P4-1 (PR #15, reviewed head 6c254457a62826656382945898ac790dacc4ffc7), the repository collected **859** backend cases, including the same **443** P3 cases; the historical P3-only baseline below remains **837**. This P4-2A candidate adds exactly **26** new parametrized rule-subset test cases without altering any P3 test or fixture. The new anticipated whole-backend successful collection count is **885 passed**, of which **443** are the P3 suite **IF AND ONLY IF** the new commit's full backend CI succeeds. This is not a representation of already-executed results; historical P3 Windows **833 passed / 4 skipped** stays unchanged. The collection-integrity test checks that candidate expected total and must not be weakened.
+
 Expected backend figure at this commit: **837 passed**, of which **443** are the P3
 suite (`backend/tests/p3`). Verified by collection and by a full run on the
 reviewed commit, not estimated:
