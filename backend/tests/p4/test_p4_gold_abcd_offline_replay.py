@@ -101,9 +101,7 @@ def principal(db: Session) -> Principal:
 
 def snapshots(db: Session, owner: Patient) -> tuple[ObservationSnapshot, ...]:
     rows = db.execute(
-        select(Observation)
-        .where(Observation.patient_id == owner.id)
-        .order_by(Observation.id)
+        select(Observation).where(Observation.patient_id == owner.id).order_by(Observation.id)
     ).scalars()
     return tuple(
         ObservationSnapshot(
@@ -240,9 +238,7 @@ def stored_report(
 
 def stored_mapping(db: Session, document: Document):
     facts = list(
-        db.execute(
-            select(ExtractedFact).where(ExtractedFact.document_id == document.id)
-        ).scalars()
+        db.execute(select(ExtractedFact).where(ExtractedFact.document_id == document.id)).scalars()
     )
     return decide_mapping(
         [
@@ -345,8 +341,13 @@ def test_gold_b_exact_most_recent_prior_and_verified_document_value(db: Session)
     spec = expected("B")
     owner = patient(db, spec["patient_external_ref"])
     doc, value_fact = stored_report(
-        db, owner=owner, label="gold-b", report_date="2026-11-02",
-        test_name="Fasting glucose", value="104", unit="mg/dL",
+        db,
+        owner=owner,
+        label="gold-b",
+        report_date="2026-11-02",
+        test_name="Fasting glucose",
+        value="104",
+        unit="mg/dL",
     )
     mapped = stored_mapping(db, doc)
     assert mapped.mapped is not None
@@ -361,13 +362,16 @@ def test_gold_b_exact_most_recent_prior_and_verified_document_value(db: Session)
     flag = flags[0]
     gold = spec["expected_dr005"]
     assert (flag.reason_code, flag.trust_basis, flag.message) == (
-        "change_exceeds_demo_parameter", gold["trust_basis"], gold["message"]
+        "change_exceeds_demo_parameter",
+        gold["trust_basis"],
+        gold["message"],
     )
     assert len(flag.evidence) == gold["evidence_count"]
     by_id = {row.id: row for row in rows}
     relevant = [by_id[item.removeprefix("observation:")] for item in flag.evidence]
     assert {r.measured_at for r in relevant} == {
-        gold["baseline_measured_at"], gold["current_measured_at"]
+        gold["baseline_measured_at"],
+        gold["current_measured_at"],
     }
     assert abs(float(relevant[0].value) - float(relevant[1].value)) == gold["delta"]
     assert all(r.trust_level == "self_reported_validated" for r in relevant)
@@ -387,7 +391,10 @@ def test_gold_c_preverification_four_real_issue_types_and_no_run_clearance(
     issues = sync_issues(db, document=doc, conflict_tolerance=0)
     db.commit()
     before = spec["pre_verification"]
-    assert sorted(issue.issue_type for issue in issues) == before["expected_open_verification_issue_ids"]
+    assert (
+        sorted(issue.issue_type for issue in issues)
+        == before["expected_open_verification_issue_ids"]
+    )
     vi2 = next(issue for issue in issues if issue.issue_type == "VI-002")
     assert vi2.message == before["expected_unverified_message"]
     blocked = assert_selected_doc_preflight(db, owner, doc, clear=False)
@@ -507,9 +514,7 @@ def test_gold_c_postfixture_correction_resolves_issues_and_mixed_delta(
     assert mapped.mapped is not None
     assert mapped.mapped.value == gold["document_mapping"]["value"]
     assert mapped.mapped.measured_at == gold["document_mapping"]["measured_at"]
-    new_row = add_mapped_observation(
-        db, owner, label="gold-c", document=doc, value_fact=value
-    )
+    new_row = add_mapped_observation(db, owner, label="gold-c", document=doc, value_fact=value)
     assert new_row.trust_level == gold["document_mapping"]["trust_level"]
     assert_selected_doc_preflight(db, owner, doc, clear=True)
     rows, flags = compare_and_candidates(db, owner)
@@ -566,17 +571,18 @@ def setup_gold_d(db: Session) -> Patient:
 
 
 def dr008_rows(db: Session, owner: Patient) -> tuple[CandidateRecordedObservation, ...]:
-    rows = list(
-        db.execute(
-            select(Observation).where(Observation.patient_id == owner.id)
-        ).scalars()
-    )
+    rows = list(db.execute(select(Observation).where(Observation.patient_id == owner.id)).scalars())
     return tuple(
         CandidateRecordedObservation(
             observation=ObservationSnapshot(
-                id=row.id, patient_id=row.patient_id, measure_type=row.measure_type,
-                value=row.value, unit=row.unit, measured_at=row.measured_at,
-                validation=row.validation, trust_level=row.trust_level,
+                id=row.id,
+                patient_id=row.patient_id,
+                measure_type=row.measure_type,
+                value=row.value,
+                unit=row.unit,
+                measured_at=row.measured_at,
+                validation=row.validation,
+                trust_level=row.trust_level,
             ),
             created_at=row.created_at,
             source=row.source,
@@ -615,8 +621,9 @@ def test_gold_d_all_five_positive_ids_from_stored_rows(db: Session) -> None:
     asserted = {flag.rule_id for flag in base}
     assert asserted == {"DR-001", "DR-003", "DR-005", "DR-009"}
     diastolic = [row for row in rows if row.measure_type == "diastolic_bp"]
-    assert abs(float(diastolic[1].value) - float(diastolic[0].value)) == (
-        spec["expected_deltas"]["diastolic_bp"]
+    assert (
+        abs(float(diastolic[1].value) - float(diastolic[0].value))
+        == (spec["expected_deltas"]["diastolic_bp"])
     )
 
 
@@ -632,22 +639,36 @@ def test_gold_d_replay_and_reordered_rows_are_identical(db: Session) -> None:
     )
     assert compared == again
     first = evaluate_candidate_review_subset(
-        patient_id=owner.id, observations=persisted, comparisons=compared,
-        policy=base_policy(), as_of_utc=AS_OF, blocking_fact_count=0,
+        patient_id=owner.id,
+        observations=persisted,
+        comparisons=compared,
+        policy=base_policy(),
+        as_of_utc=AS_OF,
+        blocking_fact_count=0,
     )
     repeated = evaluate_candidate_review_subset(
-        patient_id=owner.id, observations=shuffled, comparisons=again,
-        policy=base_policy(), as_of_utc=AS_OF, blocking_fact_count=0,
+        patient_id=owner.id,
+        observations=shuffled,
+        comparisons=again,
+        policy=base_policy(),
+        as_of_utc=AS_OF,
+        blocking_fact_count=0,
     )
     assert first == repeated
     sources = dr008_rows(db, owner)
     a = evaluate_offline_provenance_candidates(
-        patient_id=owner.id, records=sources, policy=source_policy(),
-        as_of_utc=AS_OF, blocking_fact_count=0,
+        patient_id=owner.id,
+        records=sources,
+        policy=source_policy(),
+        as_of_utc=AS_OF,
+        blocking_fact_count=0,
     )
     b = evaluate_offline_provenance_candidates(
-        patient_id=owner.id, records=tuple(reversed(sources)), policy=source_policy(),
-        as_of_utc=AS_OF, blocking_fact_count=0,
+        patient_id=owner.id,
+        records=tuple(reversed(sources)),
+        policy=source_policy(),
+        as_of_utc=AS_OF,
+        blocking_fact_count=0,
     )
     assert a == b
     assert len({item.dedupe_key for item in (*a.flags, *first.flags)}) == 5
@@ -670,7 +691,9 @@ def test_gold_negative_cross_patient_and_rejected_row_fail_or_exclude(db: Sessio
     )
     result = compare_observation_history(
         (*rows, bad, wrong_unit, future),
-        patient_id=first.id, as_of_utc=AS_OF, baseline_lookback_days=90,
+        patient_id=first.id,
+        as_of_utc=AS_OF,
+        baseline_lookback_days=90,
     )
     reasons = {excluded.skip_reason for excluded in result.excluded}
     assert reasons == {"validation_rejected", "unit_mismatch", "future_timestamp"}
@@ -689,8 +712,12 @@ def test_gold_negative_unverified_fact_count_is_not_an_authorized_gate(db: Sessi
             rows, patient_id=owner.id, as_of_utc=AS_OF, baseline_lookback_days=90
         )
         evaluate_candidate_review_subset(
-            patient_id=owner.id, observations=rows, comparisons=comparisons,
-            policy=base_policy(), as_of_utc=AS_OF, blocking_fact_count=3,
+            patient_id=owner.id,
+            observations=rows,
+            comparisons=comparisons,
+            policy=base_policy(),
+            as_of_utc=AS_OF,
+            blocking_fact_count=3,
         )
     assert err.value.code == "E_UNVERIFIED_FACT"
     assert_selected_doc_preflight(db, owner, doc, clear=False)
@@ -702,8 +729,11 @@ def test_gold_d_no_review_items_or_workflow_rows_written_by_pure_rules(db: Sessi
     before = len(db.new), len(db.dirty), len(db.deleted)
     compare_and_candidates(db, owner)
     evaluate_offline_provenance_candidates(
-        patient_id=owner.id, records=dr008_rows(db, owner), policy=source_policy(),
-        as_of_utc=AS_OF, blocking_fact_count=0,
+        patient_id=owner.id,
+        records=dr008_rows(db, owner),
+        policy=source_policy(),
+        as_of_utc=AS_OF,
+        blocking_fact_count=0,
     )
     assert db.scalar(select(func.count()).select_from(Observation)) == prior
     assert (len(db.new), len(db.dirty), len(db.deleted)) == before == (0, 0, 0)
