@@ -148,9 +148,7 @@ def test_migrated_sqlite_verified_source_projection_and_offline_pair(db: Session
     result = load_readonly_provenance_evidence(
         db, principal=identity(db), patient_id=owner.id, as_of_utc=CLOCK
     )
-    two = tuple(
-        item for item in result.records if item.observation.id in {a.id, b.id}
-    )
+    two = tuple(item for item in result.records if item.observation.id in {a.id, b.id})
     assert len(two) == 2
     assert {item.source_document_id for item in two} == {doc_a.id, doc_b.id}
     assert {item.source_fact_id for item in two} == {fact_a.id, fact_b.id}
@@ -185,9 +183,7 @@ def test_missing_decision_and_bad_document_status_fail_closed(db: Session) -> No
     assert (row.id, "verified_lineage_unavailable") in [
         (x.observation_id, x.reason) for x in first.lineage_exclusions
     ]
-    docver = db.execute(
-        select(Document).where(Document.id == document.id)
-    ).scalar_one()
+    docver = db.execute(select(Document).where(Document.id == document.id)).scalar_one()
     docver.extraction_status = "needs_verification"
     db.commit()
     second = load_readonly_provenance_evidence(

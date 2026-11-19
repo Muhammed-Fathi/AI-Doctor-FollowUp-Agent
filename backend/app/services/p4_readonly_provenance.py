@@ -164,14 +164,10 @@ def load_readonly_provenance_evidence(
         raise ApiError(400, ErrorCode.VALIDATION, "An explicit UTC clock is required.") from None
 
     with db.no_autoflush:
-        doctor = db.execute(
-            select(User).where(User.id == principal.user_id)
-        ).scalar_one_or_none()
+        doctor = db.execute(select(User).where(User.id == principal.user_id)).scalar_one_or_none()
         if doctor is None or doctor.role != Role.DOCTOR.value or doctor.is_active != 1:
             raise ApiError(403, ErrorCode.FORBIDDEN, "A stored doctor account is required.")
-        patient = db.execute(
-            select(Patient).where(Patient.id == patient_id)
-        ).scalar_one_or_none()
+        patient = db.execute(select(Patient).where(Patient.id == patient_id)).scalar_one_or_none()
         if patient is None:
             raise ApiError(404, ErrorCode.NOT_FOUND, "Patient record is not available.")
         require_assigned_patient(principal, assigned_doctor_id=patient.assigned_doctor_id)
