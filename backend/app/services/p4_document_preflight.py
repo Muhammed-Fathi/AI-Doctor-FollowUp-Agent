@@ -49,9 +49,7 @@ class SelectedDocumentPreflight:
     run_gate_completed: bool = False
 
 
-def _decision_matches(
-    db: Session, fact: ExtractedFact, by_id: dict[str, ExtractedFact]
-) -> bool:
+def _decision_matches(db: Session, fact: ExtractedFact, by_id: dict[str, ExtractedFact]) -> bool:
     """Require one recorded doctor decision for a current verified fact."""
     if fact.verification_status != "verified":
         return False
@@ -121,8 +119,9 @@ def inspect_selected_document_verification(
 
         docs = list(
             db.execute(
-                select(Document)
-                .where(Document.id.in_(document_ids), Document.patient_id == patient.id)
+                select(Document).where(
+                    Document.id.in_(document_ids), Document.patient_id == patient.id
+                )
             ).scalars()
         )
         if len(docs) != len(document_ids):

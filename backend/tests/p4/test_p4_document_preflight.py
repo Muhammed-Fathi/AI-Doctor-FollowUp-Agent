@@ -34,9 +34,7 @@ DEMO_TEST_CREDENTIAL = "p4-synthetic-only-credential"
 @pytest.fixture()
 def db(engine):
     with Session(engine) as session:
-        seed_demo_data(
-            session, password=DEMO_TEST_CREDENTIAL, now=CLOCK, iterations=1000
-        )
+        seed_demo_data(session, password=DEMO_TEST_CREDENTIAL, now=CLOCK, iterations=1000)
         session.commit()
         yield session
 
@@ -58,7 +56,8 @@ def patient(db: Session, ref: str = "DEMO-A-001") -> Patient:
 
 
 def prepared_document(
-    db: Session, *,
+    db: Session,
+    *,
     owner: Patient | None = None,
     status: str = "verified",
     verified_status: str = "verified",
@@ -240,7 +239,8 @@ def test_bad_set_and_missing_document_fail_closed(db: Session) -> None:
     assert empty.value.status_code == 400
     with pytest.raises(ApiError) as missing:
         inspect_selected_document_verification(
-            db, principal=identity(db),
+            db,
+            principal=identity(db),
             patient_id=patient(db).id,
             document_ids=("00000000-0000-4000-8000-000000000000",),
         )
