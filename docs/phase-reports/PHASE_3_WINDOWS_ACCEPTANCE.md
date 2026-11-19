@@ -923,3 +923,14 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 > Keep original 837/443 historical P3, owner Windows 833 passed / 4 skipped,
 > and real GOLD-EX-11 FAIL / NOT PROVEN untouched. No P3 executable, scanner,
 > fixture or strict OCR policy changes are introduced by this addendum.
+
+
+> **P4-2e downstream collection checkpoint (2026-11-19; internal read-only SQLite projection ONLY).**
+> P4-2d collected 967 backend / 443 P3 tests. The proposed new P4-2e
+> `test_p4_readonly_provenance.py` adds **9 expected collected** tests:
+> **976 backend / 443 P3**, subject to exact-head CI collection verification.
+> Conditional integrity-pair token: **976 passed**, of which **443** are the P3 suite
+> (test-checking *syntax only*: this is **NOT** a claim of 976 successful
+> tests until exact-head CI confirms them). No historic P3 source, fixture,
+> scanner or Windows OCR outcome is modified; preserve real GOLD-EX-11
+> FAIL / NOT PROVEN and original owner-accepted scope.
