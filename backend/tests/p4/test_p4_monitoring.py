@@ -55,9 +55,7 @@ def test_req_mon_01_case_b_uses_most_recent_prior_not_oldest() -> None:
     )
     assert len(result.comparisons) == 1
     actual = result.comparisons[0]
-    assert (actual.current_observation_id, actual.baseline_observation_id) == (
-        "nov03", "oct20"
-    )
+    assert (actual.current_observation_id, actual.baseline_observation_id) == ("nov03", "oct20")
     assert actual.comparable is True
     assert actual.delta == Decimal("12")
     assert actual.trust_basis == "self_reported"
