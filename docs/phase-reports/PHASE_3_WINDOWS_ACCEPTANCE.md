@@ -910,3 +910,16 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 > update this P4 checkpoint after measurement, never edit prior P3 tests,
 > provenance or scanner. Preserve historical P3 837/443, Windows 833 pass /
 > 4 skip and real GOLD-EX-11 FAIL / NOT PROVEN.
+
+
+> **P4-2d downstream collection checkpoint (2026-11-19; new offline candidate tests only, NOT new P3 acceptance).**
+> The merged P4-2b baseline collected 928 backend / 443 P3 tests; the P4-2d
+> candidate adds 39 collected tests in `test_p4_provenance_review_candidate.py`,
+> so the **measured whole-backend collection** is now **967**, with **443** P3.
+> Conditional paired handoff integrity token: **967 passed**, of which **443** are the P3 suite
+> (this is a **collection expectation only**, **not** an assertion that 967 tests
+> have passed). The initial P4-2d CI at 7f64295 failed solely because this
+> existing count-integrity assertion still expected the outdated total.
+> Keep original 837/443 historical P3, owner Windows 833 passed / 4 skipped,
+> and real GOLD-EX-11 FAIL / NOT PROVEN untouched. No P3 executable, scanner,
+> fixture or strict OCR policy changes are introduced by this addendum.
