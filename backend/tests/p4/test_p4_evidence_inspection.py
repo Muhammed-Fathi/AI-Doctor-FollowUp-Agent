@@ -197,7 +197,7 @@ def test_pending_document_does_not_become_approved_run(db: Session) -> None:
     assert result.run_gate_status == "unavailable"
     assert any(item.observation_id == observation.id for item in result.source_exclusions)
     assert any(
-        item.reason == "selected_document_preflight_blocked" for item in result.source_exclusions
+        item.reason == "verified_lineage_unavailable" for item in result.source_exclusions
     )
     with pytest.raises(ApiError) as denied:
         call(db, (observation.id,), document_ids=(doc.id,))
@@ -307,10 +307,14 @@ def test_missing_or_foreign_document_and_bad_document_selection(db: Session) -> 
 def test_uncommitted_changes_and_naive_clock_fail_closed(db: Session) -> None:
     current = selected_systolic(db)
     doctor = identity(db)
+    owner_id = patient(db).id
     with pytest.raises(ApiError) as invalid:
-        call(db, (current.id,), principal=doctor, as_of_utc=datetime(2026, 11, 14))
+        call(
+            db, (current.id,), principal=doctor,
+            patient_id=owner_id, as_of_utc=datetime(2026, 11, 14),
+        )
     assert invalid.value.status_code == 400
     current.value = 555
     with pytest.raises(ApiError) as dirty:
-        call(db, (current.id,), principal=doctor)
+        call(db, (current.id,), principal=doctor, patient_id=owner_id)
     assert dirty.value.status_code == 400

@@ -35,3 +35,10 @@
 - **Exact-head CI required:** Ruff lint/format, full backend pytest/collection, Alembic smoke, OpenAPI, tracked secret/claim scanner, frontend typecheck/lint/test/build. Owner must then execute `scripts/powershell/setup.ps1` and `scripts/powershell/test_all.ps1` in a **separate pinned Windows worktree** before deciding any merge. Optional Playwright E2E is not a pass when skipped.
 
 **Owner review checklist:** confirm 8 files only; check no runtime/API/DB/P5 changes, review new evidence boundary and tests, inspect exact-head CI, run separate Windows gate, decide merge yourself, do not infer R3/phase approval. Rollback: close without merging; no schema or application data modified. P4 issue #14 stays open. **NOT FOR CLINICAL USE.**
+
+
+## First exact-head CI and corrections (2026-11-19)
+
+- Earlier heads `ef956a0` and `da442e8` had 2 unused imports and Ruff format issues; they were fixed in separate commits without changing lint rules.
+- [Push CI #44522832450](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44522832450) at `5f812857c2c6490292d747efbe56e98c964c5e24` reached full backend pytest and measured **1025 collected** backend cases (not provisional 1023), with three failures. First: the integrity guard correctly rejected provisional count. Second: a pending stored document yields `verified_lineage_unavailable` before the document-preflight source exclusion; the previous test assertion incorrectly expected the later reason. Third: test helper `call` queried the patient after an in-memory mutation and SQLAlchemy autoflushed before inspection; the regression test now pins patient ID *before* editing, ensuring the production function's initial dirty-session guard is actually exercised.
+- This patch adjusts only the new test expectations/test harness and appends the measured **1025 backend / 443 P3** count-integrity token. Does not disable P3 tests or bypass the new production guard. Requires fresh exact-head CI success and owner isolated Windows review. No claim of 1025 passes yet.

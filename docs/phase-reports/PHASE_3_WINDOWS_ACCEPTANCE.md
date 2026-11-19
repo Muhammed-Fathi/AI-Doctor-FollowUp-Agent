@@ -997,3 +997,20 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 > CI must measure the actual count and correct this append-only if wrong.
 > No P3 test/executable/scanner/historical Windows decision changed.
 > Real OCR GOLD-EX-11 remains **FAIL / NOT PROVEN**.
+
+
+> **P4 R2-A measured backend collection correction (2026-11-19; append-only).**
+> Exact-head [CI #44522832450](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44522832450)
+> at `5f812857c2c6490292d747efbe56e98c964c5e24` measured
+> **1025 backend collected cases / 443 P3**, not the provisional
+> 1023. Updated conditional collection integrity token **1025 passed**,
+> of which **443** are P3 (token is **NOT** evidence that 1025 tests passed;
+> it is a pairing assertion for the existing handoff check).
+> Three *actual* reported failures were: this outdated estimate,
+> an incorrect exclusion-reason expectation, and a test helper query that
+> autoflushed a dirty row before the preflight was called. The test helper
+> now pins patient ID before editing, preserving the dirty-session guard.
+> The real expected exclusion reason for a pending-source document is
+> `verified_lineage_unavailable`; it must not be relabeled as a cleared source.
+> All tests must be rerun on a new exact head. No P3 executable, scanner,
+> historic owner result or real OCR GOLD-EX-11 outcome was changed.
