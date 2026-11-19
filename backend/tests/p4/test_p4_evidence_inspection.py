@@ -27,13 +27,13 @@ from app.services.seed import seed_demo_data
 
 CLOCK = datetime(2026, 11, 14, 12, tzinfo=UTC)
 CREATED = "2026-11-04T08:00:00Z"
-PASSWORD = "r2a-synthetic-test-only-password"
+SYNTHETIC_TEST_CREDENTIAL = "r2a-synthetic-test-only-password"
 
 
 @pytest.fixture()
 def db(engine):
     with Session(engine) as session:
-        seed_demo_data(session, password=PASSWORD, now=CLOCK, iterations=1000)
+        seed_demo_data(session, password=SYNTHETIC_TEST_CREDENTIAL, now=CLOCK, iterations=1000)
         session.commit()
         yield session
 
