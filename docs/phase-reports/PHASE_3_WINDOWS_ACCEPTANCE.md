@@ -503,6 +503,18 @@ Record the per-gate summary block **and** the exit code. `SKIPPED` is never a pa
 note which gate skipped and why (the Playwright smoke legitimately skips unless
 `-IncludeE2E` is given and browser binaries are installed).
 
+> **P4-1 additive test-collection note (2026-11-19, unmerged PR #15).**
+> The immutable P3 handoff table below is the **historical P3-only reviewed
+> baseline** (837 backend cases, 443 P3 cases). A new P4 test file adds test
+> cases outside P3: at the P4-1 candidate head, pytest collection reports a
+> **whole-backend expected green-run total of 859 cases**, without changing
+> the 443 P3 cases. The protected P3 collection-integrity test requires the
+> updated, paired expectation: **859 passed**, of which **443** are the P3 suite
+> **if and only if** the candidate's complete backend test run succeeds. These
+> are target/collection figures, **not** a claim that the failed pre-fix CI run
+> passed. Do not revise the P3 837 historical run to 859, weaken its assertions,
+> or claim the separate Windows P3 result (833 passed, four skips) changed.
+
 Expected backend figure at this commit: **837 passed**, of which **443** are the P3
 suite (`backend/tests/p3`). Verified by collection and by a full run on the
 reviewed commit, not estimated:
