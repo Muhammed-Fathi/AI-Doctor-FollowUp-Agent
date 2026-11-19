@@ -1,0 +1,30 @@
+{
+  "case_id": "GOLD-B",
+  "patient_external_ref": "DEMO-B-001",
+  "demo_as_of_utc": "2026-11-14T12:00:00Z",
+  "reference": "GOLD_FIXTURES.md §3",
+  "candidate_policy_status": "test-only-unapproved",
+  "expected_review_rule_ids": [
+    "DR-005"
+  ],
+  "expected_review_count": 1,
+  "expected_open_verification_issue_ids": [],
+  "document_mapping": {
+    "test_name": "Fasting glucose",
+    "unit": "mg/dL",
+    "mapped_observations": 1,
+    "measure_type": "glucose",
+    "value": 104,
+    "measured_at": "2026-11-02T00:00:00Z",
+    "trust_level": "doctor_verified"
+  },
+  "expected_dr005": {
+    "measure_type": "systolic_bp",
+    "baseline_measured_at": "2026-10-20T08:20:00Z",
+    "current_measured_at": "2026-11-03T08:25:00Z",
+    "delta": 12,
+    "trust_basis": "self_reported",
+    "evidence_count": 2,
+    "message": "Systolic BP differs from the previous recorded value by 12 mmHg (self-reported)."
+  }
+}

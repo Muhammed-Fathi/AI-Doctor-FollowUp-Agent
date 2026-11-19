@@ -1,0 +1,17 @@
+{
+  "case_id": "GOLD-A",
+  "patient_external_ref": "DEMO-A-001",
+  "demo_as_of_utc": "2026-11-14T12:00:00Z",
+  "reference": "GOLD_FIXTURES.md §2",
+  "candidate_policy_status": "test-only-unapproved",
+  "expected_review_rule_ids": [],
+  "expected_review_count": 0,
+  "expected_open_verification_issue_ids": [],
+  "document_mapping": {
+    "test_name": "Hemoglobin",
+    "unit": "g/dL",
+    "mapped_observations": 0,
+    "reason": "unmapped_test_name"
+  },
+  "expected_live_checkin_count": 3
+}
