@@ -78,3 +78,10 @@ Independent follow-up review found an interface ambiguity in proposed `compare_o
 The owner merged P4-2a candidate-validator [PR #17](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/17) to main at 154300096b33f2a03b4b0e74811eaf9ce40be30e; [post-merge CI #44475754026](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44475754026) completed SUCCESS. The next isolated P4 candidate adds DR-009 as an explicit test-only input-quality prompt using existing arbitrary DEMO intake bands. See [the separate P4-2b report](P4_2B_DR009_CANDIDATE.md).
 
 DR-006 and DR-008 source/time semantics, authorized tool/history inputs, policy approval, durable run identity, true verification gate and full A/B/C integration remain open. No official policy or agent/LLM activation; phase P4 remains IN_REVIEW, and P3 GOLD-EX-11 scientific failure remains recorded.
+
+
+## 9. PR #18 owner merge and next P4 contract-decision proposal (2026-11-19)
+
+- Owner-merged [PR #18](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/18) at `main@3ccee32ec3aef0c11612d690cea42fbe203d955e`. Post-merge [GitHub Actions run #44483743708](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44483743708) completed **SUCCESS** for Backend Python 3.12 and Frontend Node 22. This confirms that the isolated, opt-in DR-009 candidate was merged, **not activated**. P4 remains IN_REVIEW.
+- The next P4 slice is **docs-only, owner-decision-pending**: [`P4_2C_DR006_DR008_CONTRACT_DECISIONS_20261119.md`](P4_2C_DR006_DR008_CONTRACT_DECISIONS_20261119.md). It identifies `DR-006` independent-source/timestamp compatibility, `DR-008` persisted creation chronology, source scope, proposed tool evidence interfaces, and persistence-policy decisions before code changes. Proposed semantics are deliberately **not approved** or implemented in this PR.
+- Neither missing rule is enabled. No `workflow_run` table, policy activation, API, agents, tasks or notifications are added. Prior P3 `GOLD-EX-11=FAIL / NOT PROVEN` remains unchanged; NOT FOR CLINICAL USE.
