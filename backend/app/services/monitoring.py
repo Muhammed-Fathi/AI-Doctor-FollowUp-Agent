@@ -87,6 +87,14 @@ def _amount(value: Decimal | int | float | str) -> Decimal:
 
 
 def _validate_record(row: ObservationSnapshot, *, patient_id: str) -> None:
+    # Untrusted projections must have stable evidence IDs and an explicit scope.
+    if (
+        not isinstance(patient_id, str)
+        or not patient_id.strip()
+        or not isinstance(row.id, str)
+        or not row.id.strip()
+    ):
+        raise MonitoringInputError("E_VALIDATION", "Missing patient scope or evidence ID.")
     # Abort the whole evaluation before returning anything if scopes are mixed.
     if row.patient_id != patient_id:
         raise MonitoringInputError("E_SCOPE_VIOLATION", "Observation patient scope mismatch.")
@@ -96,7 +104,6 @@ def _validate_record(row: ObservationSnapshot, *, patient_id: str) -> None:
         raise MonitoringInputError("E_VALIDATION", "Unknown observation trust label.")
     if row.validation not in ValidationState._value2member_map_:
         raise MonitoringInputError("E_VALIDATION", "Unknown observation validation label.")
-    _amount(row.value)
 
 
 def admissibility_reason(
@@ -117,6 +124,8 @@ def admissibility_reason(
         return "missing_timestamp"
     if stamp > to_utc(as_of_utc) + timedelta(minutes=MAX_FUTURE_SKEW_MINUTES):
         return "future_timestamp"
+    # Inadmissible rows must not block otherwise usable comparisons.
+    _amount(row.value)
     return None
 
 
@@ -131,14 +140,18 @@ def _trust_basis(first: ObservationSnapshot, second: ObservationSnapshot | None)
     return "mixed"
 
 
-def compare_observations(
+def compare_observation_history(
     observations: Iterable[ObservationSnapshot],
     *,
     patient_id: str,
     as_of_utc: datetime,
     baseline_lookback_days: int,
 ) -> MonitoringResult:
-    """Compare each type's latest eligible value with its latest prior value.
+    """Build internal per-type comparisons over patient-scoped history.
+
+    This is NOT the P5 agent's contracted ``compare_observations`` tool.
+    TOOL_CONTRACTS.md §3.5 specifies a different current-list interface
+    (max six). Its baseline source and adapter need a separate P4 review.
 
     Uses exact decimal subtraction (current minus most recent prior value).
     Rules must use abs(delta) when applying arbitrary demo parameters.
@@ -161,7 +174,13 @@ def compare_observations(
         raise MonitoringInputError("E_VALIDATION", "Too many observations for one comparison.")
     eligible: dict[str, list[tuple[datetime, ObservationSnapshot]]] = {}
     excluded: list[ExcludedObservation] = []
+    seen_ids: set[str] = set()
     for row in rows:
+        # Duplicate IDs cannot represent two independent measurements.
+        _validate_record(row, patient_id=patient_id)
+        if row.id in seen_ids:
+            raise MonitoringInputError("E_VALIDATION", "Duplicate observation ID.")
+        seen_ids.add(row.id)
         reason = admissibility_reason(row, patient_id=patient_id, as_of_utc=clock)
         if reason is not None:
             excluded.append(ExcludedObservation(row.id, reason))
@@ -204,5 +223,5 @@ __all__ = [
     "MonitoringResult",
     "ObservationSnapshot",
     "admissibility_reason",
-    "compare_observations",
+    "compare_observation_history",
 ]
