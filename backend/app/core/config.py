@@ -125,6 +125,100 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- P3 document ingestion and OCR --------------------------------------
+    # Bounds are configuration because RESOURCE limits are not contract constants
+    # and must be tunable per machine (``REQ-ING-05``). Defaults mirror
+    # ``EXTRACTION_PROVENANCE.md`` §1-§2 exactly.
+    max_upload_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        ge=1,
+        le=104_857_600,
+        description="Upload cap in bytes. Contract default 10 MiB (REQ-ING-01).",
+    )
+    max_pdf_pages: int = Field(
+        default=20,
+        ge=1,
+        le=200,
+        description="Page cap for PDFs (REQ-ING-05).",
+    )
+    max_image_pixels: int = Field(
+        default=40_000_000,
+        ge=1,
+        le=400_000_000,
+        description="Decoded image pixel cap; guards decompression bombs.",
+    )
+    extraction_timeout_seconds: int = Field(
+        default=20,
+        ge=1,
+        le=300,
+        description="Wall-clock budget for one document's extraction.",
+    )
+    text_layer_min_chars: int = Field(
+        default=40,
+        ge=1,
+        le=10_000,
+        description=(
+            "A page with at least this many non-whitespace characters counts as "
+            "having a usable text layer (EXTRACTION_PROVENANCE.md §2)."
+        ),
+    )
+    max_extracted_facts: int = Field(
+        default=40,
+        ge=1,
+        le=400,
+        description="Fact cap per document (EXTRACTION_PROVENANCE.md §2 bounds).",
+    )
+    max_page_text_chars: int = Field(
+        default=20_000,
+        ge=100,
+        le=20_000,
+        description=(
+            "Per-page extracted text cap before span parsing and durable persistence; "
+            "bounded to match document_page_text's 20000-character schema limit "
+            "(DATA_DICTIONARY.md §2.6a, EXTRACTION_PROVENANCE.md §5)."
+        ),
+    )
+    tesseract_cmd: str | None = Field(
+        default=None,
+        description=(
+            "Path to the Tesseract binary. Unset means 'not configured': OCR is "
+            "reported unavailable rather than attempted (ASM-01). Never a secret."
+        ),
+    )
+    ocr_language: str = Field(
+        default="eng",
+        pattern="^[a-z]{3}(\\+[a-z]{3})*$",
+        description="OCR language allowlist. Only 'eng' in the MVP; 'ara' needs an owner decision.",
+    )
+    ocr_confidence_floor: float = Field(
+        default=0.70,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "DEMO_ONLY. Below this engine-reported confidence a fact is flagged "
+            "low_confidence and blocked. Not a clinical or accuracy claim "
+            "(DEMO_REVIEW_RULES.md §9)."
+        ),
+    )
+    conflict_tolerance: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1000.0,
+        description=(
+            "DEMO_ONLY. Same-day source conflict tolerance for VI-006. 0 means "
+            "exact equality is required (DEMO_REVIEW_RULES.md §9)."
+        ),
+    )
+
+    upload_dir: str | None = Field(
+        default=None,
+        description=(
+            "Directory for stored synthetic uploads. Unset uses the gitignored "
+            "runtime default (data/runtime/uploads). Tests point this at a "
+            "temporary directory so no test can write into the repository."
+        ),
+    )
+
     @field_validator("demo_seed_password", mode="before")
     @classmethod
     def _empty_password_is_none(cls, value: object) -> object:

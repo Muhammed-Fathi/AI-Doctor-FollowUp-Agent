@@ -76,6 +76,9 @@ def client(monkeypatch: pytest.MonkeyPatch, migrated_db: str) -> Iterator[TestCl
     """Test client whose settings point at the migrated temporary database."""
     monkeypatch.setenv("DATABASE_URL", migrated_db)
     monkeypatch.setenv("APP_ENV", "test")
+    # Override both shell env and .env so host Tesseract installs never affect
+    # tests that assert unconfigured defaults.
+    monkeypatch.setenv("TESSERACT_CMD", "")
 
     from app.core.config import reset_settings_cache
 
@@ -93,6 +96,7 @@ def offline_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[
     missing = f"sqlite:///{(tmp_path / 'absent' / 'missing.db').as_posix()}"
     monkeypatch.setenv("DATABASE_URL", missing)
     monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("TESSERACT_CMD", "")
 
     from app.core.config import reset_settings_cache
 

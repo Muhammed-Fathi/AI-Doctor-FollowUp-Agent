@@ -1,0 +1,5 @@
+# Preserve canonical LF line endings for committed synthetic fixture sources
+# and manifest on Windows checkouts (even when core.autocrlf=true), so byte
+# length and SHA-256 checks against manifest.json match the committed Git blobs.
+data/synthetic/documents/sources/*.txt text eol=lf
+data/synthetic/documents/manifest.json text eol=lf

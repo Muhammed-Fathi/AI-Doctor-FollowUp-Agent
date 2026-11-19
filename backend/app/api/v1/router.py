@@ -13,6 +13,7 @@ from fastapi import APIRouter
 from app.api.v1.auth.router import router as auth_router
 from app.api.v1.demo import router as demo_router
 from app.api.v1.doctor import patients as doctor_patients
+from app.api.v1.documents import router as documents_router
 from app.api.v1.patient import checkins as patient_checkins
 
 router = APIRouter()
@@ -20,5 +21,6 @@ router.include_router(auth_router)
 router.include_router(doctor_patients.router)
 router.include_router(patient_checkins.router)
 router.include_router(demo_router.router)
+router.include_router(documents_router)
 
 __all__ = ["router"]

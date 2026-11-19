@@ -1,5 +1,7 @@
 # Synthetic Gold Fixtures
 
+> **CURRENT OWNER POLICY CHECKPOINT (2026-11-19):** The exact bounded P2 text was re-ratified for integration review by [owner P2 policy re-ratification #6991001412](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6991001412) at docs SHA `95797e7da5a5bec6fdc1deadbdc765e3ee5ca814`. The owner merged PR #11 into the implementation branch and updated Draft PR #10 without force to `4ec7d469d76ad89ffb7e27fbe18864bdc216ba46`. [Push CI #44409171082](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44409171082) and [PR CI #44409180856](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44409180856) both completed SUCCESS on that **pre-reconciliation** head (Backend Python 3.12 + Frontend Node 22). This five-file docs-only reconciliation is separately authorized ([owner docs-only reconciliation authorization #6993612930](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6993612930)) and **needs new exact-head CI and independent review**. The original Windows `GOLD-EX-11=FAIL / NOT PROVEN` (27 PASS / 1 FAIL / 0 NOT RUN / 1 DERIVED; OCR exit 2; evidence SHA-256 `9ac465722f011d538fd8045e393328fa4a0e2b1f10afd1b8e3488aff961f08cb` (15,283 bytes)) remains a technical FAIL, not a pass. W1/W2 source-confirmation gates do not prove correct OCR glyph detection or prevent false human attestation. **P2 policy TEXT is owner-ratified but NOT YET OPERATIONALLY EFFECTIVE; P3=IN_REVIEW; PR #10 remains DRAFT/UNMERGED to main.** A separate final owner decision and approved main merge are required before any bounded synthetic educational P3 acceptance. NOT FOR CLINICAL USE.
+
 | Field | Value |
 |---|---|
 | Document ID | `EVAL-GOLD-001` |
@@ -343,3 +345,31 @@ All negative fixtures are synthetic and generated locally. None contains a real 
 | Fixture files authored | **Not created** (P3/P4) |
 | Golden JSON files authored | **Not created** (P3/P4) |
 | Any fixture executed | **No** |
+
+---
+
+## 12. PROPOSED P2 policy alignment — measured GOLD-EX-11 deviation (NOT EFFECTIVE, 2026-11-18)
+
+> **Historical draft heading retained for existing links.** Current P2 text was owner re-ratified for integration review, but conditional phase acceptance is not yet effective. The immutable GOLD test result remains FAIL / NOT PROVEN.
+
+**Current authority and scope:** Draft authorization was given in [comment #6986820279](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6986820279); later exact-text ratification is [owner P2 policy re-ratification #6991001412](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6991001412), and this bounded five-doc reconciliation is authorized by [owner docs-only reconciliation authorization #6993612930](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/10#issuecomment-6993612930). Neither authorization changes executable OCR, tests, sources, fixtures or original GOLD evidence.
+
+### 12.1 Preserve the original fixture and historical expectations
+
+The existing `GOLD-C` example in §4 (a *design fixture* with a missing unit and ambiguous date) and its originally declared raw `1O5` candidate remain exactly as specified. This amendment does **not** change any source bytes, expected JSON, declared candidate fields, generated image rendering, or fixture test.
+
+The separate, committed `data/synthetic/documents/sources/report_ocr_o_confusion.txt` source tested by the Windows real-engine `GOLD-EX-11` gate contains **`1O5` with the letter O**. On **2026-11-18**, Windows Python 3.12.9 with Tesseract 5.4.0.20240606 emitted numeric **`105` (digit zero)**. The parser received `raw_text='105'`, normalized `105`, `quality_flags=['clean']`; the application did not substitute the character. Accordingly the unchanged literal P1 requirement—preserve the ambiguous OCR token and refuse it as `unparseable_value`, with no normalized numeric output—**FAILS / IS NOT PROVEN**.
+
+Owner-provided evidence at exact implementation SHA `6e6fcdf02d39d3a97ca3221ef2cc84b2ba528821`: **27 PASS, 1 FAIL, 0 NOT RUN, 1 DERIVED, OCR exit 2**. Evidence JSON SHA-256: `9ac465722f011d538fd8045e393328fa4a0e2b1f10afd1b8e3488aff961f08cb` (15,283 bytes). The DERIVED row is a coverage explanation, not an extra independent PASS. See [owner real Windows OCR evidence review](../phase-reports/P3_G11_OWNER_WINDOWS_REAL_OCR_6E6FCDF_EVIDENCE_REVIEW.md).
+
+### 12.2 Proposed *conditional application acceptance*, not a new GOLD technical PASS
+
+The owner-ratified but not-yet-effective **P2** policy provides a route by which a **separately owner-approved synthetic-only academic P3 application-layer acceptance** *may* permit the **disclosed GOLD-EX-11 technical FAIL** as a narrowly recorded exception **only if all independent non-autonomy, integrity, human-verification and provenance acceptance gates pass**. Required evidence includes real Tesseract/PNG/JPEG/PDFium and `ING-02` provenance; all W1 (R21 rejection + source confirmation) and W2/FC-3 gates; immutable source with SHA-256 verified on access, verification and promotion; no pre-doctor Observation; explicit source review/confirmation and rejection path; supported Windows gate; and green CI on the exact final implementation head.
+
+The risk persists that a clinician *falsely attests* a substituted `105` after retrieving an original `1O5` image. Fetching the file plus typed `source_image_compared=true` **does not prove the person interpreted the glyph correctly**. Thus P2 would acknowledge a residual limitation; it cannot claim glyph detection, clinical reliability, or that `GOLD-EX-11` passed. No risk scoring, autonomous interpretation, real-patient data, or external communication is permitted.
+
+**Remaining before P2 becomes operationally effective:** independent review, new authoritative CI on this reconciliation commit, review of supported-Windows evidence/skip reasons, then a distinct owner-authored final conditional P3 phase decision and owner-approved merge to `main`. Prior green CI at `4ec7d469...` cannot substitute for new-head CI. Keep `P3=IN_REVIEW`, `GOLD-EX-11=FAIL / NOT PROVEN`, OCR exit 2, and explicitly disclose residual OCR/human-attestation risk. No clinical use.
+
+[Owner-selected P2 decision memo](../phase-reports/P3_GOLD_EX11_P2_OWNER_POLICY_DECISION_20261118.md) · [Windows acceptance procedure and proposed annex](../phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md).
+
+**EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE.**

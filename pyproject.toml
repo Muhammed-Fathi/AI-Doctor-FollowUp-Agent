@@ -5,14 +5,15 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ai-doctor-followup-backend"
 version = "0.1.0"
-description = "EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE. Local FastAPI backend for the AI Doctor Follow-Up academic demo (Phase 1 foundation only)."
+description = "EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE. Local FastAPI backend for the AI Doctor Follow-Up academic demo (Phases 1-3)."
 readme = "README.md"
 # Project license is an owner decision pending at P1 (docs/contracts/DEPENDENCIES.md §7).
 # No license file is committed and no license metadata is asserted here.
 requires-python = ">=3.12,<3.13"
 
-# Direct runtime dependencies. Versions are exact pins verified against pypi.org
-# metadata on 2026-11-14 (see docs/phase-reports/PHASE_1_REPORT.md §5).
+# Direct runtime dependencies. Versions are exact pins; P1 pins were verified
+# against pypi.org metadata on 2026-11-14 (see docs/phase-reports/PHASE_1_REPORT.md §5)
+# and the P3 additions on 2026-11-15 (see docs/phase-reports/PHASE_3_REPORT.md §5).
 dependencies = [
     "fastapi==0.162.7",
     "pydantic==2.14.3",
@@ -20,6 +21,21 @@ dependencies = [
     "uvicorn==0.54.0",
     "sqlalchemy==2.1.8",
     "alembic==1.20.1",
+    # --- P3: document ingestion and extraction (owner decision D-01) --------
+    # Multipart parsing for the upload route. Starlette delegates to this
+    # package; without it FastAPI's form handling raises at import time.
+    "python-multipart==0.0.33",
+    # PDF text layer. Pure Python, no system binary, so the text-first path
+    # works on a host with no Poppler or Tesseract installed.
+    "pypdf==7.1.0",
+    # PDF page rasterization for the OCR path. Bundles its own PDFium binary,
+    # so it needs no Poppler install; verified on Windows in ASM-01.
+    "pypdfium2==5.15.2",
+    # OCR engine binding. The *engine* is a system prerequisite, not a wheel:
+    # when it is absent, extraction degrades to E_DEPENDENCY_MISSING.
+    "pytesseract==0.3.13",
+    # Image decode and the deterministic grayscale/upscale preprocessing.
+    "pillow==13.0.0",
 ]
 
 [project.optional-dependencies]

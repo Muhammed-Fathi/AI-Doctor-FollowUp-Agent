@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -83,10 +82,55 @@ def session_scope(factory: sessionmaker[Session] | None = None) -> Iterator[Sess
         session.close()
 
 
-@lru_cache(maxsize=4)
+#: Cached engines keyed by resolved database URL.
+#:
+#: A plain dict rather than ``@lru_cache`` because cleanup must be able to evict and
+#: dispose **one** URL without touching the others. ``lru_cache`` has no per-key eviction,
+#: so releasing a temporary database used to require ``cache_clear()`` — which silently
+#: orphaned every other cached engine (their pooled connections were never disposed) and
+#: could interfere with unrelated databases.
+#:
+#: The cache is bounded by :data:`_MAX_CACHED_ENGINES`; SQLite is the only backend
+#: (ADR-0003), so realistic deployments use one or two URLs.
+_MAX_CACHED_ENGINES = 4
+_ENGINE_CACHE: dict[str, Engine] = {}
+
+
 def _engine_for_url(database_url: str) -> Engine:
-    """Return a cached engine per URL so requests share one connection pool."""
-    return create_db_engine(database_url)
+    """Return the cached engine for ``database_url``, creating it on first use."""
+    engine = _ENGINE_CACHE.get(database_url)
+    if engine is None:
+        if len(_ENGINE_CACHE) >= _MAX_CACHED_ENGINES:
+            # Evict the oldest entry *and dispose it*, so bounding the cache cannot
+            # leak a connection pool.
+            oldest_url = next(iter(_ENGINE_CACHE))
+            _ENGINE_CACHE.pop(oldest_url).dispose()
+        engine = create_db_engine(database_url)
+        _ENGINE_CACHE[database_url] = engine
+    return engine
+
+
+def dispose_engines(database_url: str) -> None:
+    """Dispose the cached engine for ``database_url`` and evict just that entry.
+
+    A cached engine keeps pooled connections open, which on Windows leaves the SQLite
+    file handle in place — deleting a temporary database then fails with
+    ``PermissionError [WinError 32]`` even though every logical session was closed.
+    Callers that own a throwaway database must release it here *before* removing the file.
+
+    Only the named URL is affected. Engines for other URLs keep their pools, so one
+    caller's cleanup cannot disturb an unrelated database.
+
+    Safe to call repeatedly, and for URLs that were never cached.
+    """
+    engine = _ENGINE_CACHE.pop(database_url, None)
+    if engine is not None:
+        engine.dispose()
+
+
+def cached_engine_urls() -> list[str]:
+    """Return the URLs with a cached engine. Intended for tests and introspection."""
+    return sorted(_ENGINE_CACHE)
 
 
 def get_engine() -> Engine:
@@ -132,8 +176,10 @@ def check_database(database_url: str | None = None) -> bool:
 
 __all__ = [
     "RUNTIME_DIR",
+    "cached_engine_urls",
     "check_database",
     "create_db_engine",
+    "dispose_engines",
     "ensure_sqlite_directory",
     "get_db_session",
     "get_engine",

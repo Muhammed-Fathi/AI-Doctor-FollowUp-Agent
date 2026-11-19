@@ -23,7 +23,7 @@ from app.schemas.observation import ObservationRead
 
 BACKEND_APP = REPO_ROOT / "backend" / "app"
 
-#: Tables this phase is allowed to create. Anything else belongs to P3+.
+#: Tables P2 owns. They must all still exist: P3 may not drop or rename one.
 P2_TABLES = {
     "schema_meta",
     "user",
@@ -35,12 +35,36 @@ P2_TABLES = {
     "audit_event",
 }
 
-#: Imports that would indicate OCR, agents, a model or network egress.
+#: The six tables P3 owns (five from ``0003`` + ``document_page_text`` from Stage 1 ``0005``).
+P3_TABLES = {
+    "document",
+    "document_page_text",
+    "extraction_attempt",
+    "extracted_fact",
+    "fact_verification",
+    "verification_issue",
+}
+
+#: Tables that belong to a **later** phase. Their appearance is still a scope
+#: violation, and this is the property the original global equality was really
+#: protecting: it is asserted directly instead of implicitly.
+P4_PLUS_TABLES = {
+    "review_item",
+    "evidence_link",
+    "summary_draft",
+    "summary_claim",
+    "approval_decision",
+    "follow_up_task",
+    "in_app_notification",
+    "workflow_run",
+    "node_event",
+}
+
+#: Imports that would indicate agents, a model or network egress. These stay
+#: forbidden in **every** module, in every phase.
 FORBIDDEN_IMPORTS = (
     "langgraph",
     "ollama",
-    "pytesseract",
-    "pypdf",
     "smtplib",
     "sendgrid",
     "twilio",
@@ -48,6 +72,14 @@ FORBIDDEN_IMPORTS = (
     "httpx",
     "aiohttp",
 )
+
+#: Document-parsing dependencies. Owner decision D-05: they are permitted
+#: **only** inside the explicitly authorized P3 extraction modules, never
+#: globally. Adding one anywhere else fails this guard.
+OCR_IMPORTS = ("pypdf", "pytesseract", "pypdfium2", "PIL")
+
+#: The only package prefix allowed to import an OCR/PDF dependency.
+OCR_ALLOWED_PREFIX = BACKEND_APP / "services" / "documents"
 
 #: Vocabulary that must not appear in P2 application code (``AGENTS.md`` §3).
 FORBIDDEN_TERMS = (
@@ -68,22 +100,39 @@ def app_sources() -> list[Path]:
     return sorted(path for path in BACKEND_APP.rglob("*.py") if "__pycache__" not in path.parts)
 
 
-def test_p2_adds_no_tables_owned_by_later_phases() -> None:
-    """The ORM metadata contains exactly the P2 tables."""
-    assert set(Base.metadata.tables) == P2_TABLES
+def test_p2_tables_still_exist_and_no_later_phase_table_appears() -> None:
+    """P2's tables are all intact and no P4+ table has been added.
+
+    Earlier this was a global ``metadata == P2_TABLES`` equality. P3 legitimately
+    adds five tables (owner decision D-05), so the assertion is now made
+    explicitly: P2's set must be a **subset** of the metadata, the P3 set is
+    enumerated, and every later-phase table is forbidden by name. Strictness is
+    preserved where it matters and is no longer accidental.
+    """
+    tables = set(Base.metadata.tables)
+
+    assert tables >= P2_TABLES
+    assert tables >= P3_TABLES
+    assert tables.isdisjoint(P4_PLUS_TABLES)
+    assert tables == P2_TABLES | P3_TABLES
 
 
 def test_no_later_phase_module_exists() -> None:
-    """No documents/workflows/reviews/tasks router or agent package is created."""
+    """No P4+ review/workflow/task/agent module is created.
+
+    ``documents.py`` and ``extraction.py`` were on this list before P3 existed.
+    They are now authorized P3 routes/modules, so they are permitted **only**
+    under their exact P3 paths; every later-phase module name stays forbidden.
+    """
     forbidden = {
-        "documents.py",
         "workflows.py",
         "reviews.py",
         "tasks.py",
-        "extraction.py",
         "review_rules.py",
         "comparisons.py",
         "orchestrator.py",
+        "summary.py",
+        "notifications.py",
     }
     present = {path.name for path in app_sources()}
     assert forbidden.isdisjoint(present)
@@ -91,13 +140,43 @@ def test_no_later_phase_module_exists() -> None:
     assert not (BACKEND_APP / "agents").exists()
     assert not (BACKEND_APP / "llm").exists()
 
+    # ``extraction.py`` may exist only as the P3 service module, never as a
+    # top-level router or an agent-side module.
+    extraction_modules = [path for path in app_sources() if path.name == "extraction.py"]
+    assert all(
+        path == BACKEND_APP / "services" / "documents" / "text_extraction.py"
+        for path in extraction_modules
+    )
+
 
 def test_no_forbidden_import_appears_in_application_code() -> None:
-    """No OCR, model, agent or egress library is imported."""
+    """No model, agent or egress library is imported anywhere.
+
+    These stay forbidden globally in every phase; P3 did not relax this list.
+    """
     offenders: list[str] = []
     for path in app_sources():
         text = path.read_text(encoding="utf-8")
         for module in FORBIDDEN_IMPORTS:
+            if f"import {module}" in text or f"from {module}" in text:
+                offenders.append(f"{path.relative_to(REPO_ROOT)} -> {module}")
+
+    assert offenders == []
+
+
+def test_ocr_imports_are_confined_to_the_authorized_extraction_package() -> None:
+    """PDF/OCR libraries may be imported only under ``services/documents``.
+
+    Owner decision D-05: the OCR allowlist is path-scoped, not global. A route,
+    schema, model or core module that imports ``pypdf``/``pytesseract`` fails
+    here even though those packages are legitimate in the extraction services.
+    """
+    offenders: list[str] = []
+    for path in app_sources():
+        if OCR_ALLOWED_PREFIX in path.parents:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for module in OCR_IMPORTS:
             if f"import {module}" in text or f"from {module}" in text:
                 offenders.append(f"{path.relative_to(REPO_ROOT)} -> {module}")
 

@@ -1,17 +1,18 @@
 #!/usr/bin/env python
-"""Assert the generated OpenAPI surface matches the P1 + P2 contract exactly.
+"""Assert the generated OpenAPI surface matches the P1 + P2 + P3 contract exactly.
 
 Used by ``scripts/powershell/test_all.ps1`` and by CI as a cheap, offline
 contract gate. It imports the FastAPI app (no server, no network) and checks:
 
-1. the **exact** path set — P1's two public paths plus the P2 allowlist below,
-   with no extra path tolerated (an unplanned route, a P3+ route, a stray
-   ``/demo/seed`` or a premature ``/demo/status`` all fail);
+1. the **exact** path set — P1's two public paths, the P2 allowlist and the P3
+   document allowlist, with no extra path tolerated (an unplanned route, a P4+
+   route, a stray ``/demo/seed`` or a premature ``/demo/status`` all fail);
 2. the **exact** HTTP method set per path (``/patient/check-ins`` legitimately
    carries ``GET`` + ``POST``, so paths alone are not enough);
 3. the P1 schemas (``Health``, ``VersionInfo``, ``DependencyState``) are
    unchanged — the Phase 1 assertions are retained, not relaxed;
-4. the P2 schema allowlist is exactly present;
+4. the P2 and P3 schema allowlists are exactly present — a schema appearing only
+   because a later-phase model leaked into the app still fails;
 5. per-operation ``security``: only ``/health``, ``/version`` and ``login`` are
    public, everything else requires ``bearerAuth``;
 6. the contract's ``bearerAuth`` scheme (``scheme``, ``bearerFormat``) and the
@@ -54,7 +55,19 @@ P2_PATHS: dict[str, set[str]] = {
     "/api/v1/demo/reset": {"post"},
 }
 
-EXPECTED_PATHS: dict[str, set[str]] = {**P1_PATHS, **P2_PATHS}
+#: Phase 3 document allowlist: 6 paths / 6 operations. Every route is reachable
+#: only through ``app.api.v1.documents``; the shapes are fixed by
+#: ``API_CONTRACT.md`` §2.4 and there is no P3 route outside this set.
+P3_PATHS: dict[str, set[str]] = {
+    "/api/v1/documents/upload": {"post"},
+    "/api/v1/documents/{document_id}": {"get"},
+    "/api/v1/documents/{document_id}/extraction": {"get"},
+    "/api/v1/documents/{document_id}/text": {"get"},
+    "/api/v1/documents/{document_id}/verify": {"post"},
+    "/api/v1/documents/{document_id}/file": {"get"},
+}
+
+EXPECTED_PATHS: dict[str, set[str]] = {**P1_PATHS, **P2_PATHS, **P3_PATHS}
 
 #: Operations that must stay public (``security: []``).
 PUBLIC_OPERATIONS: set[tuple[str, str]] = {
@@ -104,6 +117,33 @@ EXPECTED_SCHEMAS: set[str] = {
     "TrustLevel",
     "Unit",
     "ValidationState",
+    # P3 — documents (``API_CONTRACT.md`` §3)
+    "DocumentMeta",
+    "DocumentPageTextItem",
+    "DocumentTextResponse",
+    "DocumentUploadResponse",
+    "EvidenceRef",
+    "ExtractedFact",
+    "ExtractionAttemptSummary",
+    "ExtractionResponse",
+    "VerificationIssue",
+    "VerificationRecord",
+    "VerifyRequest",
+    "VerifyResponse",
+    # P3 — shared enums surfaced in document responses
+    "DocumentMimeType",
+    "DocumentStatus",
+    "ExtractionPath",
+    "FactField",
+    "FactVerificationStatus",
+    "IssueType",
+    "QualityFlag",
+    "VerificationDecision",
+    # P3 — the multipart request body FastAPI generates for the upload route.
+    # It is structural, not a contract schema: the contract models the upload as
+    # ``multipart/form-data`` inline, so this single generated name is allowed
+    # explicitly rather than by a wildcard.
+    "Body_upload_document_api_v1_documents_upload_post",
 }
 
 _HTTP_METHODS = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
@@ -133,7 +173,7 @@ def collect_errors(schema: dict[str, Any]) -> list[str]:
 
     unexpected = found_paths - expected_paths
     if unexpected:
-        errors.append(f"unexpected paths (not in the P1+P2 allowlist): {sorted(unexpected)}")
+        errors.append(f"unexpected paths (not in the P1+P2+P3 allowlist): {sorted(unexpected)}")
 
     for path in sorted(expected_paths & found_paths):
         if found[path] != EXPECTED_PATHS[path]:

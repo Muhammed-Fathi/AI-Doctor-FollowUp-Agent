@@ -45,7 +45,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TextIO
 
-from sqlalchemy import delete, inspect, select
+from sqlalchemy import delete, inspect, select, update
 from sqlalchemy.orm import Session
 
 from app.core.clock import format_utc, utc_now
@@ -55,11 +55,17 @@ from app.core.paths import SYNTHETIC_DATA_DIR
 from app.core.security import PASSWORD_ITERATIONS, hash_password
 from app.db.models import (
     CheckinIdempotency,
+    Document,
+    DocumentPageText,
     Encounter,
+    ExtractedFact,
+    ExtractionAttempt,
+    FactVerification,
     Observation,
     Patient,
     User,
     UserSession,
+    VerificationIssue,
 )
 from app.db.session import create_db_engine
 from app.schemas.fixtures import (
@@ -361,14 +367,34 @@ def _patient_by_external_ref(db: Session, external_ref: str) -> Patient | None:
 def clear_demo_data(db: Session) -> None:
     """Delete synthetic rows in foreign-key safe order, keeping the audit trail.
 
-    Order: replay records → sessions → observations → encounters → patient
-    accounts → patients → staff accounts. Patient accounts are deleted whole
-    rather than detached from their patient, because ``user.patient_id`` must be
-    non-NULL exactly when the role is ``patient``. Audit rows are untouched.
+    Order: replay records → sessions → observations → (when migrated: P3
+    verifications → issues → facts → attempts → page texts → document recovery
+    links → documents) → encounters → patient accounts → patients → staff
+    accounts. Patient accounts are deleted whole rather than detached from their
+    patient, because ``user.patient_id`` must be non-NULL exactly when the role
+    is ``patient``. Audit rows and files on disk are untouched.
     """
+    inspector = inspect(db.get_bind())
+    present = set(inspector.get_table_names())
+
     db.execute(delete(CheckinIdempotency))
     db.execute(delete(UserSession))
     db.execute(delete(Observation))
+    if "fact_verification" in present:
+        db.execute(delete(FactVerification))
+    if "verification_issue" in present:
+        db.execute(delete(VerificationIssue))
+    if "extracted_fact" in present:
+        db.execute(delete(ExtractedFact))
+    if "extraction_attempt" in present:
+        db.execute(delete(ExtractionAttempt))
+    if "document_page_text" in present:
+        db.execute(delete(DocumentPageText))
+    if "document" in present:
+        doc_columns = {col["name"] for col in inspector.get_columns("document")}
+        if "recovered_from_document_id" in doc_columns:
+            db.execute(update(Document).values(recovered_from_document_id=None))
+        db.execute(delete(Document))
     db.execute(delete(Encounter))
     db.execute(delete(User).where(User.role == Role.PATIENT.value))
     db.execute(delete(Patient))
