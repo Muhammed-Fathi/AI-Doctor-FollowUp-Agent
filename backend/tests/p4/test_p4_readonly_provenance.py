@@ -25,6 +25,7 @@ from app.services.provenance_review_candidate import (
 from app.services.seed import seed_demo_data
 
 CLOCK = datetime(2026, 11, 14, 12, tzinfo=UTC)
+SYNTHETIC_TEST_CREDENTIAL = "synthetic-ci-password"  # Test-only fixture value; never a real secret.
 MEASURED = "2026-11-03T08:00:00Z"
 CREATED = "2026-11-04T08:00:00Z"
 
@@ -32,7 +33,7 @@ CREATED = "2026-11-04T08:00:00Z"
 @pytest.fixture()
 def db(engine):
     with Session(engine) as session:
-        seed_demo_data(session, password="synthetic-ci-password", now=CLOCK, iterations=1000)
+        seed_demo_data(session, password=SYNTHETIC_TEST_CREDENTIAL, now=CLOCK, iterations=1000)
         session.commit()
         yield session
 
