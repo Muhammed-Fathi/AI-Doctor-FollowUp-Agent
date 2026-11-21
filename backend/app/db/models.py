@@ -880,9 +880,7 @@ class RunSourceOmission(Base):
     __tablename__ = "run_source_omission"
     __table_args__ = (
         UniqueConstraint("workflow_run_id", "document_id", name="ux_run_source_omission"),
-        CheckConstraint(
-            "reason_code = 'selected_separate_recovery_source'", name="reason_allowed"
-        ),
+        CheckConstraint("reason_code = 'selected_separate_recovery_source'", name="reason_allowed"),
         CheckConstraint("length(source_sha256) = 64", name="source_sha_length"),
         Index("ix_run_omission_run", "workflow_run_id"),
     )
