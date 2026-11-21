@@ -509,9 +509,7 @@ def test_alembic_smoke_retains_all_historical_states(alembic_config, sqlite_url:
         )
 
 
-def test_provenance_raw_text_change_invalidates_previous_gate_fingerprint(
-    scoped, tmp_path, engine
-):
+def test_provenance_raw_text_change_invalidates_previous_gate_fingerprint(scoped, tmp_path, engine):
     db, patient_id, doctor = scoped
     doc = _doc(db, patient_id, tmp_path, "raw-source-change")
     run_id = _start(db, patient_id, doctor, doc.id)
