@@ -100,8 +100,23 @@ def _approved_reference(raw: object):
     return policy
 
 
+def _canonical_lf_bytes(content: bytes) -> bytes:
+    """Allow full LF or full CRLF checkouts; reject mixed/bare CR.
+
+    Hash the canonical LF Git blob representation. Neither whitespace nor
+    fixture content is discarded; only Git's platform line endings normalize.
+    This is strictly TEST-ONLY, never a runtime trust/approval token.
+    """
+    without_crlf = content.replace(b"\r\n", b"")
+    if b"\r" in without_crlf:
+        raise DemoPolicyError("Unsupported bare carriage return in reference.")
+    if b"\r\n" in content and b"\n" in without_crlf:
+        raise DemoPolicyError("Mixed LF and CRLF line endings in reference.")
+    return content.replace(b"\r\n", b"\n")
+
+
 def _reference():
-    content = POLICY_PATH.read_bytes()
+    content = _canonical_lf_bytes(POLICY_PATH.read_bytes())
     if sha256(content).hexdigest() != POLICY_SHA256:
         raise DemoPolicyError("Synthetic policy bytes changed without review and versioning.")
     return _approved_reference(_decoded(content.decode("utf-8")))
@@ -109,14 +124,23 @@ def _reference():
 
 def _gold(case: str) -> dict:
     path = REPO_ROOT / "data" / "synthetic" / "golden_cases" / f"GOLD-{case}.expected.json"
-    content = path.read_bytes()
+    content = _canonical_lf_bytes(path.read_bytes())
     if sha256(content).hexdigest() != GOLD_SHA256[case]:
         raise DemoPolicyError("Golden case changed without separate review.")
     return json.loads(content)
 
 
 def test_reference_has_exact_owner_pinned_sha256() -> None:
-    assert sha256(POLICY_PATH.read_bytes()).hexdigest() == POLICY_SHA256
+    normalized = _canonical_lf_bytes(POLICY_PATH.read_bytes())
+    assert sha256(normalized).hexdigest() == POLICY_SHA256
+    assert sha256(_canonical_lf_bytes(normalized.replace(b"\n", b"\r\n"))).hexdigest() == (
+        POLICY_SHA256
+    )
+    # A line-ending conversion is allowed; a mixed checkout or bare CR is not.
+    with pytest.raises(DemoPolicyError, match="Mixed"):
+        _canonical_lf_bytes(normalized.replace(b"\n", b"\r\n", 1))
+    with pytest.raises(DemoPolicyError, match="bare carriage return"):
+        _canonical_lf_bytes(normalized.replace(b"\n", b"\r", 1))
     assert _reference().policy_version == "demo-policy-1.1.0"
 
 
@@ -209,6 +233,14 @@ def test_syntactically_valid_new_policy_is_not_automatically_approved(change: st
 
 @pytest.mark.parametrize("case", ["A", "B", "C", "D"])
 def test_all_four_golden_expected_fixtures_remain_pinned_and_offline(case: str) -> None:
+    golden_path = (
+        REPO_ROOT / "data" / "synthetic" / "golden_cases" / f"GOLD-{case}.expected.json"
+    )
+    canonical = _canonical_lf_bytes(golden_path.read_bytes())
+    assert sha256(canonical).hexdigest() == GOLD_SHA256[case]
+    assert sha256(_canonical_lf_bytes(canonical.replace(b"\n", b"\r\n"))).hexdigest() == (
+        GOLD_SHA256[case]
+    )
     expected = _gold(case)
     assert expected["case_id"] == f"GOLD-{case}"
     assert expected["demo_as_of_utc"] == AS_OF
