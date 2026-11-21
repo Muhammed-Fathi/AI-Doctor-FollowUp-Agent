@@ -1040,3 +1040,31 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 > tests passing**. Confirm/reconcile from exact-head GitHub Actions; no historical
 > P3 test count, P3 executable, scanner control or real Windows/OCR result is edited.
 > Owner Windows gate is still required before merging the code PR.
+
+
+> **P4 R21-S1 offline matrix provisional suite count (2026-11-21, append-only).**
+> Owner-merged PR #28 established backend **1051** collected cases with
+> unchanged **443** P3 cases. The new R21-S1 offline migrated-SQLite test module
+> contains 19 test functions, with **25** expected parametrized cases,
+> so the new expected collection is **1076** backend / **443** P3.
+> The existing P3 handoff guard requires an exact conditional *collection token*:
+> **1076 passed**, of which **443** are the P3 suite.
+> **This is NOT evidence that 1076 tests passed**; exact-head CI must independently
+> measure collected/executed results, and any mismatch must be corrected by
+> append-only note. No P3 executable, prior owner decision, historical OCR
+> failure, or quality gate was changed. Isolated Windows gate still required.
+
+
+> **P4 R21-S1 measured backend collection correction (2026-11-21; append-only).**
+> Exact-head [GitHub CI #44906944016](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44906944016)
+> measured **1077 total backend collected cases**, not provisional 1076,
+> and unchanged **443** P3 tests. The conditional *collection-pairing marker*
+> required by the existing P3 acceptance guard is:
+> **1077 passed**, of which **443** are the P3 suite.
+> This sentence is **not a claim of 1077 passing tests**; cited CI had two
+> failures: the outdated handoff collection token and the new R21 test's
+> ORM autoflush in its own helper before the production dirty-session guard.
+> The test now captures patient/document IDs *before* mutation and directly
+> calls the inspector with a dirty Session, preserving the fail-closed guard.
+> **No historical P3 test/code/scanner or real OCR result has changed.**
+> Re-run full exact-head CI and require owner Windows gate before merge.

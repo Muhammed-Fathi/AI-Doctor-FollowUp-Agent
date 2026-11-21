@@ -1253,3 +1253,17 @@ After owner-merged [PR #27](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp
 **R3-A APPROVED WITH STRICT SCOPE:** exact synthetic demo-only `demo-policy-1.1.0` reference numbers, clock, enabled VI catalogue and offline DR IDs; see `docs/phase-reports/P4_R3A_PINNED_DEMO_POLICY_REFERENCE_20261121.md`. No runtime policy installation, rule-tool exposure, medical claim or run clearance. New YAML/test-only fixture remains a code PR until owner acceptance.
 
 **R21-S1 APPROVED AS FUTURE SOURCE-SELECTION SEMANTICS:** original terminal rejected source `VI-002` remains open, inclusion in selected run set must HALT, separate recovered selection needs explicit doctor-authored/audited omission and full run re-verification later. The patient-created recovery link does not prove equivalence. A subsequent offline P4 testing PR may model these rules but **cannot** implement P5 run identity or return `run_gate_completed=True`. R1-A deferred persistence is unchanged. P4 **IN_REVIEW**, original P3 GOLD-EX-11 real OCR **FAIL / NOT PROVEN**.
+
+
+## P4 R21-S1 recovery selection offline matrix after PR #28 merge (2026-11-21)
+
+- Owner merged PR #28 into `main@77538678a108bc0896b04713c2072e47b63a7550`; exact-main CI #44905949746 completed SUCCESS. Owner had already approved **R21-S1** separately from synthetic-only **R3-A** after PR #27. R21-S1 is a future *doctor-authored/auditable selected source* policy, **not** approval to ignore old blockers or to fabricate run identity.
+- A new P4 offline-only component `backend/app/services/p4_recovery_selection_candidate.py` + synthetic SQLite matrix `backend/tests/p4/test_p4_recovery_selection_candidate.py` models selected original/recovery/both/neither, multi-generation ancestry, missing/duplicate doctor omission **proposals**, persisted terminal `VI-002`, independent recovery preflight, assignment/session scope and fail-closed errors. [New report](../phase-reports/P4_R21S1_OFFLINE_RECOVERY_SOURCE_SELECTION_20261121.md).
+- This is only an **unpersisted proposal inspection**: `doctor_selection_audited=False`, `run_gate_completed=False`, `runtime_evaluable=False`, `run_gate_status=unavailable` **always**. No source-byte/OCR proof, no run-selected manifest, no P5 code/persistence, no issue mutation. Provisional new test collection 1076 backend/443 P3 pending CI and Windows acceptance before owner merge.
+- **R1-A**, P4 IN_REVIEW, and original P3 real GOLD-EX-11 FAIL / NOT PROVEN remain unchanged. NOT FOR CLINICAL USE.
+
+
+## P4 R21-S1 first CI correction checkpoint (2026-11-21)
+
+- Backend CI #44906944016 collected **1077** cases, not the provisional 1076. P3 remains **443**; full count-token corrected append-only in `PHASE_3_WINDOWS_ACCEPTANCE.md` (token is *collection*, not PASS evidence).
+- New dirty-session test setup caused an ORM autoflush; test now pins IDs before mutation and asserts the **unchanged** read-only inspector refuses a dirty Session. Full suite must pass exact-head CI and owner Windows gate before merge. No P5, VI auto-clear, real run gate or OCR claim. P4 IN_REVIEW.
