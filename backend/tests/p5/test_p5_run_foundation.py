@@ -309,9 +309,21 @@ def test_invalid_selection_or_request_id_rejected(db: Session, identifiers: str)
 def test_dirty_session_fails_before_any_database_write(db: Session):
     owner, doctor = _patient(db), _doctor(db)
     doc = _document(db, owner, "dirty")
+    # Commit in the helper expires ORM attributes; pin IDs before mutation
+    # so the test helper cannot autoflush on attribute access.
+    patient_id, document_id = owner.id, doc.id
     owner.display_name = "Unsaved synthetic value"
     with pytest.raises(ApiError):
-        _start(db, owner, doctor, (doc.id,))
+        create_run_foundation(
+            db,
+            principal=doctor,
+            patient_id=patient_id,
+            document_ids=(document_id,),
+            observation_ids=(),
+            omissions=(),
+            client_request_id="dirty-f0-case",
+            as_of_utc=CLOCK,
+        )
     assert _count(db, WorkflowRun) == 0
     db.rollback()
 
