@@ -916,7 +916,6 @@ __all__ = [
     "FactVerification",
     "Observation",
     "Patient",
-    "WorkflowRun",
     "RunSelectedDocument",
     "RunSelectedObservation",
     "RunSourceOmission",
@@ -924,5 +923,6 @@ __all__ = [
     "User",
     "UserSession",
     "VerificationIssue",
+    "WorkflowRun",
     "new_uuid",
 ]
