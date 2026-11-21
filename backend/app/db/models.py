@@ -916,7 +916,9 @@ class RunGateEvaluation(Base):
         CheckConstraint("decision IN ('proceed', 'halt', 'unavailable')", name="decision_allowed"),
         CheckConstraint("length(input_fingerprint_sha256) = 64", name="fingerprint_sha_length"),
         CheckConstraint("length(idempotency_key) = 64", name="idem_sha_length"),
-        CheckConstraint("blocking_fact_count >= 0 AND blocking_fact_count <= 40", name="block_count"),
+        CheckConstraint(
+            "blocking_fact_count >= 0 AND blocking_fact_count <= 40", name="block_count"
+        ),
         UniqueConstraint(
             "workflow_run_id",
             "input_fingerprint_sha256",
