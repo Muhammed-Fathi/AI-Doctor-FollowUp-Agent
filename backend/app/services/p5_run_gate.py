@@ -470,8 +470,14 @@ def _evaluate_locked(
             patient_id=patient.id,
             document_ids=(doc.id,),
         )
-        if not preflight.candidate_documents_clear and not pending:
-            unavailable = "selected_document_preflight_unproven"
+        if not preflight.candidate_documents_clear:
+            expected_blocks = {
+                "active_fact_unverified",
+                "open_verification_issue",
+                "document_identity_unresolved",
+            }
+            if any(block.reason_code not in expected_blocks for block in preflight.blockers):
+                unavailable = "selected_document_preflight_unproven"
 
     # The observation history contributes to conflict detection and fingerprint,
     # including unselected same-day records: no new conflict can be ignored.
