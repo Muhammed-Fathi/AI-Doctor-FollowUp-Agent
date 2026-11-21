@@ -473,6 +473,7 @@ def test_gate_evidence_update_is_rejected_at_database_layer(scoped, tmp_path, en
     db.rollback()
     assert db.scalar(select(func.count()).select_from(RunGateEvaluation)) == 1
 
+
 def test_alembic_smoke_retains_all_historical_states(alembic_config, sqlite_url: str):
     """The exact 0007 smoke, 0006 F0 and P3/P2/P1 states are all enforced."""
     smoke = REPO_ROOT / "scripts" / "python" / "check_alembic_smoke.py"
