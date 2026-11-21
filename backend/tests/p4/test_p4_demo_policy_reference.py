@@ -233,14 +233,11 @@ def test_syntactically_valid_new_policy_is_not_automatically_approved(change: st
 
 @pytest.mark.parametrize("case", ["A", "B", "C", "D"])
 def test_all_four_golden_expected_fixtures_remain_pinned_and_offline(case: str) -> None:
-    golden_path = (
-        REPO_ROOT / "data" / "synthetic" / "golden_cases" / f"GOLD-{case}.expected.json"
-    )
+    golden_path = REPO_ROOT / "data" / "synthetic" / "golden_cases" / f"GOLD-{case}.expected.json"
     canonical = _canonical_lf_bytes(golden_path.read_bytes())
     assert sha256(canonical).hexdigest() == GOLD_SHA256[case]
-    assert sha256(_canonical_lf_bytes(canonical.replace(b"\n", b"\r\n"))).hexdigest() == (
-        GOLD_SHA256[case]
-    )
+    crlf_hash = sha256(_canonical_lf_bytes(canonical.replace(b"\n", b"\r\n"))).hexdigest()
+    assert crlf_hash == GOLD_SHA256[case]
     expected = _gold(case)
     assert expected["case_id"] == f"GOLD-{case}"
     assert expected["demo_as_of_utc"] == AS_OF
