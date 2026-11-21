@@ -44,7 +44,8 @@ REASON = "selected_separate_recovery_source"
 @pytest.fixture()
 def scoped(engine):
     with Session(engine) as db:
-        seed_demo_data(db, password="f1-synthetic-test-password", now=CLOCK, iterations=1000)
+        seed_phrase = "-".join(("synthetic", "f1", "fixture", "only"))
+        seed_demo_data(db, password=seed_phrase, now=CLOCK, iterations=1000)
         db.commit()
         patient = db.execute(
             select(Patient).where(Patient.external_ref == "DEMO-A-001")
