@@ -1235,3 +1235,12 @@ After owner-merged PR #25 at `main@71bf8bab7bcd55b570e7a13a46df6d2efad905f9`, th
 - **C-35A:** approved separate bounded server-side history acquisition and pure explicit current-plus-history comparison for P4 component testing; no silent normative tool contract change or P5 invocation.
 - **C-37A:** approved the future **server-produced run-bound evidence** architecture, **not** creation of an evaluable run token before P5. Current internal P4 result is **non-evaluable**, with an explicit unavailable gate.
 - **Previously approved R1-A** remains binding: no P4 review-item/evidence-link persistence before legitimate P5 workflow_run, and no P5 early code. R3/OQ-R01 demo numeric policy and R21 terminal-source recovery selection remain **OPEN**. P4 **IN_REVIEW**, P3 real OCR `GOLD-EX-11=FAIL / NOT PROVEN`; **NOT FOR CLINICAL USE**.
+
+
+## P4 R3/OQ-R01 and R21 recovery scope — owner decision request (2026-11-21)
+
+At owner-merged PR #26 `main@1aed4595f8d9a90ece6af0659513e2bdbc98b448`, postmerge Actions #44896431925 retry attempt 3 completed SUCCESS, clearing the temporary CI-only blocker. R1-A / R2-A / C-35A / C-37A / R4 remain the only approved P4 architecture and offline-testing choices.
+
+A *new documentation-only proposal* in `docs/phase-reports/P4_R3_OQR01_R21_RECOVERY_SELECTION_DECISION_20261121.md` presents two **independent pending** owner decisions: **R3-A** pins the exact arbitrary synthetic `demo-policy-1.1.0` parameters for later offline reference without runtime activation; **R21-S1** proposes a doctor-authored, auditable future run-selected document set that does not erase a failed original's open `VI-002` or trust a patient-declared recovery link. Alternative R3-B/C and R21-S2/S3 are documented. **Neither proposal is approved by merging a report.**
+
+Next code PRs, if separately authorized, must be independently bounded: (A) fixture-only versioned demo-policy artifact and strict validation; (B) offline recovery-selection fail-closed matrix. No present run-gate, P5 implementation, workflow_run/review-item persistence, VI auto-clear or rule activation. P4 **IN_REVIEW**, P3 real OCR `GOLD-EX-11=FAIL / NOT PROVEN`. NOT FOR CLINICAL USE.
