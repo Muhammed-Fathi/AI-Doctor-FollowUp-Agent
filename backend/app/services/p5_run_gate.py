@@ -256,6 +256,10 @@ def _evaluate_locked(
         "issues": [],
         "observations": [],
         "selected": [doc_ids, obs_ids],
+        "policy_settings": [
+            get_settings().ocr_confidence_floor,
+            get_settings().conflict_tolerance,
+        ],
         "omissions": [],
     }
     unavailable: str | None = None
@@ -328,13 +332,17 @@ def _evaluate_locked(
             if f.corrected_from_fact_id and f.verification_status == "verified"
         }
         active = [f for f in facts if f.id not in verified_corrections]
-        decisions = list(
-            db.execute(
-                select(FactVerification)
-                .where(FactVerification.fact_id.in_(tuple(by_id)))
-                .order_by(FactVerification.id)
-            ).scalars()
-        ) if by_id else []
+        decisions = (
+            list(
+                db.execute(
+                    select(FactVerification)
+                    .where(FactVerification.fact_id.in_(tuple(by_id)))
+                    .order_by(FactVerification.id)
+                ).scalars()
+            )
+            if by_id
+            else []
+        )
         for f in facts:
             snapshot["facts"].append(
                 [
@@ -367,16 +375,24 @@ def _evaluate_locked(
                 ]
             )
         try:
-            flags = {
-                f.id: tuple(json.loads(f.quality_flags))
-                for f in active
-            }
+            flags = {f.id: tuple(json.loads(f.quality_flags)) for f in active}
         except (TypeError, ValueError):
             flags = {}
             unavailable = "invalid_quality_flags"
 
         if not active:
             recorded.add(_issue("VI-002", doc.id, "document_has_no_active_facts"))
+        measurement_values = [f for f in active if f.field_name == "value"]
+        if len(measurement_values) > 1:
+            recorded.add(
+                _issue(
+                    "VI-002",
+                    doc.id,
+                    "multi_measurement_document",
+                    tuple(f.id for f in measurement_values),
+                    count=len(measurement_values),
+                )
+            )
         pending = tuple(f.id for f in active if f.verification_status != "verified")
         if pending:
             recorded.add(_issue("VI-002", doc.id, "fact_unverified", pending, count=len(pending)))
@@ -386,7 +402,8 @@ def _evaluate_locked(
         ):
             recorded.add(_issue("VI-001", doc.id, "unit_missing_or_unsupported"))
         dates = [
-            f.normalized_value for f in active
+            f.normalized_value
+            for f in active
             if f.field_name == "report_date" and f.normalized_value
         ]
         if not dates or len(set(dates)) != 1:
@@ -462,9 +479,19 @@ def _evaluate_locked(
     for obs in history:
         snapshot["observations"].append(
             [
-                obs.id, obs.patient_id, obs.measure_type, obs.value, obs.unit,
-                obs.measured_at, obs.validation, obs.trust_level, obs.source,
-                obs.source_fact_id, obs.verified_by_user_id, obs.verified_at, obs.created_at,
+                obs.id,
+                obs.patient_id,
+                obs.measure_type,
+                obs.value,
+                obs.unit,
+                obs.measured_at,
+                obs.validation,
+                obs.trust_level,
+                obs.source,
+                obs.source_fact_id,
+                obs.verified_by_user_id,
+                obs.verified_at,
+                obs.created_at,
             ]
         )
     for row in obs_saved:
@@ -492,7 +519,9 @@ def _evaluate_locked(
                     and obs.source_fact_id is None
                 )
             elif obs.trust_level == "doctor_verified":
-                source_fact = db.get(ExtractedFact, obs.source_fact_id) if obs.source_fact_id else None
+                source_fact = (
+                    db.get(ExtractedFact, obs.source_fact_id) if obs.source_fact_id else None
+                )
                 valid = valid and (
                     obs.source == "verified_document"
                     and source_fact is not None
@@ -521,7 +550,9 @@ def _evaluate_locked(
         # Constrained, deterministic synthetic same-day VI-006 comparison.
         tests = [f for f in facts if f.field_name == "test_name" and f.normalized_value]
         dates = [f for f in facts if f.field_name == "report_date" and f.normalized_value]
-        values = [f for f in facts if f.field_name == "value" and f.verification_status == "verified"]
+        values = [
+            f for f in facts if f.field_name == "value" and f.verification_status == "verified"
+        ]
         if len(tests) != 1 or len(dates) != 1 or len(values) != 1:
             continue
         alias = " ".join(tests[0].normalized_value.lower().strip().rstrip(":").split())
@@ -544,7 +575,7 @@ def _evaluate_locked(
             if obs.measure_type == mapped[0].value
             and obs.validation != "rejected"
             and obs.trust_level in {"self_reported_validated", "doctor_verified"}
-            and obs.id not in obs_ids
+            and obs.source_fact_id not in {fact.id for fact in facts}
         ]
         conflict = collect_source_conflict_issue(
             candidate=candidate,
@@ -553,8 +584,13 @@ def _evaluate_locked(
         )
         if conflict is not None:
             recorded.add(
-                _issue("VI-006", doc_id, "source_conflict_at_intake", (values[0].id,),
-                       measure_type=mapped[0].value)
+                _issue(
+                    "VI-006",
+                    doc_id,
+                    "source_conflict_at_intake",
+                    (values[0].id,),
+                    measure_type=mapped[0].value,
+                )
             )
 
     # Re-read lineage and historical issues using ONLY the persisted omission
@@ -578,8 +614,15 @@ def _evaluate_locked(
             unavailable = "historical_omission_changed"
             continue
         snapshot["omissions"].append(
-            [original.id, original.sha256, original.extraction_status,
-             original.failure_code, issue.id, issue.state, item.reason_code]
+            [
+                original.id,
+                original.sha256,
+                original.extraction_status,
+                original.failure_code,
+                issue.id,
+                issue.state,
+                item.reason_code,
+            ]
         )
         historical.append(issue.id)
     inspection = inspect_offline_recovery_selection(
@@ -625,8 +668,14 @@ def _evaluate_locked(
         ):
             raise ApiError(409, ErrorCode.IDEMPOTENCY_CONFLICT, "Gate replay evidence changed.")
         return _receipt(
-            run, fingerprint, decision, ordered, tuple(sorted(historical)),
-            blocking_count, unavailable, replayed=True,
+            run,
+            fingerprint,
+            decision,
+            ordered,
+            tuple(sorted(historical)),
+            blocking_count,
+            unavailable,
+            replayed=True,
         )
 
     evaluation = RunGateEvaluation(
@@ -670,8 +719,14 @@ def _evaluate_locked(
         detail_fragments=("phase=p5-f1", f"decision={decision}", "runtime_evaluable=false"),
     )
     return _receipt(
-        run, fingerprint, decision, ordered, tuple(sorted(historical)),
-        blocking_count, unavailable, replayed=False,
+        run,
+        fingerprint,
+        decision,
+        ordered,
+        tuple(sorted(historical)),
+        blocking_count,
+        unavailable,
+        replayed=False,
     )
 
 
