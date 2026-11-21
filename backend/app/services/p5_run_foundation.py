@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.clock import format_utc, to_utc
-from app.core.enums import AuditOutcome, MAPPING_VERSION
+from app.core.enums import MAPPING_VERSION, AuditOutcome
 from app.core.errors import ApiError, ErrorCode
 from app.core.policies import Principal
 from app.db.models import (
