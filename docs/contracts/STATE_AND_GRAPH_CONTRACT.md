@@ -728,3 +728,12 @@ the trade-off, and the acceptance test `AD-01`; the demo shows one selection (`D
 - No multi-user concurrency guarantees.
 - No clinical prioritization: `workflow_hint` is ordering metadata, not severity.
 - No silent recovery that drops evidence to "make it work".
+
+
+## P5-F1 non-graph gate boundary (owner-ratified design, PR #32)
+
+The separate internal `evaluate_run_verification_gate` F1 service operates on a real F0 `workflow_run.id` and its immutable selected-source manifest. It is **NOT** node N2, does not write `NodeEvent` or checkpoints, and does not transition `workflow_run.status` out of `queued`. Its frozen `RunGateReceipt` carries `run_id,patient_id,doctor_id,gate_version,input_fingerprint_sha256,decision,issues,historical_excluded_vi002_ids,blocking_fact_count,unavailable_reason,replayed,gate_evaluated=True,runtime_evaluable=False`. `decision` is `proceed/halt/unavailable`; `proceed` means only that this bounded internal preflight saw no known blockers in the inspected synthetic snapshot, **not** approval to evaluate DR rules or generate an agent draft. Only a later separately approved F2 may build trusted `EvaluableReviewEvidenceV2` after independent recheck.
+
+The gate's read/write transaction is SQLite `BEGIN IMMEDIATE` on a fresh session; stable run/doc/observation/omission/fact/decision/issue/source-SHA state is fingerprinted, and a repeat matching source fingerprint reuses the same immutable gate result. File bytes are checked against stored SHA and checked again near DB commit; the filesystem is not atomically locked with SQLite, so **F2 MUST recheck** byte identity and all relevant state. Missing or altered bytes, unsupported version, changed selection or unproven lineage never yield `proceed`. The original P3 issue ledger, including OPEN terminal `VI-002`, is never updated by F1. `self_reported_validated` remains a distinct admissible trust class, not clinician verification.
+
+**Invariant:** F1 output alone never sets `run_gate_completed=True` on a graph or P4 adapter, never marks `runtime_evaluable=True`, never creates `review_item`, audit exceptions or tasks, and does not imply any real OCR glyph fidelity. P3 `GOLD-EX-11 FAIL / NOT PROVEN` remains disclosed, and this remains a synthetic educational demo, **NOT FOR CLINICAL USE**.
