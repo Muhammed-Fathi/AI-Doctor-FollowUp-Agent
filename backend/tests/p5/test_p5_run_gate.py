@@ -316,6 +316,7 @@ def test_p5_f1_schema_empty_downgrade_and_reupgrade(alembic_config, sqlite_url):
         eng.dispose()
     command.upgrade(alembic_config, "head")
 
+
 @pytest.mark.parametrize(
     ("changed", "expected"),
     [
@@ -432,9 +433,11 @@ def test_verified_multimeasurement_document_is_not_promoted(scoped, tmp_path, en
 def test_mutated_selected_observation_is_not_silently_dropped(scoped, tmp_path, engine):
     db, patient_id, doctor = scoped
     doc = _doc(db, patient_id, tmp_path, "rejected-observation")
-    obs = db.execute(
-        select(Observation).where(Observation.patient_id == patient_id)
-    ).scalars().first()
+    obs = (
+        db.execute(select(Observation).where(Observation.patient_id == patient_id))
+        .scalars()
+        .first()
+    )
     assert obs is not None
     run_id = _start(db, patient_id, doctor, doc.id, observation_ids=(obs.id,))
     obs.validation = "rejected"
@@ -449,9 +452,7 @@ def test_reassigned_patient_denied_before_any_gate_evidence(scoped, tmp_path, en
     doc = _doc(db, patient_id, tmp_path, "reassignment")
     run_id = _start(db, patient_id, doctor, doc.id)
     patient = db.get(Patient, patient_id)
-    other = db.execute(
-        select(User).where(User.username == "demo_doctor_unassigned")
-    ).scalar_one()
+    other = db.execute(select(User).where(User.username == "demo_doctor_unassigned")).scalar_one()
     patient.assigned_doctor_id = other.id
     db.commit()
     with pytest.raises(ApiError):
