@@ -1076,3 +1076,16 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 > Under owner [explicit six-path legacy compatibility authorization](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/33#issuecomment-7070068019), historical P3 run figures and the original P3-only **443** test cases remain unchanged. The last pre-exception [CI #44924018806](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44924018806) measured **1116 backend collected** and **six unrelated historical 0006/count-assumption failures**; it did **not** establish 1116 passing tests. The P5-F1 candidate then added **one** new parametrically unexpanded test that executes the smoke checker across 0007, historical 0006, 0005, 0004, 0003, 0002, 0001 and base, giving a **provisional** `1116 + 1 = 1117` case collection expectation pending exact-head CI. For the *current* candidate's integrity-check pairing only, the required **collection** token is **1117 collected**, of which **443** are the P3 suite. This paired token is **NOT** a claim that 1117 cases have passed. If exact-head pytest collection differs, correct this current-only pairing and investigate; never rewrite the historical 837 P3 handoff result or a past conditional test run.
 >
 > The new migration adds only `run_gate_evaluation` and `run_gate_blocker` at `0007_p5_run_gate`. The separate `p5_f0` smoke state preserves `0006_p5_run_foundation` exact F0 shape, and every older state retains strict P3/P2/P1 checks. This change does not alter ingestion, OCR, historical `VI-002`, Windows acceptance evidence or real `GOLD-EX-11=FAIL / NOT PROVEN`. F1 remains `IN_REVIEW`; exact-head CI and owner isolated Windows tests are required before merge. **SYNTHETIC / NOT FOR CLINICAL USE.**
+
+> **P5-F1 last-minute provenance hardening collection checkpoint (PR #33, synthetic test suite; provisional).**
+> Following the first F1 compatibility checkpoint's **1117 expected collected** tests,
+> four further *new* synthetic P5-F1 tests were authored for (1) raw extracted-text
+> fingerprint changes, (2) unknown quality flags, (3) replay rejection of an
+> inserted forged gate blocker and (4) two simultaneous run-gate attempts. There
+> were no removals, skips or parametrization changes to the original 443 P3
+> cases. Accordingly this updated **provisional collection-pair token** is
+> **1121 collected**, of which **443** are the P3 suite; this is arithmetic
+> on the prior pending candidate, **NOT evidence that 1121 tests passed**.
+> Correct it if the exact final head's pytest collection differs. The accepted
+> P3 historical results and real `GOLD-EX-11 FAIL / NOT PROVEN` remain unmodified.
+> The new F1 cases concern synthetic software consistency, not clinical validity.
