@@ -1053,3 +1053,18 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 > measure collected/executed results, and any mismatch must be corrected by
 > append-only note. No P3 executable, prior owner decision, historical OCR
 > failure, or quality gate was changed. Isolated Windows gate still required.
+
+
+> **P4 R21-S1 measured backend collection correction (2026-11-21; append-only).**
+> Exact-head [GitHub CI #44906944016](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44906944016)
+> measured **1077 total backend collected cases**, not provisional 1076,
+> and unchanged **443** P3 tests. The conditional *collection-pairing marker*
+> required by the existing P3 acceptance guard is:
+> **1077 passed**, of which **443** are the P3 suite.
+> This sentence is **not a claim of 1077 passing tests**; cited CI had two
+> failures: the outdated handoff collection token and the new R21 test's
+> ORM autoflush in its own helper before the production dirty-session guard.
+> The test now captures patient/document IDs *before* mutation and directly
+> calls the inspector with a dirty Session, preserving the fail-closed guard.
+> **No historical P3 test/code/scanner or real OCR result has changed.**
+> Re-run full exact-head CI and require owner Windows gate before merge.

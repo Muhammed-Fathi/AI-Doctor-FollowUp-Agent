@@ -395,10 +395,21 @@ def test_expired_or_revoked_session_rejected(db: Session, context) -> None:
 def test_dirty_session_refused_without_implicit_flush(db: Session, context) -> None:
     owner, doctor = context
     doc = report(db, owner, "dirty-source")
+    owner_id = owner.id
+    doc_id = doc.id
     doc.extraction_status = "needs_verification"
+    assert doc in db.dirty
     with pytest.raises(ApiError) as error:
-        inspect(db, owner, doctor, (doc,))
+        inspect_offline_recovery_selection(
+            db,
+            principal=doctor,
+            patient_id=owner_id,
+            selected_document_ids=(doc_id,),
+            omission_proposals=(),
+            as_of_utc=CLOCK,
+        )
     assert error.value.status_code == 400
+    assert doc in db.dirty
     assert doc.extraction_status == "needs_verification"
 
 
