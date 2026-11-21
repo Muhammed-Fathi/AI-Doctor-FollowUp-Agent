@@ -210,9 +210,7 @@ def test_missing_actual_source_is_never_a_pass(scoped, tmp_path, engine):
     assert result.runtime_evaluable is False
 
 
-def test_selected_unverified_fact_blocks_even_if_original_run_queued(
-    scoped, tmp_path, engine
-):
+def test_selected_unverified_fact_blocks_even_if_original_run_queued(scoped, tmp_path, engine):
     db, patient_id, doctor = scoped
     doc = _doc(db, patient_id, tmp_path, "pending")
     run_id = _start(db, patient_id, doctor, doc.id)
@@ -245,9 +243,7 @@ def test_historical_vi002_stays_open_with_audited_recovery(scoped, tmp_path, eng
     db, patient_id, doctor = scoped
     original = _doc(db, patient_id, tmp_path, "terminal", rejected=True)
     recovered = _doc(db, patient_id, tmp_path, "recovered", parent=original)
-    omission = CandidateDoctorOmission(
-        terminal_document_id=original.id, reason_code=REASON
-    )
+    omission = CandidateDoctorOmission(terminal_document_id=original.id, reason_code=REASON)
     run_id = _start(db, patient_id, doctor, recovered.id, omissions=(omission,))
     result = _gate(engine, doctor, run_id, tmp_path)
     assert result.decision == "proceed"
@@ -261,9 +257,11 @@ def test_historical_vi002_stays_open_with_audited_recovery(scoped, tmp_path, eng
 def test_selected_self_reported_observation_keeps_its_label(scoped, tmp_path, engine):
     db, patient_id, doctor = scoped
     doc = _doc(db, patient_id, tmp_path, "checkin")
-    obs = db.execute(
-        select(Observation).where(Observation.patient_id == patient_id)
-    ).scalars().first()
+    obs = (
+        db.execute(select(Observation).where(Observation.patient_id == patient_id))
+        .scalars()
+        .first()
+    )
     assert obs is not None
     run_id = _start(db, patient_id, doctor, doc.id, observation_ids=(obs.id,))
     result = _gate(engine, doctor, run_id, tmp_path)
