@@ -403,7 +403,9 @@ class AuditEvent(Base):
     patient_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     #: Column exists for P5 runs; the foreign key is added when ``workflow_run``
     #: is created (additive migration), so no dangling reference is declared now.
-    workflow_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    workflow_run_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("workflow_run.id", ondelete="RESTRICT"), nullable=True
+    )
     subject_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     subject_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     outcome: Mapped[str] = mapped_column(String(12), nullable=False)
@@ -778,6 +780,129 @@ class VerificationIssue(Base):
         return f"VerificationIssue(issue_type={self.issue_type!r})"
 
 
+# =============================================================================
+# P5-F0 — persisted run identity and immutable doctor-selected source manifest
+# =============================================================================
+# CH-01 authorizes this *foundation*, not a LangGraph run, real VI gate, DR
+# evaluation or runtime policy activation. Every run starts queued.
+
+
+class WorkflowRun(Base):
+    """Durable parent for later graph runs; app SQLite owns run status."""
+
+    __tablename__ = "workflow_run"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'needs_verification', "
+            "'awaiting_decision', 'finalizing', 'completed', "
+            "'failed_retryable', 'failed_terminal')",
+            name="status_allowed",
+        ),
+        CheckConstraint("length(idempotency_key) = 64", name="idem_sha_length"),
+        CheckConstraint("mapping_version LIKE 'map-%.%.%'", name="mapping_version_shape"),
+        Index("ix_run_patient", "patient_id", "started_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    patient_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("patient.id", ondelete="RESTRICT"), nullable=False
+    )
+    doctor_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("user.id", ondelete="RESTRICT"), nullable=False
+    )
+    workflow_version: Mapped[str] = mapped_column(String(12), nullable=False)
+    state_schema_version: Mapped[str] = mapped_column(String(12), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(24), nullable=False)
+    as_of_utc: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="queued", server_default="queued"
+    )
+    current_node: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    halt_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    retry_counts: Mapped[str] = mapped_column(
+        String(500), nullable=False, default="{}", server_default="{}"
+    )
+    mapping_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    checkpoint_ref: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    started_at: Mapped[str] = mapped_column(String(20), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(20), nullable=False)
+    ended_at: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+
+class RunSelectedDocument(Base):
+    """Run-selected document and source hash snapshot (not glyph attestation)."""
+
+    __tablename__ = "run_selected_document"
+    __table_args__ = (
+        UniqueConstraint("workflow_run_id", "document_id", name="ux_run_selected_document"),
+        CheckConstraint("length(source_sha256) = 64", name="source_sha_length"),
+        Index("ix_selected_document_run", "workflow_run_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    workflow_run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("workflow_run.id", ondelete="RESTRICT"), nullable=False
+    )
+    document_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("document.id", ondelete="RESTRICT"), nullable=False
+    )
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_status: Mapped[str] = mapped_column(String(24), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
+class RunSelectedObservation(Base):
+    """Run-selected stored observation, preserving its trust and source identity."""
+
+    __tablename__ = "run_selected_observation"
+    __table_args__ = (
+        UniqueConstraint("workflow_run_id", "observation_id", name="ux_run_selected_observation"),
+        Index("ix_selected_observation_run", "workflow_run_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    workflow_run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("workflow_run.id", ondelete="RESTRICT"), nullable=False
+    )
+    observation_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("observation.id", ondelete="RESTRICT"), nullable=False
+    )
+    observation_created_at: Mapped[str] = mapped_column(String(20), nullable=False)
+    trust_level: Mapped[str] = mapped_column(String(28), nullable=False)
+    source_fact_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
+class RunSourceOmission(Base):
+    """Durable doctor-authored omission; original VI-002 is never modified."""
+
+    __tablename__ = "run_source_omission"
+    __table_args__ = (
+        UniqueConstraint("workflow_run_id", "document_id", name="ux_run_source_omission"),
+        CheckConstraint("reason_code = 'selected_separate_recovery_source'", name="reason_allowed"),
+        CheckConstraint("length(source_sha256) = 64", name="source_sha_length"),
+        Index("ix_run_omission_run", "workflow_run_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    workflow_run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("workflow_run.id", ondelete="RESTRICT"), nullable=False
+    )
+    document_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("document.id", ondelete="RESTRICT"), nullable=False
+    )
+    vi002_issue_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("verification_issue.id", ondelete="RESTRICT"), nullable=False
+    )
+    doctor_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("user.id", ondelete="RESTRICT"), nullable=False
+    )
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
 __all__ = [
     "AuditEvent",
     "CheckinIdempotency",
@@ -789,9 +914,13 @@ __all__ = [
     "FactVerification",
     "Observation",
     "Patient",
+    "RunSelectedDocument",
+    "RunSelectedObservation",
+    "RunSourceOmission",
     "SchemaMeta",
     "User",
     "UserSession",
     "VerificationIssue",
+    "WorkflowRun",
     "new_uuid",
 ]

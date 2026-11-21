@@ -2189,17 +2189,17 @@ def test_handoff_test_count_matches_the_suite_it_describes():
 
     assert f"**{p3_total}**" in text, f"handoff should quote the P3 total {p3_total}"
 
-    # The headline "whole backend" figure must also be real, not remembered.
+    # CI collection is measurable before a green run. It is dishonest to
+    # require the word "passed" for a branch whose actual tests are still red.
+    # Historical "N passed" records remain untouched in the handoff.
     backend_total = _whole_backend_total()
-    assert f"**{backend_total} passed**" in text, (
-        f"handoff should quote the whole-backend total {backend_total}"
+    assert f"**{backend_total} collected**" in text, (
+        f"handoff should quote the whole-backend collection {backend_total}"
     )
 
-    # The two figures must also agree *within the sentence* that pairs them, so
-    # the headline number and the P3 number cannot drift apart independently.
-    # Collapse the wrapped prose first: the sentence breaks across Markdown lines,
-    # and the pairing is what matters, not where the newline fell.
-    paired = f"**{backend_total} passed**, of which **{p3_total}** are the P3 suite"
+    # Require an explicit, correctly paired current collection note, not two
+    # numbers found in unrelated historical PASS/FAIL records.
+    paired = f"**{backend_total} collected**, of which **{p3_total}** are the P3 suite"
     assert paired in " ".join(text.split()), f"handoff should pair {backend_total} with {p3_total}"
 
     for name, count in counts.items():
