@@ -39,7 +39,10 @@ P2_TABLES = {
     "session",
     "user",
 }
-HEAD_REVISION = "0005_p3_ocr_provenance"
+# Keep the historical P3 schema gate pinned to its own revision.
+P3_STAGE1_REVISION = "0005_p3_ocr_provenance"
+# Migration head advances for the owner-approved P5-F0 foundation.
+HEAD_REVISION = "0006_p5_run_foundation"
 P4_REVISION = "0004_p3_rejection_recovery"
 P2_REVISION = "0002_p2_patient_domain"
 P1_REVISION = "0001_p1_baseline"
@@ -55,6 +58,12 @@ P3_TABLES = {
     "extracted_fact",
     "fact_verification",
     "verification_issue",
+}
+P5_F0_TABLES = {
+    "workflow_run",
+    "run_selected_document",
+    "run_selected_observation",
+    "run_source_omission",
 }
 
 
@@ -110,12 +119,12 @@ def test_0003_creates_exactly_the_p3_allowlist(tmp_path: Path) -> None:
     still fails this assertion.
     """
     config, url = _config(tmp_path)
-    command.upgrade(config, HEAD_REVISION)
+    command.upgrade(config, P3_STAGE1_REVISION)
 
     engine = create_db_engine(url)
     try:
         assert _tables(engine) == P1_TABLES | P2_TABLES | P3_TABLES
-        assert _revision(engine) == HEAD_REVISION
+        assert _revision(engine) == P3_STAGE1_REVISION
         assert _fk_violations(engine) == []
 
         observation_columns = {
@@ -147,7 +156,7 @@ def test_0003_downgrade_preserves_p2_rows(tmp_path: Path) -> None:
     and nullable, so existing observations survive with ``source_fact_id`` NULL.
     """
     config, url = _config(tmp_path)
-    command.upgrade(config, HEAD_REVISION)
+    command.upgrade(config, P3_STAGE1_REVISION)
 
     engine = create_db_engine(url)
     try:
@@ -226,9 +235,13 @@ def test_full_round_trip_to_base_and_back(tmp_path: Path) -> None:
     command.upgrade(config, "head")
     engine = create_db_engine(url)
     try:
-        assert _tables(engine) == P1_TABLES | P2_TABLES | P3_TABLES
+        assert _tables(engine) == P1_TABLES | P2_TABLES | P3_TABLES | P5_F0_TABLES
         assert _revision(engine) == HEAD_REVISION
         assert _fk_violations(engine) == []
+        run_fk_targets = {
+            fk["referred_table"] for fk in inspect(engine).get_foreign_keys("run_selected_document")
+        }
+        assert run_fk_targets == {"workflow_run", "document"}
     finally:
         engine.dispose()
 
@@ -244,9 +257,13 @@ def test_p1_to_head_to_p1_to_head_is_stable(tmp_path: Path) -> None:
 
     engine = create_db_engine(url)
     try:
-        assert _tables(engine) == P1_TABLES | P2_TABLES | P3_TABLES
+        assert _tables(engine) == P1_TABLES | P2_TABLES | P3_TABLES | P5_F0_TABLES
         assert _revision(engine) == HEAD_REVISION
         assert _fk_violations(engine) == []
+        run_fk_targets = {
+            fk["referred_table"] for fk in inspect(engine).get_foreign_keys("run_selected_document")
+        }
+        assert run_fk_targets == {"workflow_run", "document"}
     finally:
         engine.dispose()
 
