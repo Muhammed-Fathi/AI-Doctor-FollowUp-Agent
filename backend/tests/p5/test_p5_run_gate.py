@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, datetime
-from pathlib import Path
 import subprocess
 import sys
-
-from app.core.paths import REPO_ROOT
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from alembic import command
@@ -18,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.core.enums import Role
 from app.core.errors import ApiError
+from app.core.paths import REPO_ROOT
 from app.core.policies import Principal
 from app.db.models import (
     Document,
