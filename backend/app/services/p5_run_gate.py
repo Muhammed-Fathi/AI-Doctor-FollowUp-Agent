@@ -454,7 +454,10 @@ def _evaluate_locked(
                     if pending:
                         recorded.add(
                             _issue(
-                                "VI-002", doc.id, issue.reason_code, pending,
+                                "VI-002",
+                                doc.id,
+                                issue.reason_code,
+                                pending,
                                 count=len(pending),
                             )
                         )
