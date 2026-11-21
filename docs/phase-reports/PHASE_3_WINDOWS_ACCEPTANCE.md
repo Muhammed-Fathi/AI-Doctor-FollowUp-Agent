@@ -984,3 +984,46 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 > independently measure and pass; correct here append-only if wrong. The
 > historical P3 Windows/OCR results, P3 test code, baseline and
 > GOLD-EX-11=FAIL / NOT PROVEN remain completely unchanged.
+
+
+> **P4 R2-A / C-35A / C-37A provisional test collection checkpoint (2026-11-19).**
+> The owner approved **internal-only** scoped evidence inspection and explicit
+> current/history comparison after merging PR #25. Base suite had **997 backend
+> / 443 P3** cases. Two new P4 test modules define 18 test functions including
+> parametrization for an expected **26** new collected cases: provisional
+> **1023 backend / 443 P3**. Conditional handoff test-count token:
+> **1023 passed**, of which **443** are the P3 suite. This is an **unverified
+> collection estimate, not an assertion that 1023 tests passed**. Exact-head
+> CI must measure the actual count and correct this append-only if wrong.
+> No P3 test/executable/scanner/historical Windows decision changed.
+> Real OCR GOLD-EX-11 remains **FAIL / NOT PROVEN**.
+
+
+> **P4 R2-A measured backend collection correction (2026-11-19; append-only).**
+> Exact-head [CI #44522832450](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44522832450)
+> at `5f812857c2c6490292d747efbe56e98c964c5e24` measured
+> **1025 backend collected cases / 443 P3**, not the provisional
+> 1023. Updated conditional collection integrity token **1025 passed**,
+> of which **443** are P3 (token is **NOT** evidence that 1025 tests passed;
+> it is a pairing assertion for the existing handoff check).
+> Three *actual* reported failures were: this outdated estimate,
+> an incorrect exclusion-reason expectation, and a test helper query that
+> autoflushed a dirty row before the preflight was called. The test helper
+> now pins patient ID before editing, preserving the dirty-session guard.
+> The real expected exclusion reason for a pending-source document is
+> `verified_lineage_unavailable`; it must not be relabeled as a cleared source.
+> All tests must be rerun on a new exact head. No P3 executable, scanner,
+> historic owner result or real OCR GOLD-EX-11 outcome was changed.
+
+
+> **P4 R2-A suite-count pairing clarification (2026-11-19, append-only).**
+> [Exact-head CI #44523738265](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44523738265)
+> collected **1025** backend tests, including **443** tests from the P3 suite.
+> The existing P3 handoff integrity assertion requires this exact *conditional*
+> collection-pairing string: **1025 passed**, of which **443** are the P3 suite.
+> **This is a collection-count token ONLY, not a statement that 1025 tests
+> actually passed.** On the cited run, backend test execution had a single
+> failure: the historical handoff pairing guard was expecting this sentence.
+> The new P4 behavior tests reported no failures. All checks must rerun on the
+> following exact head and pass before any owner merge. No test was disabled,
+> no old P3 claim was overwritten, and real OCR GOLD-EX-11 stays FAIL / NOT PROVEN.
