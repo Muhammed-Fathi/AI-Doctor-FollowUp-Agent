@@ -13,13 +13,12 @@ Usage::
 ``--state`` (default ``head``):
 
 ``head``
-    revision ``0006_p5_run_foundation``; **exactly** the historical P1/P2/P3
-    schema plus the four authorized P5-F0 tables (``workflow_run`` and three
-    immutable selected-source tables). All P3 checks below remain enforced,
-    including provenance columns/indexes, the doctor-only verification trigger,
-    the document recovery self-FK, and empty ``PRAGMA foreign_key_check``.
-    P5-F0 FKs, run identity uniqueness, manifest uniqueness, expected indexes
-    and UPDATE/DELETE immutability triggers are checked in addition.
+    revision ``0007_p5_run_gate``; exact P1/P2/P3 and F0 objects PLUS
+    exactly two F1 gate-evidence tables. All historic P3/F0 protections
+    remain, with F1 FKs, indexes, unique keys and immutability guards.
+``p5_f0``
+    revision ``0006_p5_run_foundation``; exact F0 tables and all earlier
+    assertions, excluding the 0007 F1 gate-evidence tables.
 ``p3_stage1``
     revision ``0005_p3_ocr_provenance``; exact original P1+P2+P3 Stage 1
     schema, all P3 provenance/recovery checks, and NO P5-F0 table.
@@ -68,7 +67,8 @@ DOCTOR_TRIGGER_NAME = "trg_fact_verification_doctor_only"
 #: Recovery objects owned by ``0004`` (``DATA_DICTIONARY.md`` §2.4, R21 §4.10).
 RECOVERY_COLUMN = "recovered_from_document_id"
 RECOVERY_INDEX = "ix_document_recovered_from"
-HEAD_REVISION = "0006_p5_run_foundation"
+HEAD_REVISION = "0007_p5_run_gate"
+P5_F0_REVISION = "0006_p5_run_foundation"
 P3_STAGE1_REVISION = "0005_p3_ocr_provenance"
 P4_REVISION = "0004_p3_rejection_recovery"
 P3_REVISION = "0003_p3_documents"
@@ -112,6 +112,20 @@ P5_F0_TABLES = {
     "run_selected_observation",
     "run_source_omission",
 }
+
+#: Exactly the two additional F1 evidence tables ratified for revision 0007.
+P5_F1_TABLES = {"run_gate_evaluation", "run_gate_blocker"}
+P5_F1_INDEXES = {"ix_gate_run", "ix_gate_blocker_gate"}
+P5_F1_FKS = {
+    ("run_gate_evaluation", "workflow_run_id", "workflow_run"),
+    ("run_gate_blocker", "gate_evaluation_id", "run_gate_evaluation"),
+    ("run_gate_blocker", "document_id", "document"),
+}
+P5_F1_UNIQUE_KEYS = {
+    ("run_gate_evaluation", ("idempotency_key",)),
+    ("run_gate_evaluation", ("workflow_run_id", "input_fingerprint_sha256", "gate_version")),
+}
+P5_F1_IMMUTABLE_TABLES = {"run_gate_evaluation", "run_gate_blocker"}
 
 #: Still-forbidden downstream P4/P5/P6 entities (never waived by CH-01).
 P4_PLUS_TABLES = {
@@ -163,7 +177,7 @@ P5_F0_UNIQUE_KEYS = {
     ("run_source_omission", ("workflow_run_id", "document_id")),
 }
 
-VALID_STATES = {"head", "p3_stage1", "p3_recovery", "p3", "p2", "p1", "base"}
+VALID_STATES = {"head", "p5_f0", "p3_stage1", "p3_recovery", "p3", "p2", "p1", "base"}
 
 
 def _parse_args(argv: list[str]) -> tuple[Path, str] | None:
@@ -184,6 +198,8 @@ def _parse_args(argv: list[str]) -> tuple[Path, str] | None:
 
 def _expected_tables(state: str) -> set[str]:
     if state == "head":
+        return P1_TABLES | P2_TABLES | P3_TABLES | {PAGE_TEXT_TABLE} | P5_F0_TABLES | P5_F1_TABLES
+    if state == "p5_f0":
         return P1_TABLES | P2_TABLES | P3_TABLES | {PAGE_TEXT_TABLE} | P5_F0_TABLES
     if state == "p3_stage1":
         return P1_TABLES | P2_TABLES | P3_TABLES | {PAGE_TEXT_TABLE}
@@ -199,6 +215,8 @@ def _expected_tables(state: str) -> set[str]:
 def _expected_revisions(state: str) -> list[str]:
     if state == "head":
         return [HEAD_REVISION]
+    if state == "p5_f0":
+        return [P5_F0_REVISION]
     if state == "p3_stage1":
         return [P3_STAGE1_REVISION]
     if state == "p3_recovery":
@@ -218,7 +236,7 @@ def main(argv: list[str]) -> int:
     if parsed is None:
         print(
             "usage: check_alembic_smoke.py <path-to-sqlite-db> "
-            "[--state head|p3_stage1|p3_recovery|p3|p2|p1|base]",
+            "[--state head|p5_f0|p3_stage1|p3_recovery|p3|p2|p1|base]",
             file=sys.stderr,
         )
         return 1
@@ -323,7 +341,7 @@ def main(argv: list[str]) -> int:
     # At ``head``/``p3``: the deferred P2 column, its unique index and the
     # doctor-only trigger must all exist. A "later-phase" table check alone
     # would not catch a P3 revision that forgot one of them.
-    if state in {"head", "p3_stage1", "p3_recovery", "p3"}:
+    if state in {"head", "p5_f0", "p3_stage1", "p3_recovery", "p3"}:
         if "source_fact_id" not in observation_columns:
             problems.append("observation.source_fact_id must exist after 0003")
         if "ux_obs_source_fact" not in observation_indexes:
@@ -339,7 +357,7 @@ def main(argv: list[str]) -> int:
         for row in document_foreign_keys
         if row[3] == RECOVERY_COLUMN and row[2] == "document" and row[6] == "RESTRICT"
     ]
-    if state in {"head", "p3_stage1", "p3_recovery"}:
+    if state in {"head", "p5_f0", "p3_stage1", "p3_recovery"}:
         if RECOVERY_COLUMN not in document_columns:
             problems.append(f"document.{RECOVERY_COLUMN} must exist after 0004")
         if RECOVERY_INDEX not in document_indexes:
@@ -357,7 +375,7 @@ def main(argv: list[str]) -> int:
             problems.append(f"the {RECOVERY_COLUMN} self-FK must not exist below 0004")
 
     # --- 0005 Stage 1 OCR provenance ----------------------------------------
-    if state in {"head", "p3_stage1"}:
+    if state in {"head", "p5_f0", "p3_stage1"}:
         missing_fv_cols = FACT_VERIFICATION_STAGE1_COLUMNS - fact_verification_columns
         if missing_fv_cols:
             problems.append(f"fact_verification missing Stage 1 columns: {sorted(missing_fv_cols)}")
@@ -374,7 +392,7 @@ def main(argv: list[str]) -> int:
     # --- 0006 CH-01 P5-F0 durable identity/manifest (owner scoped) ---------
     # This *adds* to, never replaces, the original strict P3 assertions.
     # Old states reject F0 tables through the exact _expected_tables comparison.
-    if state == "head":
+    if state in {"head", "p5_f0"}:
         with sqlite3.connect(database) as connection:
             all_indexes = {
                 row[0]
@@ -413,6 +431,67 @@ def main(argv: list[str]) -> int:
                     if name not in triggers:
                         problems.append(f"P5-F0 missing immutable trigger {name}")
 
+    # --- 0007 P5-F1 immutable run-gate evidence (no graph execution) ------
+    if state == "head":
+        with sqlite3.connect(database) as connection:
+            all_indexes = {
+                row[0]
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index'")
+            }
+            missing_indexes = P5_F1_INDEXES - all_indexes
+            if missing_indexes:
+                problems.append(f"P5-F1 missing required indexes: {sorted(missing_indexes)}")
+
+            foreign_keys = set()
+            for table in sorted(P5_F1_TABLES):
+                for fk in connection.execute(f"PRAGMA foreign_key_list('{table}')"):
+                    key = (table, fk[3], fk[2])
+                    foreign_keys.add(key)
+                    if key in P5_F1_FKS and fk[6] != "RESTRICT":
+                        problems.append(f"P5-F1 {table}.{fk[3]} must use ON DELETE RESTRICT")
+            missing_fks = P5_F1_FKS - foreign_keys
+            if missing_fks:
+                problems.append(f"P5-F1 missing real foreign keys: {sorted(missing_fks)}")
+
+            for table, expected_columns in sorted(P5_F1_UNIQUE_KEYS):
+                found = set()
+                for index_row in connection.execute(f"PRAGMA index_list('{table}')"):
+                    if not index_row[2]:
+                        continue
+                    index_name = index_row[1]
+                    found.add(
+                        tuple(
+                            item[2]
+                            for item in connection.execute(f"PRAGMA index_info('{index_name}')")
+                        )
+                    )
+                if expected_columns not in found:
+                    problems.append(f"P5-F1 {table} missing unique key {expected_columns}")
+
+            for table in sorted(P5_F1_IMMUTABLE_TABLES):
+                for operation in ("update", "delete"):
+                    name = f"trg_{table}_{operation}_immutable"
+                    if name not in triggers:
+                        problems.append(f"P5-F1 missing immutable trigger {name}")
+
+            table_ddl = {
+                row[0]: row[1] or ""
+                for row in connection.execute(
+                    "SELECT name, sql FROM sqlite_master "
+                    "WHERE type='table' AND name IN ('run_gate_evaluation', 'run_gate_blocker')"
+                )
+            }
+            for name in (
+                "decision_allowed",
+                "fingerprint_sha_length",
+                "idem_sha_length",
+                "block_count",
+            ):
+                if name not in table_ddl.get("run_gate_evaluation", ""):
+                    problems.append(f"P5-F1 missing run_gate_evaluation CHECK {name}")
+            if "issue_type_allowed" not in table_ddl.get("run_gate_blocker", ""):
+                problems.append("P5-F1 missing closed run_gate_blocker issue_type CHECK")
+
     # At ``p2`` the exact P2 schema must be intact: the P3 column and trigger
     # must be gone, which is what ``0003 -> 0002`` has to leave behind.
     if state in {"p2", "p1", "base"}:
@@ -425,7 +504,7 @@ def main(argv: list[str]) -> int:
     if revisions != expected_revisions:
         problems.append(f"expected alembic_version {expected_revisions}, found {revisions}")
 
-    if state in {"head", "p3_stage1"}:
+    if state in {"head", "p5_f0", "p3_stage1"}:
         references_patient = any(row[2] == "patient" for row in user_foreign_keys)
         if not references_patient:
             problems.append("user.patient_id foreign key to patient is missing")
