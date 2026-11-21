@@ -54,31 +54,39 @@ def db(engine):
 
 
 def _patient(db: Session, reference: str = "DEMO-A-001") -> Patient:
-    return db.execute(
-        select(Patient).where(Patient.external_ref == reference)
-    ).scalar_one()
+    return db.execute(select(Patient).where(Patient.external_ref == reference)).scalar_one()
 
 
 def _doctor(db: Session, username: str = "demo_doctor", suffix: int = 1) -> Principal:
     user = db.execute(select(User).where(User.username == username)).scalar_one()
     session_id = f"dddddddd-dddd-4ddd-8ddd-{suffix:012d}"
     if db.get(UserSession, session_id) is None:
-        db.add(UserSession(
-            id=session_id,
-            user_id=user.id,
-            token_sha256=sha256(f"p5-f0-synthetic-{suffix}".encode()).hexdigest(),
-            created_at="2026-11-01T00:00:00Z",
-            expires_at="2026-12-01T00:00:00Z",
-        ))
+        db.add(
+            UserSession(
+                id=session_id,
+                user_id=user.id,
+                token_sha256=sha256(f"p5-f0-synthetic-{suffix}".encode()).hexdigest(),
+                created_at="2026-11-01T00:00:00Z",
+                expires_at="2026-12-01T00:00:00Z",
+            )
+        )
         db.commit()
     return Principal(
-        user_id=user.id, username=user.username, display_name=user.display_name,
-        role=Role(user.role), patient_id=user.patient_id, session_id=session_id,
+        user_id=user.id,
+        username=user.username,
+        display_name=user.display_name,
+        role=Role(user.role),
+        patient_id=user.patient_id,
+        session_id=session_id,
     )
 
 
 def _document(
-    db: Session, owner: Patient, label: str, *, parent: Document | None = None,
+    db: Session,
+    owner: Patient,
+    label: str,
+    *,
+    parent: Document | None = None,
     terminal: bool = False,
 ) -> Document:
     doc = Document(
@@ -98,40 +106,64 @@ def _document(
     db.add(doc)
     db.flush()
     fact = ExtractedFact(
-        document_id=doc.id, patient_id=owner.id,
-        field_name="value", raw_text="105", normalized_value="105",
-        unit="mg/dL", page_index=0, char_start=0, char_end=3,
+        document_id=doc.id,
+        patient_id=owner.id,
+        field_name="value",
+        raw_text="105",
+        normalized_value="105",
+        unit="mg/dL",
+        page_index=0,
+        char_start=0,
+        char_end=3,
         verification_status="rejected" if terminal else "verified",
         created_at=AT,
     )
     db.add(fact)
     db.flush()
-    db.add(FactVerification(
-        fact_id=fact.id, decision="rejected" if terminal else "verified",
-        verified_by_user_id=owner.assigned_doctor_id, decided_at=AT,
-    ))
+    db.add(
+        FactVerification(
+            fact_id=fact.id,
+            decision="rejected" if terminal else "verified",
+            verified_by_user_id=owner.assigned_doctor_id,
+            decided_at=AT,
+        )
+    )
     if terminal:
-        db.add(VerificationIssue(
-            patient_id=owner.id, document_id=doc.id,
-            issue_type="VI-002", reason_code="fact_unverified",
-            fact_ids=f'["{fact.id}"]', blocking=1,
-            message="Synthetic source rejected.", state="open", created_at=AT,
-        ))
+        db.add(
+            VerificationIssue(
+                patient_id=owner.id,
+                document_id=doc.id,
+                issue_type="VI-002",
+                reason_code="fact_unverified",
+                fact_ids=f'["{fact.id}"]',
+                blocking=1,
+                message="Synthetic source rejected.",
+                state="open",
+                created_at=AT,
+            )
+        )
     db.commit()
     return doc
 
 
 def _start(
     db: Session,
-    patient: Patient, doctor: Principal, document_ids: tuple[str, ...],
+    patient: Patient,
+    doctor: Principal,
+    document_ids: tuple[str, ...],
     observation_ids: tuple[str, ...] = (),
     omissions: tuple[CandidateDoctorOmission, ...] = (),
     request_id: str = "f0-start-001",
 ):
     return create_run_foundation(
-        db, principal=doctor, patient_id=patient.id,
-        document_ids=document_ids, observation_ids=observation_ids,
-        omissions=omissions, client_request_id=request_id, as_of_utc=CLOCK,
+        db,
+        principal=doctor,
+        patient_id=patient.id,
+        document_ids=document_ids,
+        observation_ids=observation_ids,
+        omissions=omissions,
+        client_request_id=request_id,
+        as_of_utc=CLOCK,
     )
 
 
@@ -142,9 +174,9 @@ def _count(db: Session, model: type) -> int:
 def test_run_foundation_stores_real_identity_scoped_manifest_and_audit(db: Session):
     owner, doctor = _patient(db), _doctor(db)
     doc = _document(db, owner, "standalone")
-    observation = db.execute(
-        select(Observation).where(Observation.patient_id == owner.id)
-    ).scalars().first()
+    observation = (
+        db.execute(select(Observation).where(Observation.patient_id == owner.id)).scalars().first()
+    )
     assert observation is not None
 
     result = _start(db, owner, doctor, (doc.id,), (observation.id,))
@@ -186,19 +218,20 @@ def test_identical_request_replays_same_run_without_duplicate_rows(db: Session):
     assert second.run_id == first.run_id and second.replayed is True
     assert _count(db, WorkflowRun) == 1
     assert _count(db, RunSelectedDocument) == 1
-    assert sum(
-        event.event_type == "workflow.run.started"
-        for event in db.execute(select(AuditEvent)).scalars()
-    ) == 1
+    assert (
+        sum(
+            event.event_type == "workflow.run.started"
+            for event in db.execute(select(AuditEvent)).scalars()
+        )
+        == 1
+    )
 
 
 def test_recovered_selection_is_durable_but_does_not_resolve_old_vi(db: Session):
     owner, doctor = _patient(db), _doctor(db)
     original = _document(db, owner, "failed-original", terminal=True)
     recovered = _document(db, owner, "separate-recovery", parent=original)
-    omission = CandidateDoctorOmission(
-        terminal_document_id=original.id, reason_code=REASON
-    )
+    omission = CandidateDoctorOmission(terminal_document_id=original.id, reason_code=REASON)
     result = _start(db, owner, doctor, (recovered.id,), omissions=(omission,))
     db.commit()
     stored = db.execute(select(RunSourceOmission)).scalar_one()
@@ -212,15 +245,15 @@ def test_recovered_selection_is_durable_but_does_not_resolve_old_vi(db: Session)
 
 
 @pytest.mark.parametrize("selection", ["original", "both", "no_omission"])
-def test_terminal_original_and_unapproved_omissions_never_start_run(
-    db: Session, selection: str
-):
+def test_terminal_original_and_unapproved_omissions_never_start_run(db: Session, selection: str):
     owner, doctor = _patient(db), _doctor(db)
     original = _document(db, owner, "blocked-original", terminal=True)
     recovered = _document(db, owner, "blocked-recovery", parent=original)
     docs = (
-        (original.id,) if selection == "original"
-        else (original.id, recovered.id) if selection == "both"
+        (original.id,)
+        if selection == "original"
+        else (original.id, recovered.id)
+        if selection == "both"
         else (recovered.id,)
     )
     with pytest.raises(ApiError):
@@ -250,9 +283,9 @@ def test_cross_patient_document_denied(db: Session):
 def test_cross_patient_observation_denied(db: Session):
     owner, doctor = _patient(db), _doctor(db)
     doc = _document(db, owner, "obs-scope")
-    foreign_obs = db.execute(
-        select(Observation).where(Observation.patient_id != owner.id)
-    ).scalars().first()
+    foreign_obs = (
+        db.execute(select(Observation).where(Observation.patient_id != owner.id)).scalars().first()
+    )
     assert foreign_obs is not None
     with pytest.raises(ApiError):
         _start(db, owner, doctor, (doc.id,), (foreign_obs.id,))
@@ -303,18 +336,20 @@ def test_real_foreign_keys_enforced_for_manifest(db: Session):
     _start(db, owner, doctor, (doc.id,))
     db.commit()
     with pytest.raises(IntegrityError):
-        db.add(RunSelectedDocument(
-            workflow_run_id="00000000-0000-4000-8000-000000000000",
-            document_id=doc.id, source_sha256=doc.sha256,
-            source_status="verified", created_at=AT,
-        ))
+        db.add(
+            RunSelectedDocument(
+                workflow_run_id="00000000-0000-4000-8000-000000000000",
+                document_id=doc.id,
+                source_sha256=doc.sha256,
+                source_status="verified",
+                created_at=AT,
+            )
+        )
         db.flush()
     db.rollback()
 
 
-def test_p5_migration_is_additive_and_reversible_on_empty_schema(
-    alembic_config, sqlite_url
-):
+def test_p5_migration_is_additive_and_reversible_on_empty_schema(alembic_config, sqlite_url):
     command.upgrade(alembic_config, "head")
     from app.db.session import create_db_engine
 
@@ -322,8 +357,10 @@ def test_p5_migration_is_additive_and_reversible_on_empty_schema(
     try:
         tables = set(inspect(engine).get_table_names())
         assert {
-            "workflow_run", "run_selected_document",
-            "run_selected_observation", "run_source_omission"
+            "workflow_run",
+            "run_selected_document",
+            "run_selected_observation",
+            "run_source_omission",
         } <= tables
         assert any(
             fk["referred_table"] == "workflow_run"
