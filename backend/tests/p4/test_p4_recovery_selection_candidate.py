@@ -446,10 +446,8 @@ def test_unlinked_selected_verified_document_is_only_offline_candidate(
 
 def test_missing_recovery_ancestor_fails_neutrally(db: Session, context) -> None:
     owner, doctor = context
-    root = report(db, owner, "missing-root", terminal=True)
-    child = report(db, owner, "missing-child", parent=root)
-    # A dangling foreign key cannot exist in ordinary DB writes; use another
-    # patient's valid record in the scope test instead of disabling FK checks.
+    # A dangling foreign key cannot exist in ordinary DB writes; selecting
+    # a missing identifier is refused using the same neutral 404 as a foreign ID.
     with pytest.raises(ApiError) as denied:
         inspect_offline_recovery_selection(
             db, principal=doctor, patient_id=owner.id,
