@@ -1244,3 +1244,12 @@ At owner-merged PR #26 `main@1aed4595f8d9a90ece6af0659513e2bdbc98b448`, postmerg
 A *new documentation-only proposal* in `docs/phase-reports/P4_R3_OQR01_R21_RECOVERY_SELECTION_DECISION_20261121.md` presents two **independent pending** owner decisions: **R3-A** pins the exact arbitrary synthetic `demo-policy-1.1.0` parameters for later offline reference without runtime activation; **R21-S1** proposes a doctor-authored, auditable future run-selected document set that does not erase a failed original's open `VI-002` or trust a patient-declared recovery link. Alternative R3-B/C and R21-S2/S3 are documented. **Neither proposal is approved by merging a report.**
 
 Next code PRs, if separately authorized, must be independently bounded: (A) fixture-only versioned demo-policy artifact and strict validation; (B) offline recovery-selection fail-closed matrix. No present run-gate, P5 implementation, workflow_run/review-item persistence, VI auto-clear or rule activation. P4 **IN_REVIEW**, P3 real OCR `GOLD-EX-11=FAIL / NOT PROVEN`. NOT FOR CLINICAL USE.
+
+
+## P4 owner decision R3-A + R21-S1 (2026-11-21)
+
+After owner-merged [PR #27](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/27) at `main@35c680b59d7aa2e7fb951d1bdd6650af5d839f01`, the owner explicitly said: **"تم دمج PR #27، وموافق على R3-A وR21-S1"**.
+
+**R3-A APPROVED WITH STRICT SCOPE:** exact synthetic demo-only `demo-policy-1.1.0` reference numbers, clock, enabled VI catalogue and offline DR IDs; see `docs/phase-reports/P4_R3A_PINNED_DEMO_POLICY_REFERENCE_20261121.md`. No runtime policy installation, rule-tool exposure, medical claim or run clearance. New YAML/test-only fixture remains a code PR until owner acceptance.
+
+**R21-S1 APPROVED AS FUTURE SOURCE-SELECTION SEMANTICS:** original terminal rejected source `VI-002` remains open, inclusion in selected run set must HALT, separate recovered selection needs explicit doctor-authored/audited omission and full run re-verification later. The patient-created recovery link does not prove equivalence. A subsequent offline P4 testing PR may model these rules but **cannot** implement P5 run identity or return `run_gate_completed=True`. R1-A deferred persistence is unchanged. P4 **IN_REVIEW**, original P3 GOLD-EX-11 real OCR **FAIL / NOT PROVEN**.

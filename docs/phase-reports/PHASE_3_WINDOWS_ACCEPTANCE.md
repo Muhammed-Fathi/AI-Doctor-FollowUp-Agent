@@ -1027,3 +1027,16 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 > The new P4 behavior tests reported no failures. All checks must rerun on the
 > following exact head and pass before any owner merge. No test was disabled,
 > no old P3 claim was overwritten, and real OCR GOLD-EX-11 stays FAIL / NOT PROVEN.
+
+
+> **P4 R3-A owner-pinned synthetic reference provisional count (2026-11-21, append-only).**
+> After the owner merged PR #27 and explicitly approved R3-A and R21-S1,
+> a new fixture-only policy YAML and a reference test module add **26 expected
+> collected test cases** to the previously CI-measured **1025** backend cases,
+> unchanged **443** P3 cases. Exact conditional collection pairing token
+> for the existing P3 handoff integrity test:
+> **1051 passed**, of which **443** are the P3 suite.
+> This **1051 is a provisional collection-count token, NOT evidence of actual
+> tests passing**. Confirm/reconcile from exact-head GitHub Actions; no historical
+> P3 test count, P3 executable, scanner control or real Windows/OCR result is edited.
+> Owner Windows gate is still required before merging the code PR.
