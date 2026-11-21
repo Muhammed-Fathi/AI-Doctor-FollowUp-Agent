@@ -309,7 +309,7 @@ def _evaluate_locked(
         if doc.document_patient_ref != patient.external_ref:
             recorded.add(_issue("VI-004", doc.id, "wrong_patient_document"))
         if doc.extraction_status != "verified" or doc.failure_code is not None:
-            recorded.add(_issue("VI-002", doc.id, "document_not_verified"))
+            unavailable = "selected_document_not_verified"
         if sha is None:
             continue
 
@@ -381,7 +381,7 @@ def _evaluate_locked(
             unavailable = "invalid_quality_flags"
 
         if not active:
-            recorded.add(_issue("VI-002", doc.id, "document_has_no_active_facts"))
+            unavailable = "selected_document_has_no_active_facts"
         measurement_values = [f for f in active if f.field_name == "value"]
         if len(measurement_values) > 1:
             recorded.add(
@@ -450,7 +450,17 @@ def _evaluate_locked(
                 [issue.id, issue.document_id, issue.issue_type, issue.reason_code, issue.state]
             )
             if issue.state == "open":
-                if issue.issue_type in VI_TYPES:
+                if issue.issue_type == "VI-002":
+                    if pending:
+                        recorded.add(
+                            _issue(
+                                "VI-002", doc.id, issue.reason_code, pending,
+                                count=len(pending),
+                            )
+                        )
+                    else:
+                        unavailable = "unresolved_p3_vi002"
+                elif issue.issue_type in VI_TYPES:
                     recorded.add(_issue(issue.issue_type, doc.id, issue.reason_code))
                 else:
                     unavailable = "unsupported_open_issue_type"
@@ -460,8 +470,8 @@ def _evaluate_locked(
             patient_id=patient.id,
             document_ids=(doc.id,),
         )
-        if not preflight.candidate_documents_clear:
-            recorded.add(_issue("VI-002", doc.id, "selected_document_preflight_blocked"))
+        if not preflight.candidate_documents_clear and not pending:
+            unavailable = "selected_document_preflight_unproven"
 
     # The observation history contributes to conflict detection and fingerprint,
     # including unselected same-day records: no new conflict can be ignored.
@@ -640,7 +650,20 @@ def _evaluate_locked(
         as_of_utc=at,
     )
     if not inspection.offline_selection_shape_valid:
-        unavailable = "selected_recovery_lineage_changed"
+        # The R21 shape inspector also reports document-level pending facts.
+        # Those are known VI-002 HALT outcomes; do not mislabel them as a
+        # broken recovery lineage. Every unrelated lineage defect still
+        # invalidates the entire snapshot.
+        vi_only = {
+            "active_fact_unverified",
+            "open_verification_issue",
+            "document_not_verified",
+            "fact_decision_unproven",
+            "document_has_no_facts",
+            "document_identity_unresolved",
+        }
+        if any(block.reason_code not in vi_only for block in inspection.blockers):
+            unavailable = "selected_recovery_lineage_changed"
 
     # F1 cannot atomically pin disk bytes with SQLite, but rechecking here
     # catches a replacement before the commit; F2 must validate again.
