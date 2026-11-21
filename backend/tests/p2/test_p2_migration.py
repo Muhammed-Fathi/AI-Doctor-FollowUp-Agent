@@ -41,8 +41,9 @@ P2_TABLES = {
 }
 # Keep the historical P3 schema gate pinned to its own revision.
 P3_STAGE1_REVISION = "0005_p3_ocr_provenance"
-# Migration head advances for the owner-approved P5-F0 foundation.
-HEAD_REVISION = "0006_p5_run_foundation"
+# F0 is a pinned historical revision; head advances only to owner-ratified F1 0007.
+P5_F0_REVISION = "0006_p5_run_foundation"
+HEAD_REVISION = "0007_p5_run_gate"
 P4_REVISION = "0004_p3_rejection_recovery"
 P2_REVISION = "0002_p2_patient_domain"
 P1_REVISION = "0001_p1_baseline"
@@ -65,6 +66,7 @@ P5_F0_TABLES = {
     "run_selected_observation",
     "run_source_omission",
 }
+P5_F1_TABLES = {"run_gate_evaluation", "run_gate_blocker"}
 
 
 def _config(tmp_path: Path) -> tuple[Config, str]:
@@ -235,7 +237,7 @@ def test_full_round_trip_to_base_and_back(tmp_path: Path) -> None:
     command.upgrade(config, "head")
     engine = create_db_engine(url)
     try:
-        assert _tables(engine) == P1_TABLES | P2_TABLES | P3_TABLES | P5_F0_TABLES
+        assert _tables(engine) == P1_TABLES | P2_TABLES | P3_TABLES | P5_F0_TABLES | P5_F1_TABLES
         assert _revision(engine) == HEAD_REVISION
         assert _fk_violations(engine) == []
         run_fk_targets = {
@@ -257,7 +259,7 @@ def test_p1_to_head_to_p1_to_head_is_stable(tmp_path: Path) -> None:
 
     engine = create_db_engine(url)
     try:
-        assert _tables(engine) == P1_TABLES | P2_TABLES | P3_TABLES | P5_F0_TABLES
+        assert _tables(engine) == P1_TABLES | P2_TABLES | P3_TABLES | P5_F0_TABLES | P5_F1_TABLES
         assert _revision(engine) == HEAD_REVISION
         assert _fk_violations(engine) == []
         run_fk_targets = {

@@ -54,6 +54,9 @@ P5_F0_TABLES = {
     "run_source_omission",
 }
 
+#: Exactly the two F1 tables authorized by owner-ratified PR #32.
+P5_F1_TABLES = {"run_gate_evaluation", "run_gate_blocker"}
+
 #: Still-forbidden later-phase tables, including P4 review persistence and
 #: non-foundation P5 entities. Whitelisting F0 must not open this set.
 P4_PLUS_TABLES = {
@@ -108,7 +111,7 @@ def app_sources() -> list[Path]:
 
 
 def test_p2_tables_still_exist_and_no_later_phase_table_appears() -> None:
-    """Preserve P2/P3 exactly and admit only the owner-authorized F0 tables.
+    """Preserve P2/P3 exactly and admit only the owner-authorized F0/F1 tables.
 
     All post-F0 review, approval, graph and task tables remain forbidden, and
     no unrelated metadata table may silently join the schema.
@@ -118,7 +121,7 @@ def test_p2_tables_still_exist_and_no_later_phase_table_appears() -> None:
     assert tables >= P2_TABLES
     assert tables >= P3_TABLES
     assert tables.isdisjoint(P4_PLUS_TABLES)
-    assert tables == P2_TABLES | P3_TABLES | P5_F0_TABLES
+    assert tables == P2_TABLES | P3_TABLES | P5_F0_TABLES | P5_F1_TABLES
 
 
 def test_no_later_phase_module_exists() -> None:

@@ -903,6 +903,72 @@ class RunSourceOmission(Base):
     created_at: Mapped[str] = mapped_column(String(20), nullable=False)
 
 
+# =============================================================================
+# P5-F1 — immutable run-specific verification results; P3 issues stay untouched.
+# =============================================================================
+
+
+class RunGateEvaluation(Base):
+    """One evidence-fingerprinted F1 decision; never itself an execution token."""
+
+    __tablename__ = "run_gate_evaluation"
+    __table_args__ = (
+        CheckConstraint("decision IN ('proceed', 'halt', 'unavailable')", name="decision_allowed"),
+        CheckConstraint("length(input_fingerprint_sha256) = 64", name="fingerprint_sha_length"),
+        CheckConstraint("length(idempotency_key) = 64", name="idem_sha_length"),
+        CheckConstraint(
+            "blocking_fact_count >= 0 AND blocking_fact_count <= 40", name="block_count"
+        ),
+        UniqueConstraint(
+            "workflow_run_id",
+            "input_fingerprint_sha256",
+            "gate_version",
+            name="ux_gate_run_fingerprint_version",
+        ),
+        Index("ix_gate_run", "workflow_run_id", "evaluated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    workflow_run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("workflow_run.id", ondelete="RESTRICT"), nullable=False
+    )
+    gate_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    input_fingerprint_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    unavailable_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    blocking_fact_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    historical_excluded_vi002_ids: Mapped[str] = mapped_column(
+        String(2000), nullable=False, server_default="[]"
+    )
+    as_of_utc: Mapped[str] = mapped_column(String(20), nullable=False)
+    evaluated_at: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
+class RunGateBlocker(Base):
+    """Typed, immutable run-scoped VI evidence; never mutate P3 VerificationIssue."""
+
+    __tablename__ = "run_gate_blocker"
+    __table_args__ = (
+        CheckConstraint(
+            "issue_type IN ('VI-001','VI-002','VI-003','VI-004','VI-005','VI-006')",
+            name="issue_type_allowed",
+        ),
+        Index("ix_gate_blocker_gate", "gate_evaluation_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    gate_evaluation_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("run_gate_evaluation.id", ondelete="RESTRICT"), nullable=False
+    )
+    issue_type: Mapped[str] = mapped_column(String(8), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    document_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("document.id", ondelete="RESTRICT"), nullable=True
+    )
+    fact_ids: Mapped[str] = mapped_column(String(600), nullable=False, server_default="[]")
+
+
 __all__ = [
     "AuditEvent",
     "CheckinIdempotency",
@@ -914,6 +980,8 @@ __all__ = [
     "FactVerification",
     "Observation",
     "Patient",
+    "RunGateBlocker",
+    "RunGateEvaluation",
     "RunSelectedDocument",
     "RunSelectedObservation",
     "RunSourceOmission",
