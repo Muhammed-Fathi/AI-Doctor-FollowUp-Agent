@@ -1040,3 +1040,16 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 > tests passing**. Confirm/reconcile from exact-head GitHub Actions; no historical
 > P3 test count, P3 executable, scanner control or real Windows/OCR result is edited.
 > Owner Windows gate is still required before merging the code PR.
+
+
+> **P4 R21-S1 offline matrix provisional suite count (2026-11-21, append-only).**
+> Owner-merged PR #28 established backend **1051** collected cases with
+> unchanged **443** P3 cases. The new R21-S1 offline migrated-SQLite test module
+> contains 19 test functions, with **25** expected parametrized cases,
+> so the new expected collection is **1076** backend / **443** P3.
+> The existing P3 handoff guard requires an exact conditional *collection token*:
+> **1076 passed**, of which **443** are the P3 suite.
+> **This is NOT evidence that 1076 tests passed**; exact-head CI must independently
+> measure collected/executed results, and any mismatch must be corrected by
+> append-only note. No P3 executable, prior owner decision, historical OCR
+> failure, or quality gate was changed. Isolated Windows gate still required.

@@ -1,0 +1,36 @@
+# P4 R21-S1 — offline selected-document and recovery-lineage matrix
+
+**Status: IMPLEMENTATION UNDER OWNER REVIEW / NOT A RUN GATE.**  
+**Date:** 2026-11-21. [Issue #14](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/issues/14) **OPEN**.  
+**Base:** owner-merged [PR #28](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/28), `main@77538678a108bc0896b04713c2072e47b63a7550`. [Exact-main CI #44905949746](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44905949746) Backend + Frontend **COMPLETED / SUCCESS**.  
+**Owner approval evidence:** after merging PR #27, owner explicitly wrote **"تم دمج PR #27، وموافق على R3-A وR21-S1"**. R21-S1 authorizes future doctor-authored/audited source selection semantics plus P4 offline tests; it does not authorize a P5 run ID or a live decision.
+
+## Implementation scope and R21 invariants
+
+1. `backend/app/services/p4_recovery_selection_candidate.py` — **internal read-only** candidate checker using a server-derived typed `Principal`, persisted active/nonrevoked/unexpired `UserSession`, stored active assigned doctor and synthetic patient, capped explicit selected document IDs (≤8), capped same-patient recovery lineage (≤8 per selected source, ≤32 total), bounded persisted VI-002 history and existing `inspect_selected_document_verification` for selected source facts and identity. No client-supplied blocker count, new API, workflow run, live DR engine, database write, file mutation, source-byte OCR check or new policy.
+2. `backend/tests/p4/test_p4_recovery_selection_candidate.py` — deterministic migrated SQLite rejection/recovery fixtures and 19 declared test functions, four parametrized groups, **25 expected collected tests**. Cases: selected rejected original or both => HALT; recovery with missing unpersisted omission proposal => HALT; separate verified recovery with explicit **test-only proposal** retains original failed/Open VI-002; resolved/superseded/missing VI-002 => blocked, never silently clear; pending/failed/identity-mismatched recovery => blocked; missing doctor fact decision => blocked; two-generation recovery needs distinct ancestor omissions; unrelated proposal cannot justify exclusion; empty/duplicate/oversized ID selection; wrong-patient link and forged cross-patient source; self-cycle; stored doctor scope/session; dirty-session preflight; unlinked verified source stays non-evaluable. This is synthetic fixture testing, not a genuine doctor workflow.
+3. `docs/phase-reports/P4_R21S1_OFFLINE_RECOVERY_SOURCE_SELECTION_20261121.md` — report.
+4. `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md` — append-only conditional full backend test collection pairing (historical P3 tests/results untouched).
+5. `docs/phase-reports/PHASE_4_REPORT.md` — append-only checkpoint.
+6. `docs/roadmap/PHASE_PROGRESS.md` — append-only owner decision/implementation checkpoint.
+
+## Exact decision semantics
+
+- Original terminal document has `extraction_status=failed` and a recovery-eligible `failure_code` (e.g. `measurement_rejected`). Its original `VI-002` remains **open**, verified from the *stored* issue row in the test. The recovery link `recovered_from_document_id` is patient-declared only, not a source-equivalence attestation. An explicitly selected terminal original makes the candidate **blocked** whether or not a recovery exists or is also selected.
+- Selecting only a separately verified recovery **without** a corresponding omission *proposal* for the linked terminal original remains blocked. An offline `CandidateDoctorOmission` **is NOT stored, signed or authenticated as a doctor's real selection event**, even though the caller must be an assigned doctor principal. Any future selection manifest will require a durable doctor-authored audit event plus replay/freshness proof; this P4 code does not attempt to fabricate one.
+- Every terminal ancestor in a multi-generation recovery chain is examined independently, and an omission proposal must match every excluded ancestor. Wrong patient/missing ancestor fails neutrally; inconsistent terminal status, missing/closed historical VI-002, duplicate/oversized selection, cycle and invalid scope fail closed. A recovered document's own identity, stored verified decisions and open blockers must pass the existing **candidate preflight**, which is not source-file/OCR authenticity.
+- The immutable return object distinguishes `offline_selection_shape_valid` from four **unconditionally false/unavailable** fields: `doctor_selection_audited=False`, `run_gate_completed=False`, `runtime_evaluable=False` and `run_gate_status="unavailable"`. **Even a valid synthetic shape CANNOT produce a real proceed decision.**
+- **Same ORM session + `no_autoflush` is not a serializable snapshot or run-selected manifest.** This deliberately does not claim race-free cross-transaction freshness, recomputed VI-001..006 from source bytes, real doctor decision proof, OCR source glyph verification, clinical use, or ability to omit unrelated historical rejections without a future patient/run selected-source policy. It must be independently rechecked in P5's real run gate before any live rule invocation.
+- Original real P3 OCR reading `1O5` as `105` (`GOLD-EX-11`) remains **FAIL / NOT PROVEN**, without any safety waiver.
+- R1-A remains in force: **no `workflow_run` fabrication, no review item/evidence link persistence, and no live rule execution**. R3-A remains a fixed synthetic-only reference; this PR does not modify or activate it.
+
+## Evidence / testing protocol
+
+**Reviewed at authoring:** committed P3 R21 rejection/recovery design, ORM document/VI constraints and recovery link, P4 document preflight, internal R2 evidence inspector, existing migrated SQLite tests, PR #28 merge record and postmerge CI.  
+**Executed here:** GitHub connector source/diff review and commits.  
+**Not executed here:** Windows PowerShell, local Tesseract/real OCR, full VI-001..006 run-gate, genuine doctor selection audit, Playwright, DB concurrency/replay or a real P5 workflow.  
+**Expected collection count:** previous backend **1051** + 25 new R21 cases = **1076**, P3 **443** unchanged. This is a **provisional expected count, not observed pass evidence** until exact-head CI confirms. If collection differs, append an accurate paired marker, do not weaken P3's handoff integrity assertion. All new failures must be fixed in this branch without bypassing tests or scanner.
+
+**Required CI:** exact-head GitHub Actions Backend Python 3.12 (Ruff lint/format, full Pytest, reversible Alembic smoke, OpenAPI, scanned repository) + Frontend Node 22. After successful CI, owner must create a **new, isolated Windows worktree pinned to final SHA**, run `scripts/powershell/setup.ps1` + `scripts/powershell/test_all.ps1`, share logs for independent review, and only then decide merge. Skip is not PASS. Assistant must neither self-approve nor merge. No changes to schema or application data in this PR; rollback is close PR.
+
+**Future issue:** Persisted doctor selection event, run identity, actual source-file bytes hash attestation, trusted input reconstruction/VI re-evaluation and race-safe replay remain a **separate P5 design** under R1-A. P4 **IN_REVIEW**, #14 OPEN, **NOT FOR CLINICAL USE**.
