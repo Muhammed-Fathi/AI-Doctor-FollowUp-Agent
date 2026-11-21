@@ -76,19 +76,26 @@ def _canonical_ids(value: object, max_size: int, label: str) -> tuple[str, ...]:
 
 
 def _request_key(
-    *, patient_id: str, document_ids: tuple[str, ...],
-    observation_ids: tuple[str, ...], client_request_id: str,
+    *,
+    patient_id: str,
+    document_ids: tuple[str, ...],
+    observation_ids: tuple[str, ...],
+    client_request_id: str,
 ) -> str:
     """State contract §7: only stable input identifiers enter the start key."""
     parts = (
-        patient_id, WORKFLOW_VERSION,
-        ",".join(document_ids), ",".join(observation_ids), client_request_id,
+        patient_id,
+        WORKFLOW_VERSION,
+        ",".join(document_ids),
+        ",".join(observation_ids),
+        client_request_id,
     )
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
 
 
 def _receipt(
-    run: WorkflowRun, *,
+    run: WorkflowRun,
+    *,
     document_ids: tuple[str, ...],
     observation_ids: tuple[str, ...],
     omitted_ids: tuple[str, ...],
@@ -132,9 +139,7 @@ def create_run_foundation(
     """
     if db.new or db.dirty or db.deleted:
         raise ApiError(400, ErrorCode.VALIDATION, "A clean session is required.")
-    if not isinstance(client_request_id, str) or not _REQUEST_ID.fullmatch(
-        client_request_id
-    ):
+    if not isinstance(client_request_id, str) or not _REQUEST_ID.fullmatch(client_request_id):
         raise ApiError(400, ErrorCode.VALIDATION, "Invalid client request identifier.")
     if not isinstance(principal, Principal):
         raise ApiError(403, ErrorCode.FORBIDDEN, "Authenticated doctor required.")
@@ -168,15 +173,19 @@ def create_run_foundation(
                 )
             ).scalars()
         }
-        observations = {
-            row.id: row
-            for row in db.execute(
-                select(Observation).where(
-                    Observation.patient_id == patient_id,
-                    Observation.id.in_(chosen_obs),
-                )
-            ).scalars()
-        } if chosen_obs else {}
+        observations = (
+            {
+                row.id: row
+                for row in db.execute(
+                    select(Observation).where(
+                        Observation.patient_id == patient_id,
+                        Observation.id.in_(chosen_obs),
+                    )
+                ).scalars()
+            }
+            if chosen_obs
+            else {}
+        )
         if len(documents) != len(chosen_docs) or len(observations) != len(chosen_obs):
             raise ApiError(404, ErrorCode.NOT_FOUND, "Selected patient sources unavailable.")
 
@@ -219,21 +228,27 @@ def create_run_foundation(
         if previous is not None:
             # A replay can never adopt a different doctor, clock, version,
             # omission decision, or a partially persisted manifest.
-            docs_saved = set(db.execute(
-                select(RunSelectedDocument.document_id).where(
-                    RunSelectedDocument.workflow_run_id == previous.id
-                )
-            ).scalars())
-            obs_saved = set(db.execute(
-                select(RunSelectedObservation.observation_id).where(
-                    RunSelectedObservation.workflow_run_id == previous.id
-                )
-            ).scalars())
-            omissions_saved = set(db.execute(
-                select(RunSourceOmission.document_id).where(
-                    RunSourceOmission.workflow_run_id == previous.id
-                )
-            ).scalars())
+            docs_saved = set(
+                db.execute(
+                    select(RunSelectedDocument.document_id).where(
+                        RunSelectedDocument.workflow_run_id == previous.id
+                    )
+                ).scalars()
+            )
+            obs_saved = set(
+                db.execute(
+                    select(RunSelectedObservation.observation_id).where(
+                        RunSelectedObservation.workflow_run_id == previous.id
+                    )
+                ).scalars()
+            )
+            omissions_saved = set(
+                db.execute(
+                    select(RunSourceOmission.document_id).where(
+                        RunSourceOmission.workflow_run_id == previous.id
+                    )
+                ).scalars()
+            )
             if (
                 previous.doctor_id != principal.user_id
                 or previous.patient_id != patient_id
@@ -244,10 +259,17 @@ def create_run_foundation(
                 or obs_saved != set(chosen_obs)
                 or omissions_saved != set(omitted)
             ):
-                raise ApiError(409, ErrorCode.IDEMPOTENCY_CONFLICT, "Run request conflicts with saved selection.")
+                raise ApiError(
+                    409,
+                    ErrorCode.IDEMPOTENCY_CONFLICT,
+                    "Run request conflicts with saved selection.",
+                )
             return _receipt(
-                previous, document_ids=chosen_docs, observation_ids=chosen_obs,
-                omitted_ids=omitted, replayed=True,
+                previous,
+                document_ids=chosen_docs,
+                observation_ids=chosen_obs,
+                omitted_ids=omitted,
+                replayed=True,
             )
 
     run = WorkflowRun(
@@ -269,26 +291,40 @@ def create_run_foundation(
 
     for doc_id in chosen_docs:
         doc = documents[doc_id]
-        db.add(RunSelectedDocument(
-            workflow_run_id=run.id, document_id=doc_id,
-            source_sha256=doc.sha256, source_status=doc.extraction_status,
-            created_at=timestamp,
-        ))
+        db.add(
+            RunSelectedDocument(
+                workflow_run_id=run.id,
+                document_id=doc_id,
+                source_sha256=doc.sha256,
+                source_status=doc.extraction_status,
+                created_at=timestamp,
+            )
+        )
     for obs_id in chosen_obs:
         obs = observations[obs_id]
-        db.add(RunSelectedObservation(
-            workflow_run_id=run.id, observation_id=obs_id,
-            observation_created_at=obs.created_at, trust_level=obs.trust_level,
-            source_fact_id=obs.source_fact_id, created_at=timestamp,
-        ))
+        db.add(
+            RunSelectedObservation(
+                workflow_run_id=run.id,
+                observation_id=obs_id,
+                observation_created_at=obs.created_at,
+                trust_level=obs.trust_level,
+                source_fact_id=obs.source_fact_id,
+                created_at=timestamp,
+            )
+        )
     for doc_id in omitted:
         parent, issue = history[doc_id]
-        db.add(RunSourceOmission(
-            workflow_run_id=run.id, document_id=doc_id,
-            vi002_issue_id=issue.id, doctor_id=principal.user_id,
-            reason_code=OMISSION_REASON, source_sha256=parent.sha256,
-            created_at=timestamp,
-        ))
+        db.add(
+            RunSourceOmission(
+                workflow_run_id=run.id,
+                document_id=doc_id,
+                vi002_issue_id=issue.id,
+                doctor_id=principal.user_id,
+                reason_code=OMISSION_REASON,
+                source_sha256=parent.sha256,
+                created_at=timestamp,
+            )
+        )
     db.flush()
 
     # One atomic app-DB transaction with the authoritative run + manifest.
@@ -308,8 +344,11 @@ def create_run_foundation(
         detail_fragments=("phase=p5-f0", "gate=unavailable"),
     )
     return _receipt(
-        run, document_ids=chosen_docs, observation_ids=chosen_obs,
-        omitted_ids=omitted, replayed=False,
+        run,
+        document_ids=chosen_docs,
+        observation_ids=chosen_obs,
+        omitted_ids=omitted,
+        replayed=False,
     )
 
 
