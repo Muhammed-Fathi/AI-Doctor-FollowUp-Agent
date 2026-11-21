@@ -263,14 +263,13 @@ def test_cross_patient_observation_denied(db: Session):
 def test_invalid_selection_or_request_id_rejected(db: Session, identifiers: str):
     owner, doctor = _patient(db), _doctor(db)
     doc = _document(db, owner, f"invalid-{identifiers}")
-    if identifiers == "duplicate":
-        call = lambda: _start(db, owner, doctor, (doc.id, doc.id))
-    elif identifiers == "oversize":
-        call = lambda: _start(db, owner, doctor, (doc.id,), ("x",) * 21)
-    else:
-        call = lambda: _start(db, owner, doctor, (doc.id,), request_id="bad request id")
     with pytest.raises(ApiError):
-        call()
+        if identifiers == "duplicate":
+            _start(db, owner, doctor, (doc.id, doc.id))
+        elif identifiers == "oversize":
+            _start(db, owner, doctor, (doc.id,), ("x",) * 21)
+        else:
+            _start(db, owner, doctor, (doc.id,), request_id="bad request id")
     assert _count(db, WorkflowRun) == 0
 
 
