@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 from alembic import command
@@ -505,3 +507,94 @@ def test_alembic_smoke_retains_all_historical_states(alembic_config, sqlite_url:
             completed.stdout[-1500:],
             completed.stderr[-1500:],
         )
+
+
+def test_provenance_raw_text_change_invalidates_previous_gate_fingerprint(
+    scoped, tmp_path, engine
+):
+    db, patient_id, doctor = scoped
+    doc = _doc(db, patient_id, tmp_path, "raw-source-change")
+    run_id = _start(db, patient_id, doctor, doc.id)
+    earlier = _gate(engine, doctor, run_id, tmp_path)
+    assert earlier.decision == "proceed"
+
+    fact = db.execute(
+        select(ExtractedFact).where(
+            ExtractedFact.document_id == doc.id,
+            ExtractedFact.field_name == "value",
+        )
+    ).scalar_one()
+    fact.raw_text = "106"
+    db.commit()
+
+    later = _gate(engine, doctor, run_id, tmp_path)
+    assert later.input_fingerprint_sha256 != earlier.input_fingerprint_sha256
+    assert not later.replayed
+    assert not later.runtime_evaluable
+
+
+def test_unknown_quality_flag_fails_closed(scoped, tmp_path, engine):
+    db, patient_id, doctor = scoped
+    doc = _doc(db, patient_id, tmp_path, "invalid-quality-flag")
+    run_id = _start(db, patient_id, doctor, doc.id)
+    fact = db.execute(
+        select(ExtractedFact).where(
+            ExtractedFact.document_id == doc.id,
+            ExtractedFact.field_name == "value",
+        )
+    ).scalar_one()
+    fact.quality_flags = '["unsupported_future_quality_flag"]'
+    db.commit()
+
+    result = _gate(engine, doctor, run_id, tmp_path)
+    assert result.decision == "unavailable"
+    assert result.unavailable_reason == "invalid_quality_flags"
+    assert not result.runtime_evaluable
+
+
+def test_replay_rejects_forged_additional_gate_blocker(scoped, tmp_path, engine):
+    db, patient_id, doctor = scoped
+    doc = _doc(db, patient_id, tmp_path, "forged-gate-blocker")
+    run_id = _start(db, patient_id, doctor, doc.id)
+    earlier = _gate(engine, doctor, run_id, tmp_path)
+    assert earlier.decision == "proceed"
+
+    evaluation = db.execute(
+        select(RunGateEvaluation).where(RunGateEvaluation.workflow_run_id == run_id)
+    ).scalar_one()
+    db.add(
+        RunGateBlocker(
+            gate_evaluation_id=evaluation.id,
+            issue_type="VI-002",
+            reason_code="fact_unverified",
+            document_id=doc.id,
+            fact_ids="[]",
+        )
+    )
+    db.commit()
+
+    with pytest.raises(ApiError):
+        _gate(engine, doctor, run_id, tmp_path)
+    assert db.scalar(select(func.count()).select_from(RunGateEvaluation)) == 1
+
+
+def test_concurrent_gate_attempts_create_one_durable_evaluation(scoped, tmp_path, engine):
+    db, patient_id, doctor = scoped
+    doc = _doc(db, patient_id, tmp_path, "concurrent-gate")
+    run_id = _start(db, patient_id, doctor, doc.id)
+    barrier = Barrier(2, timeout=10)
+
+    def evaluate_once():
+        barrier.wait()
+        return _gate(engine, doctor, run_id, tmp_path)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_future = pool.submit(evaluate_once)
+        second_future = pool.submit(evaluate_once)
+        first, second = first_future.result(), second_future.result()
+
+    assert [first.decision, second.decision] == ["proceed", "proceed"]
+    assert sorted([first.replayed, second.replayed]) == [False, True]
+    assert first.input_fingerprint_sha256 == second.input_fingerprint_sha256
+    db.expire_all()
+    assert db.scalar(select(func.count()).select_from(RunGateEvaluation)) == 1
