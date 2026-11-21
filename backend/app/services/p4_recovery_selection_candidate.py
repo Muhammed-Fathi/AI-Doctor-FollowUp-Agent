@@ -169,12 +169,15 @@ def inspect_offline_recovery_selection(
         # Bound every row read to this patient; unrelated/missing ancestor IDs
         # produce the same neutral error, preventing cross-patient disclosure.
         docs: dict[str, Document] = {}
+
         def get_document(identifier: str) -> Document:
             if identifier not in docs:
                 if len(docs) >= MAX_LINEAGE_DOCUMENTS:
                     raise ApiError(400, ErrorCode.VALIDATION, "Recovery lineage too large.")
                 row = db.execute(
-                    select(Document).where(Document.id == identifier, Document.patient_id == patient_id)
+                    select(Document).where(
+                        Document.id == identifier, Document.patient_id == patient_id
+                    )
                 ).scalar_one_or_none()
                 if row is None:
                     raise ApiError(404, ErrorCode.NOT_FOUND, "Selected source lineage unavailable.")
@@ -219,7 +222,9 @@ def inspect_offline_recovery_selection(
                 ):
                     blocks.add(RecoverySelectionBlock(parent.id, "invalid_recovery_parent_status"))
                 if current.sha256 == parent.sha256:
-                    blocks.add(RecoverySelectionBlock(current.id, "recovery_identical_source_bytes"))
+                    blocks.add(
+                        RecoverySelectionBlock(current.id, "recovery_identical_source_bytes")
+                    )
                 current = parent
 
         # Every omitted terminal ancestor must remain visible with its P3 VI-002;
@@ -238,15 +243,15 @@ def inspect_offline_recovery_selection(
                 ).scalars()
             )
             if len(issues) > MAX_HISTORICAL_ISSUES:
-                raise ApiError(400, ErrorCode.VALIDATION, "Too many historical verification issues.")
+                raise ApiError(
+                    400, ErrorCode.VALIDATION, "Too many historical verification issues."
+                )
             by_doc = {issue.document_id: issue for issue in issues}
             for doc_id in sorted(ancestry):
                 doc = docs[doc_id]
                 issue = by_doc.get(doc_id)
                 state = issue.state if issue is not None else "missing"
-                history.append(
-                    HistoricalRejectedSource(doc.id, doc.failure_code or "", state)
-                )
+                history.append(HistoricalRejectedSource(doc.id, doc.failure_code or "", state))
                 if issue is None or issue.state != "open" or issue.blocking != 1:
                     blocks.add(RecoverySelectionBlock(doc.id, "historical_vi002_not_open"))
 

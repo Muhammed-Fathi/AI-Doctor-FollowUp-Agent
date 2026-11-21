@@ -50,9 +50,7 @@ def patient(db: Session, reference: str = "DEMO-A-001") -> Patient:
     return db.execute(select(Patient).where(Patient.external_ref == reference)).scalar_one()
 
 
-def identity(
-    db: Session, username: str = "demo_doctor", *, suffix: int = 1
-) -> Principal:
+def identity(db: Session, username: str = "demo_doctor", *, suffix: int = 1) -> Principal:
     user = db.execute(select(User).where(User.username == username)).scalar_one()
     session_id = f"aaaaaaaa-aaaa-4aaa-8aaa-{suffix:012d}"
     if db.get(UserSession, session_id) is None:
@@ -221,9 +219,12 @@ def test_selected_failed_original_always_halts_even_with_recovery(
     assert not result.offline_selection_shape_valid
     assert "selected_terminal_rejected_source" in reasons(result)
     assert result.run_gate_completed is False
-    assert db.execute(
-        select(VerificationIssue.state).where(VerificationIssue.document_id == original.id)
-    ).scalar_one() == "open"
+    assert (
+        db.execute(
+            select(VerificationIssue.state).where(VerificationIssue.document_id == original.id)
+        ).scalar_one()
+        == "open"
+    )
 
 
 def test_recovery_without_doctor_proposal_never_silently_excludes_original(
@@ -264,9 +265,7 @@ def test_recovered_document_not_independently_verified_halts(
     assert result.run_gate_completed is False
 
 
-def test_recovered_document_without_fact_decision_is_not_verified(
-    db: Session, context
-) -> None:
+def test_recovered_document_without_fact_decision_is_not_verified(db: Session, context) -> None:
     owner, doctor = context
     original = report(db, owner, "orig-no-decision", terminal=True)
     new = report(db, owner, "recovery-no-decision", parent=original, with_decision=False)
@@ -275,14 +274,10 @@ def test_recovered_document_without_fact_decision_is_not_verified(
     assert not outcome.offline_selection_shape_valid
 
 
-def test_identity_mismatch_blocks_even_when_recovery_link_valid(
-    db: Session, context
-) -> None:
+def test_identity_mismatch_blocks_even_when_recovery_link_valid(db: Session, context) -> None:
     owner, doctor = context
     original = report(db, owner, "orig-identity", terminal=True)
-    new = report(
-        db, owner, "recovery-identity", parent=original, document_ref="DEMO-B-001"
-    )
+    new = report(db, owner, "recovery-identity", parent=original, document_ref="DEMO-B-001")
     outcome = inspect(db, owner, doctor, (new,), omissions=(omission(original),))
     assert "document_identity_unresolved" in reasons(outcome)
     assert not outcome.offline_selection_shape_valid
@@ -298,9 +293,7 @@ def test_chained_recovery_requires_proposal_for_every_terminal_ancestor(
     partial = inspect(db, owner, doctor, (third,), omissions=(omission(first),))
     assert not partial.offline_selection_shape_valid
     assert "missing_doctor_omission_proposal" in reasons(partial)
-    complete = inspect(
-        db, owner, doctor, (third,), omissions=(omission(first), omission(second))
-    )
+    complete = inspect(db, owner, doctor, (third,), omissions=(omission(first), omission(second)))
     assert complete.offline_selection_shape_valid
     assert len(complete.historical_rejected_sources) == 2
     assert {item.vi002_state for item in complete.historical_rejected_sources} == {"open"}
@@ -316,16 +309,17 @@ def test_extra_or_unrelated_omission_cannot_be_a_legal_future_selection(
     other = report(db, owner, "orig-unrelated", terminal=True)
     recovered = report(db, owner, "related-recovery", parent=original)
     outcome = inspect(
-        db, owner, doctor, (recovered,),
+        db,
+        owner,
+        doctor,
+        (recovered,),
         omissions=(omission(original), omission(other)),
     )
     assert not outcome.offline_selection_shape_valid
     assert "omission_not_a_selected_recovery_ancestor" in reasons(outcome)
 
 
-def test_no_selected_sources_does_not_create_fake_run_baseline(
-    db: Session, context
-) -> None:
+def test_no_selected_sources_does_not_create_fake_run_baseline(db: Session, context) -> None:
     owner, doctor = context
     result = inspect(db, owner, doctor, ())
     assert not result.offline_selection_shape_valid
@@ -333,9 +327,7 @@ def test_no_selected_sources_does_not_create_fake_run_baseline(
     assert result.run_gate_status == "unavailable"
 
 
-def test_declared_recovery_of_verified_parent_halts(
-    db: Session, context
-) -> None:
+def test_declared_recovery_of_verified_parent_halts(db: Session, context) -> None:
     owner, doctor = context
     original = report(db, owner, "parent-verified")
     child = report(db, owner, "child-invalid-parent", parent=original)
@@ -374,9 +366,7 @@ def test_cycle_is_detected_without_infinite_traversal(db: Session, context) -> N
 
 
 @pytest.mark.parametrize("name", ["demo_doctor_unassigned", "demo_patient_a", "demo_admin"])
-def test_unassigned_or_non_doctor_principal_refused(
-    db: Session, context, name: str
-) -> None:
+def test_unassigned_or_non_doctor_principal_refused(db: Session, context, name: str) -> None:
     owner, _ = context
     original = report(db, owner, f"auth-{name}", terminal=True)
     replacement = report(db, owner, f"replacement-{name}", parent=original)
@@ -412,9 +402,7 @@ def test_dirty_session_refused_without_implicit_flush(db: Session, context) -> N
     assert doc.extraction_status == "needs_verification"
 
 
-def test_empty_duplicate_and_invalid_omission_proposals_fail_closed(
-    db: Session, context
-) -> None:
+def test_empty_duplicate_and_invalid_omission_proposals_fail_closed(db: Session, context) -> None:
     owner, doctor = context
     doc = report(db, owner, "bad-selection")
     for docs in [(doc, doc), tuple(doc for _ in range(9))]:
@@ -423,7 +411,10 @@ def test_empty_duplicate_and_invalid_omission_proposals_fail_closed(
         assert bad.value.status_code == 400
     with pytest.raises(ApiError) as bad_reason:
         inspect(
-            db, owner, doctor, (doc,),
+            db,
+            owner,
+            doctor,
+            (doc,),
             omissions=(CandidateDoctorOmission(doc.id, "trust_recovery_automatically"),),
         )
     assert bad_reason.value.status_code == 400
@@ -450,8 +441,11 @@ def test_missing_recovery_ancestor_fails_neutrally(db: Session, context) -> None
     # a missing identifier is refused using the same neutral 404 as a foreign ID.
     with pytest.raises(ApiError) as denied:
         inspect_offline_recovery_selection(
-            db, principal=doctor, patient_id=owner.id,
+            db,
+            principal=doctor,
+            patient_id=owner.id,
             selected_document_ids=("00000000-0000-4000-8000-000000000000",),
-            omission_proposals=(), as_of_utc=CLOCK,
+            omission_proposals=(),
+            as_of_utc=CLOCK,
         )
     assert denied.value.status_code == 404
