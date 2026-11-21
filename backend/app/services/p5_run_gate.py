@@ -28,6 +28,7 @@ from app.core.enums import (
     DocumentUnit,
     IssueType,
     MeasureType,
+    QualityFlag,
     Role,
 )
 from app.core.errors import ApiError, ErrorCode
@@ -248,6 +249,12 @@ def _evaluate_locked(
             run.policy_version,
             run.workflow_version,
             run.state_schema_version,
+            run.idempotency_key,
+            run.started_at,
+            run.updated_at,
+            run.current_node,
+            run.halt_reason,
+            run.checkpoint_ref,
             patient.assigned_doctor_id,
         ],
         "documents": [],
@@ -263,6 +270,8 @@ def _evaluate_locked(
         "omissions": [],
     }
     unavailable: str | None = None
+    if any(value is not None for value in (run.current_node, run.halt_reason, run.checkpoint_ref)):
+        unavailable = "run_execution_state_unexpected"
     if (
         run.mapping_version != MAPPING_VERSION
         or run.policy_version != POLICY_REFERENCE_VERSION
@@ -296,6 +305,10 @@ def _evaluate_locked(
             [
                 doc.id,
                 doc.patient_id,
+                doc.stored_path,
+                doc.mime_type,
+                doc.page_count,
+                doc.uploaded_at,
                 doc.document_patient_ref,
                 doc.document_patient_refs,
                 doc.extraction_status,
@@ -350,6 +363,11 @@ def _evaluate_locked(
                     f.document_id,
                     f.patient_id,
                     f.field_name,
+                    f.raw_text,
+                    f.page_index,
+                    f.char_start,
+                    f.char_end,
+                    f.created_at,
                     f.normalized_value,
                     f.unit,
                     f.verification_status,
@@ -367,18 +385,35 @@ def _evaluate_locked(
                     dec.id,
                     dec.fact_id,
                     dec.decision,
+                    dec.previous_value,
                     dec.new_value,
                     dec.new_unit,
+                    dec.confirmed_value,
+                    dec.confirmed_unit,
+                    dec.reason,
                     dec.verified_by_user_id,
                     dec.decided_at,
                     dec.source_image_compared,
                 ]
             )
-        try:
-            flags = {f.id: tuple(json.loads(f.quality_flags)) for f in active}
-        except (TypeError, ValueError):
-            flags = {}
-            unavailable = "invalid_quality_flags"
+        # A malformed or unknown quality flag is NOT a clean fact. This is a
+        # closed P3 enum; never accept arbitrary JSON list elements as evidence.
+        flags: dict[str, tuple[str, ...]] = {}
+        allowed_flags = {flag.value for flag in QualityFlag}
+        for fact in active:
+            try:
+                parsed_flags = json.loads(fact.quality_flags)
+                if not isinstance(parsed_flags, list) or any(
+                    not isinstance(value, str) or value not in allowed_flags
+                    for value in parsed_flags
+                ):
+                    unavailable = "invalid_quality_flags"
+                    flags[fact.id] = ()
+                else:
+                    flags[fact.id] = tuple(parsed_flags)
+            except (TypeError, ValueError):
+                unavailable = "invalid_quality_flags"
+                flags[fact.id] = ()
 
         if not active:
             unavailable = "selected_document_has_no_active_facts"
@@ -447,7 +482,16 @@ def _evaluate_locked(
         )
         for issue in existing_issues:
             snapshot["issues"].append(
-                [issue.id, issue.document_id, issue.issue_type, issue.reason_code, issue.state]
+                [
+                    issue.id,
+                    issue.patient_id,
+                    issue.document_id,
+                    issue.issue_type,
+                    issue.reason_code,
+                    issue.fact_ids,
+                    issue.blocking,
+                    issue.state,
+                ]
             )
             if issue.state == "open":
                 if issue.issue_type == "VI-002":
@@ -511,6 +555,9 @@ def _evaluate_locked(
                 obs.verified_by_user_id,
                 obs.verified_at,
                 obs.created_at,
+                obs.encounter_id,
+                obs.note,
+                obs.created_by_user_id,
             ]
         )
     for row in obs_saved:
@@ -639,7 +686,12 @@ def _evaluate_locked(
                 original.extraction_status,
                 original.failure_code,
                 issue.id,
+                issue.patient_id,
+                issue.reason_code,
+                issue.blocking,
                 issue.state,
+                item.doctor_id,
+                item.vi002_issue_id,
                 item.reason_code,
             ]
         )
@@ -693,10 +745,41 @@ def _evaluate_locked(
         select(RunGateEvaluation).where(RunGateEvaluation.idempotency_key == stable_idem)
     ).scalar_one_or_none()
     if previous is not None:
+        # The immutable parent alone is insufficient: a forged extra blocker
+        # INSERT or mismatched stored historical-exclusion list must not be
+        # accepted as a valid replay of previously certified evidence.
+        stored_blockers = list(
+            db.execute(
+                select(RunGateBlocker).where(RunGateBlocker.gate_evaluation_id == previous.id)
+            ).scalars()
+        )
+        try:
+            recorded_blockers = sorted(
+                (
+                    item.issue_type,
+                    item.reason_code,
+                    item.document_id,
+                    tuple(json.loads(item.fact_ids)),
+                )
+                for item in stored_blockers
+            )
+        except (TypeError, ValueError):
+            raise ApiError(
+                409, ErrorCode.IDEMPOTENCY_CONFLICT, "Gate blocker evidence is invalid."
+            ) from None
+        expected_blockers = sorted(
+            (item.issue_type, item.reason_code, item.document_id or None, item.fact_ids)
+            for item in ordered
+        )
         if (
-            previous.decision != decision
+            previous.workflow_run_id != run.id
+            or previous.gate_version != GATE_VERSION
+            or previous.as_of_utc != run.as_of_utc
+            or previous.decision != decision
             or previous.blocking_fact_count != blocking_count
             or previous.unavailable_reason != unavailable
+            or previous.historical_excluded_vi002_ids != json.dumps(sorted(historical))
+            or recorded_blockers != expected_blockers
         ):
             raise ApiError(409, ErrorCode.IDEMPOTENCY_CONFLICT, "Gate replay evidence changed.")
         return _receipt(
