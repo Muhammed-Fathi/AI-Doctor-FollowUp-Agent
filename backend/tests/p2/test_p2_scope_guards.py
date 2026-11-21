@@ -45,9 +45,17 @@ P3_TABLES = {
     "verification_issue",
 }
 
-#: Tables that belong to a **later** phase. Their appearance is still a scope
-#: violation, and this is the property the original global equality was really
-#: protecting: it is asserted directly instead of implicitly.
+#: P5-F0 tables approved through owner-ratified CH-01. These and only these
+#: are allowed while review items, agents and task tables are still forbidden.
+P5_F0_TABLES = {
+    "workflow_run",
+    "run_selected_document",
+    "run_selected_observation",
+    "run_source_omission",
+}
+
+#: Still-forbidden later-phase tables, including P4 review persistence and
+#: non-foundation P5 entities. Whitelisting F0 must not open this set.
 P4_PLUS_TABLES = {
     "review_item",
     "evidence_link",
@@ -56,7 +64,6 @@ P4_PLUS_TABLES = {
     "approval_decision",
     "follow_up_task",
     "in_app_notification",
-    "workflow_run",
     "node_event",
 }
 
@@ -101,20 +108,17 @@ def app_sources() -> list[Path]:
 
 
 def test_p2_tables_still_exist_and_no_later_phase_table_appears() -> None:
-    """P2's tables are all intact and no P4+ table has been added.
+    """Preserve P2/P3 exactly and admit only the owner-authorized F0 tables.
 
-    Earlier this was a global ``metadata == P2_TABLES`` equality. P3 legitimately
-    adds five tables (owner decision D-05), so the assertion is now made
-    explicitly: P2's set must be a **subset** of the metadata, the P3 set is
-    enumerated, and every later-phase table is forbidden by name. Strictness is
-    preserved where it matters and is no longer accidental.
+    All post-F0 review, approval, graph and task tables remain forbidden, and
+    no unrelated metadata table may silently join the schema.
     """
     tables = set(Base.metadata.tables)
 
     assert tables >= P2_TABLES
     assert tables >= P3_TABLES
     assert tables.isdisjoint(P4_PLUS_TABLES)
-    assert tables == P2_TABLES | P3_TABLES
+    assert tables == P2_TABLES | P3_TABLES | P5_F0_TABLES
 
 
 def test_no_later_phase_module_exists() -> None:
