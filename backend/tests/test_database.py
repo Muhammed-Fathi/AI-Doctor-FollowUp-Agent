@@ -19,7 +19,7 @@ from app.db.models import SchemaMeta
 from app.db.session import create_db_engine, ensure_sqlite_directory
 
 BASELINE_REVISION = "0001_p1_baseline"
-HEAD_REVISION = "0005_p3_ocr_provenance"
+HEAD_REVISION = "0006_p5_run_foundation"
 
 #: The seven tables the P2 revision owns. Equality is asserted below, so a P4+
 #: table created early fails just as loudly as a missing one.
@@ -33,8 +33,8 @@ P2_TABLES = {
     "user",
 }
 
-#: The six tables the P3 revisions own (``0003`` + Stage 1 ``0005``). Equality
-#: against ``P1 + P2 + P3`` is asserted at ``head``, so a P4+ table still fails.
+#: The six tables the P3 revisions own (``0003`` + Stage 1 ``0005``).
+#: Their historical exact schema is independently pinned by the P2 migration tests.
 P3_TABLES = {
     "document",
     "document_page_text",
@@ -44,14 +44,21 @@ P3_TABLES = {
     "verification_issue",
 }
 
-#: Tables owned by later phases; none of them may exist at P3 ``head``.
-P4_PLUS_TABLES = {
+#: Owner-approved P5-F0 tables at actual Alembic head 0006.
+P5_F0_TABLES = {
+    "workflow_run",
+    "run_selected_document",
+    "run_selected_observation",
+    "run_source_omission",
+}
+
+#: Tables that remain forbidden after P5-F0 (CH-01 does not authorize them).
+FUTURE_TABLES = {
     "review_item",
     "summary_draft",
     "approval_decision",
     "follow_up_task",
     "in_app_notification",
-    "workflow_run",
 }
 
 
@@ -76,17 +83,23 @@ def test_migration_creates_baseline_table(engine: Engine) -> None:
 
 
 def test_migrated_schema_is_exactly_p1_plus_p2_plus_p3(engine: Engine) -> None:
-    """The migrated schema equals P1 + the seven P2 tables + the five P3 tables.
+    """Enforce the exact P1/P2/P3 + owner-approved P5-F0 head schema.
 
-    Phase 1's assertion was "no patient-domain table exists"; P2 added seven and
-    P3 adds five, so the check stays an **equality** against the explicit
-    allowlist. A P4+ table appearing early still fails, which is the property
-    that matters — the allowlist grew, the strictness did not shrink.
+    The historical 0005 exact P3 allowlist still has its own pinned migration
+    test. Future P4 review/task/agent tables stay forbidden under CH-01.
     """
     tables = set(inspect(engine).get_table_names())
 
-    assert tables == {"schema_meta", "alembic_version"} | P2_TABLES | P3_TABLES
-    assert tables.isdisjoint(P4_PLUS_TABLES)
+    assert tables == {"schema_meta", "alembic_version"} | P2_TABLES | P3_TABLES | P5_F0_TABLES
+    assert tables.isdisjoint(FUTURE_TABLES)
+    assert any(
+        fk["referred_table"] == "workflow_run"
+        for fk in inspect(engine).get_foreign_keys("audit_event")
+    )
+    assert any(
+        fk["referred_table"] == "workflow_run"
+        for fk in inspect(engine).get_foreign_keys("verification_issue")
+    )
 
 
 def test_migration_is_reversible(sqlite_url: str) -> None:
