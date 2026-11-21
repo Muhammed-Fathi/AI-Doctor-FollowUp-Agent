@@ -378,24 +378,18 @@ def main(argv: list[str]) -> int:
         with sqlite3.connect(database) as connection:
             all_indexes = {
                 row[0]
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type='index'"
-                )
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index'")
             }
             missing_indexes = P5_F0_INDEXES - all_indexes
             if missing_indexes:
-                problems.append(
-                    f"P5-F0 missing required indexes: {sorted(missing_indexes)}"
-                )
+                problems.append(f"P5-F0 missing required indexes: {sorted(missing_indexes)}")
 
             fk_set = set()
             for table in sorted(P5_F0_TABLES | {"audit_event", "verification_issue"}):
                 for fk in connection.execute(f"PRAGMA foreign_key_list('{table}')"):
                     fk_set.add((table, fk[3], fk[2]))
                     if (table, fk[3], fk[2]) in P5_F0_FKS and fk[6] != "RESTRICT":
-                        problems.append(
-                            f"P5-F0 {table}.{fk[3]} must use ON DELETE RESTRICT"
-                        )
+                        problems.append(f"P5-F0 {table}.{fk[3]} must use ON DELETE RESTRICT")
             missing_fks = P5_F0_FKS - fk_set
             if missing_fks:
                 problems.append(f"P5-F0 missing real foreign keys: {sorted(missing_fks)}")
@@ -407,16 +401,11 @@ def main(argv: list[str]) -> int:
                         continue
                     index_name = index_row[1]
                     columns = tuple(
-                        item[2]
-                        for item in connection.execute(
-                            f"PRAGMA index_info('{index_name}')"
-                        )
+                        item[2] for item in connection.execute(f"PRAGMA index_info('{index_name}')")
                     )
                     unique_column_sets.add(columns)
                 if expected_columns not in unique_column_sets:
-                    problems.append(
-                        f"P5-F0 {table} missing unique key {expected_columns}"
-                    )
+                    problems.append(f"P5-F0 {table} missing unique key {expected_columns}")
 
             for table in sorted(P5_F0_IMMUTABLE_TABLES):
                 for operation in ("update", "delete"):
