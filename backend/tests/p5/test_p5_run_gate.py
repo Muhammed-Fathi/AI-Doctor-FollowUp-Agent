@@ -5,6 +5,10 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
+import subprocess
+import sys
+
+from app.core.paths import REPO_ROOT
 
 import pytest
 from alembic import command
@@ -469,3 +473,34 @@ def test_gate_evidence_update_is_rejected_at_database_layer(scoped, tmp_path, en
         db.execute(text("UPDATE run_gate_evaluation SET decision='halt'"))
     db.rollback()
     assert db.scalar(select(func.count()).select_from(RunGateEvaluation)) == 1
+
+def test_alembic_smoke_retains_all_historical_states(alembic_config, sqlite_url: str):
+    """The exact 0007 smoke, 0006 F0 and P3/P2/P1 states are all enforced."""
+    smoke = REPO_ROOT / "scripts" / "python" / "check_alembic_smoke.py"
+    database = sqlite_url.removeprefix("sqlite:///")
+    revisions = [
+        ("head", "head"),
+        ("0006_p5_run_foundation", "p5_f0"),
+        ("0005_p3_ocr_provenance", "p3_stage1"),
+        ("0004_p3_rejection_recovery", "p3_recovery"),
+        ("0003_p3_documents", "p3"),
+        ("0002_p2_patient_domain", "p2"),
+        ("0001_p1_baseline", "p1"),
+        ("base", "base"),
+    ]
+    command.upgrade(alembic_config, "head")
+    for revision, state in revisions:
+        if revision != "head":
+            command.downgrade(alembic_config, revision)
+        completed = subprocess.run(
+            [sys.executable, str(smoke), database, "--state", state],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=REPO_ROOT,
+        )
+        assert completed.returncode == 0, (
+            state,
+            completed.stdout[-1500:],
+            completed.stderr[-1500:],
+        )
