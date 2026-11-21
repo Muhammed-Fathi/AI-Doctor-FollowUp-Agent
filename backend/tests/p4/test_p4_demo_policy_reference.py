@@ -227,7 +227,10 @@ def test_gold_cases_keep_delta_semantics_and_c_blocker_before_scripted_fix() -> 
     assert b["expected_review_rule_ids"] == ["DR-005"]
     assert Decimal(str(b["expected_dr005"]["delta"])) > policy.demo_delta_systolic_mmHg
     assert c["pre_verification"]["expected_open_verification_issue_ids"] == [
-        "VI-001", "VI-002", "VI-003", "VI-005"
+        "VI-001",
+        "VI-002",
+        "VI-003",
+        "VI-005",
     ]
     assert c["pre_verification"]["pending_active_fact_count"] == 3
     assert Decimal(str(c["post_fixture_correction"]["expected_delta"])) <= (
@@ -235,9 +238,7 @@ def test_gold_cases_keep_delta_semantics_and_c_blocker_before_scripted_fix() -> 
     )
     assert "FAIL / NOT PROVEN" in c["real_ocr_result"]
     assert d["expected_review_rule_ids"] == ["DR-001", "DR-003", "DR-005", "DR-008", "DR-009"]
-    assert Decimal(str(d["expected_deltas"]["diastolic_bp"])) > (
-        policy.demo_delta_diastolic_mmHg
-    )
+    assert Decimal(str(d["expected_deltas"]["diastolic_bp"])) > (policy.demo_delta_diastolic_mmHg)
 
 
 def test_reference_artifact_is_not_imported_by_app_runtime() -> None:
