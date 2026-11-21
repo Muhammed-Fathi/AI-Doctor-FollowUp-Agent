@@ -315,3 +315,156 @@ def test_p5_f1_schema_empty_downgrade_and_reupgrade(alembic_config, sqlite_url):
     finally:
         eng.dispose()
     command.upgrade(alembic_config, "head")
+
+@pytest.mark.parametrize(
+    ("changed", "expected"),
+    [
+        ("missing_unit", "VI-001"),
+        ("missing_date", "VI-003"),
+        ("wrong_patient_reference", "VI-004"),
+        ("low_confidence", "VI-005"),
+    ],
+)
+def test_vi_001_003_004_005_recomputed_from_selected_source(
+    scoped, tmp_path, engine, changed: str, expected: str
+):
+    db, patient_id, doctor = scoped
+    doc = _doc(db, patient_id, tmp_path, f"vi-{changed}")
+    run_id = _start(db, patient_id, doctor, doc.id)
+    if changed == "wrong_patient_reference":
+        doc.document_patient_ref = "DEMO-B-001"
+    else:
+        field = "report_date" if changed == "missing_date" else "value"
+        fact = db.execute(
+            select(ExtractedFact).where(
+                ExtractedFact.document_id == doc.id, ExtractedFact.field_name == field
+            )
+        ).scalar_one()
+        if changed == "missing_unit":
+            fact.unit = None
+        elif changed == "missing_date":
+            fact.normalized_value = None
+        else:
+            fact.quality_flags = '["low_confidence"]'
+    db.commit()
+    result = _gate(engine, doctor, run_id, tmp_path)
+    assert result.decision == "halt"
+    assert expected in {issue.issue_type for issue in result.issues}
+    assert not result.runtime_evaluable
+
+
+def _conflicting_checkin(db: Session, patient_id: str):
+    db.add(
+        Observation(
+            patient_id=patient_id,
+            measure_type="glucose",
+            value=106,
+            unit="mg/dL",
+            measured_at="2026-06-14T00:00:00Z",
+            source="seed_fixture",
+            validation="ok",
+            trust_level="self_reported_validated",
+            created_at=AT,
+        )
+    )
+    db.commit()
+
+
+def test_vi006_conflict_recomputed_against_current_stored_history(scoped, tmp_path, engine):
+    db, patient_id, doctor = scoped
+    doc = _doc(db, patient_id, tmp_path, "vi-conflict")
+    run_id = _start(db, patient_id, doctor, doc.id)
+    _conflicting_checkin(db, patient_id)
+    result = _gate(engine, doctor, run_id, tmp_path)
+    assert result.decision == "halt"
+    assert any(issue.issue_type == "VI-006" for issue in result.issues)
+
+
+def test_new_history_conflict_invalidates_prior_matching_proceed(scoped, tmp_path, engine):
+    db, patient_id, doctor = scoped
+    doc = _doc(db, patient_id, tmp_path, "new-history-conflict")
+    run_id = _start(db, patient_id, doctor, doc.id)
+    prior = _gate(engine, doctor, run_id, tmp_path)
+    assert prior.decision == "proceed"
+    _conflicting_checkin(db, patient_id)
+    later = _gate(engine, doctor, run_id, tmp_path)
+    assert later.decision == "halt"
+    assert not later.replayed
+    assert later.input_fingerprint_sha256 != prior.input_fingerprint_sha256
+
+
+def test_verified_multimeasurement_document_is_not_promoted(scoped, tmp_path, engine):
+    db, patient_id, doctor = scoped
+    doc = _doc(db, patient_id, tmp_path, "multimeasurement")
+    run_id = _start(db, patient_id, doctor, doc.id)
+    fact = ExtractedFact(
+        document_id=doc.id,
+        patient_id=patient_id,
+        field_name="value",
+        raw_text="110",
+        normalized_value="110",
+        unit="mg/dL",
+        page_index=0,
+        char_start=0,
+        char_end=3,
+        verification_status="verified",
+        created_at=AT,
+    )
+    db.add(fact)
+    db.flush()
+    db.add(
+        FactVerification(
+            fact_id=fact.id,
+            decision="verified",
+            verified_by_user_id=doctor.user_id,
+            decided_at=AT,
+        )
+    )
+    db.commit()
+    result = _gate(engine, doctor, run_id, tmp_path)
+    assert result.decision == "halt"
+    assert any(
+        issue.issue_type == "VI-002" and issue.reason_code == "multi_measurement_document"
+        for issue in result.issues
+    )
+
+
+def test_mutated_selected_observation_is_not_silently_dropped(scoped, tmp_path, engine):
+    db, patient_id, doctor = scoped
+    doc = _doc(db, patient_id, tmp_path, "rejected-observation")
+    obs = db.execute(
+        select(Observation).where(Observation.patient_id == patient_id)
+    ).scalars().first()
+    assert obs is not None
+    run_id = _start(db, patient_id, doctor, doc.id, observation_ids=(obs.id,))
+    obs.validation = "rejected"
+    db.commit()
+    result = _gate(engine, doctor, run_id, tmp_path)
+    assert result.decision == "unavailable"
+    assert result.unavailable_reason == "selected_observation_inadmissible"
+
+
+def test_reassigned_patient_denied_before_any_gate_evidence(scoped, tmp_path, engine):
+    db, patient_id, doctor = scoped
+    doc = _doc(db, patient_id, tmp_path, "reassignment")
+    run_id = _start(db, patient_id, doctor, doc.id)
+    patient = db.get(Patient, patient_id)
+    other = db.execute(
+        select(User).where(User.username == "demo_doctor_unassigned")
+    ).scalar_one()
+    patient.assigned_doctor_id = other.id
+    db.commit()
+    with pytest.raises(ApiError):
+        _gate(engine, doctor, run_id, tmp_path)
+    assert db.scalar(select(func.count()).select_from(RunGateEvaluation)) == 0
+
+
+def test_gate_evidence_update_is_rejected_at_database_layer(scoped, tmp_path, engine):
+    db, patient_id, doctor = scoped
+    doc = _doc(db, patient_id, tmp_path, "gate-update")
+    run_id = _start(db, patient_id, doctor, doc.id)
+    _gate(engine, doctor, run_id, tmp_path)
+    with pytest.raises(DatabaseError):
+        db.execute(text("UPDATE run_gate_evaluation SET decision='halt'"))
+    db.rollback()
+    assert db.scalar(select(func.count()).select_from(RunGateEvaluation)) == 1
