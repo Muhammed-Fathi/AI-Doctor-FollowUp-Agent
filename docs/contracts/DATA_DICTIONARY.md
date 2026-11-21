@@ -572,3 +572,14 @@ Per-fixture expectation (`MAP-01`):
 ## 6. Not defined here
 
 Physical index tuning, query plans, partitioning, automated retention cron jobs, encryption at rest, multitenancy, and audit export formats — all post-MVP or P7 hardening decisions.
+
+
+### 2.21 P5-F1 run-scoped verification receipts (0007, owner ratified PR #32)
+
+This additive synthetic-only extension does not repurpose P3 `verification_issue` or activate P4 `review_item`. F1 is an internal deterministic preflight, not an agent/DR execution token. P5-F0's `workflow_run` is the authoritative parent.
+
+**`run_gate_evaluation`:** `id` UUIDv4 PK; `workflow_run_id` NOT NULL FK `workflow_run.id` ON DELETE RESTRICT; `gate_version` (16 chars), `input_fingerprint_sha256` (64 hex), `idempotency_key` (64 hex UNIQUE), `decision` one of `proceed/halt/unavailable`, optional bounded `unavailable_reason`, `blocking_fact_count` 0..40, `historical_excluded_vi002_ids` JSON-array text (≤2000), immutable `as_of_utc` copied from the run, and `evaluated_at` supplied UTC. Exact UNIQUE `(workflow_run_id,input_fingerprint_sha256,gate_version)`, lookup index `ix_gate_run(workflow_run_id,evaluated_at)`. BEFORE UPDATE/DELETE trigger prohibits rewriting a decision.
+
+**`run_gate_blocker`:** `id` UUIDv4 PK; `gate_evaluation_id` NOT NULL FK `run_gate_evaluation.id` ON DELETE RESTRICT; `issue_type` closed `VI-001..VI-006`; `reason_code` bounded 64; optional `document_id` FK `document.id` ON DELETE RESTRICT; `fact_ids` bounded JSON-array text (≤600). Lookup index `ix_gate_blocker_gate`; BEFORE UPDATE/DELETE triggers forbid rewriting. No `rule_id`, diagnosis, severity, or free OCR text.
+
+Downgrade from revision `0007_p5_run_gate` is refused if either F1 gate table contains rows. Clean-schema upgrade/downgrade/upgrade is supported. **An F1 `proceed` is not enough to run an agent; F2 must independently validate freshness, fingerprint and scope.** Historical terminal original `VI-002` remains OPEN when separately recovered evidence is chosen. F0 receipt flags are still `unavailable/False/False` and no clinical/glyph correctness is established.
