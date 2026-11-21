@@ -21,7 +21,6 @@ from app.db.models import (
     Document,
     ExtractedFact,
     FactVerification,
-    Observation,
     Patient,
     User,
     UserSession,
