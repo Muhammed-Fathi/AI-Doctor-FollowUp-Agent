@@ -1,0 +1,42 @@
+# R3-A: owner-approved synthetic fixture reference ONLY; never loaded by app runtime.
+# NOT FOR CLINICAL USE. Real source-glyph OCR fidelity remains NOT PROVEN.
+policy_version: demo-policy-1.1.0
+demo_only: true
+demo_as_of_utc: "2026-11-14T12:00:00Z"
+notice: "DEMO review prompts only — not clinical risk assessment. Not for clinical use."
+parameters:
+  baseline_lookback_days: 90
+  stale_measurement_days: 30
+  demo_delta_systolic_mmHg: 10
+  demo_delta_diastolic_mmHg: 8
+  demo_delta_heart_rate_bpm: 15
+  demo_delta_glucose_mgdl: 40
+  ocr_confidence_floor: 0.70
+  conflict_tolerance: 0
+  max_items_per_type: 3
+verification_issues:
+  - id: VI-001
+    enabled: true
+  - id: VI-002
+    enabled: true
+  - id: VI-003
+    enabled: true
+  - id: VI-004
+    enabled: true
+  - id: VI-005
+    enabled: true
+  - id: VI-006
+    enabled: true
+rules:
+  - id: DR-001
+    enabled: true
+  - id: DR-003
+    enabled: true
+  - id: DR-005
+    enabled: true
+  - id: DR-006
+    enabled: true
+  - id: DR-008
+    enabled: true
+  - id: DR-009
+    enabled: true
