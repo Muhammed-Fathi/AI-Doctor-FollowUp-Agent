@@ -19,6 +19,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.clock import format_utc, parse_utc, to_utc
+from app.core.enums import MAPPING_TABLE
 from app.core.errors import ApiError, ErrorCode
 from app.core.policies import Principal
 from app.db.models import (
@@ -189,6 +190,39 @@ def _projection(
                 or entry.observation.trust_level != "doctor_verified"
             ):
                 return "verified_lineage_unavailable"
+            source_fact = db.get(ExtractedFact, entry.source_fact_id)
+            if (
+                source_fact is None
+                or source_fact.patient_id != run.patient_id
+                or source_fact.document_id != entry.source_document_id
+                or source_fact.field_name != "value"
+                or source_fact.verification_status != "verified"
+            ):
+                return "verified_lineage_unavailable"
+            # Both systolic and diastolic use mmHg: a matching unit/value
+            # alone cannot establish the correct measurement identity.
+            names = list(
+                db.execute(
+                    select(ExtractedFact)
+                    .where(
+                        ExtractedFact.document_id == entry.source_document_id,
+                        ExtractedFact.field_name == "test_name",
+                        ExtractedFact.verification_status == "verified",
+                    )
+                    .limit(2)
+                ).scalars()
+            )
+            if len(names) != 1 or not names[0].normalized_value:
+                return "verified_mapping_unproven"
+            alias = " ".join(names[0].normalized_value.lower().strip().rstrip(":").split())
+            mapped = MAPPING_TABLE.get(alias)
+            if (
+                mapped is None
+                or mapped[0].value != entry.observation.measure_type
+                or mapped[1].value != entry.observation.unit
+                or mapped[1].value != source_fact.unit
+            ):
+                return "verified_mapping_unproven"
         elif entry.source in {"patient_checkin", "seed_fixture"}:
             if (
                 entry.observation.trust_level != "self_reported_validated"
