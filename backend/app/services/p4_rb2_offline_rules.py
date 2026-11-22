@@ -31,8 +31,7 @@ _LABELS = {
     "glucose": "Glucose",
 }
 _UNITS = {
-    key.value: frozenset(value.value for value in values)
-    for key, values in MEASURE_UNITS.items()
+    key.value: frozenset(value.value for value in values) for key, values in MEASURE_UNITS.items()
 }
 _BANDS = {
     key.value: (Decimal(str(lo)), Decimal(str(hi)))
@@ -41,10 +40,7 @@ _BANDS = {
 _HINT_ORDER = {"verification_needed": 0, "data_quality": 1, "change_to_review": 2}
 _RULES = ("DR-001", "DR-003", "DR-005", "DR-006", "DR-008", "DR-009")
 _ISSUES = ("VI-001", "VI-002", "VI-003", "VI-004", "VI-005", "VI-006")
-_NOTICE = (
-    "DEMO review prompts only — not clinical risk assessment. "
-    "Not for clinical use."
-)
+_NOTICE = "DEMO review prompts only — not clinical risk assessment. Not for clinical use."
 _SUFFIXES = {
     "doctor_verified": "",
     "self_reported": " (self-reported)",
@@ -136,11 +132,7 @@ def _flag(
     rows: tuple[OfflineObservation, ...],
     extra_evidence: tuple[str, ...] = (),
 ) -> OfflineRuleFlag:
-    refs = tuple(
-        sorted(
-            {*(f"observation:{row.id}" for row in rows), *extra_evidence}
-        )
-    )
+    refs = tuple(sorted({*(f"observation:{row.id}" for row in rows), *extra_evidence}))
     if not refs:
         raise OfflineRuleError("E_VALIDATION", "Missing typed evidence.")
     trust = _basis(*rows)
@@ -177,9 +169,8 @@ def _validate_row(row: OfflineObservation, patient_id: str) -> None:
     if row.lineage_status not in {"unavailable", "fixture_asserted"}:
         raise OfflineRuleError("E_VALIDATION", "Unsupported or forged provenance authority.")
     if (
-        (row.source_document_id is not None or row.source_fact_id is not None)
-        and row.source != "verified_document"
-    ):
+        row.source_document_id is not None or row.source_fact_id is not None
+    ) and row.source != "verified_document":
         raise OfflineRuleError("E_VALIDATION", "Provenance claims on non-document row.")
     if (
         row.source_fact_verification_status is not None
@@ -218,12 +209,9 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
         or len(data.history) > 100
     ):
         raise OfflineRuleError("E_VALIDATION", "Invalid bounded fixture selection.")
-    if (
-        not isinstance(data.active_fact_verification_statuses, tuple)
-        or any(
-            status not in {"verified", "pending", "rejected"}
-            for status in data.active_fact_verification_statuses
-        )
+    if not isinstance(data.active_fact_verification_statuses, tuple) or any(
+        status not in {"verified", "pending", "rejected"}
+        for status in data.active_fact_verification_statuses
     ):
         raise OfflineRuleError("E_VALIDATION", "Invalid fixture fact status.")
     if any(status != "verified" for status in data.active_fact_verification_statuses):
@@ -274,16 +262,17 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
         current = selected[-1]
         current_at = stamps[current.id]
         label = _LABELS[measure]
-        past = [
-            r for r in ordered if current_at - timedelta(days=90) <= stamps[r.id] < current_at
-        ]
+        past = [r for r in ordered if current_at - timedelta(days=90) <= stamps[r.id] < current_at]
         baseline = past[-1] if past else None
         if baseline is None:
             candidates.append(
                 (
                     measure,
                     _flag(
-                        data.patient_id, data.policy, "DR-001", "missing_baseline",
+                        data.patient_id,
+                        data.policy,
+                        "DR-001",
+                        "missing_baseline",
                         "data_quality",
                         f"No previous recorded {label} to compare against.",
                         (current,),
@@ -296,8 +285,12 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
                 (
                     measure,
                     _flag(
-                        data.patient_id, data.policy, "DR-003", "measurement_stale",
-                        "data_quality", f"The most recent {label} was recorded {days} days ago.",
+                        data.patient_id,
+                        data.policy,
+                        "DR-003",
+                        "measurement_stale",
+                        "data_quality",
+                        f"The most recent {label} was recorded {days} days ago.",
                         (current,),
                     ),
                 )
@@ -310,8 +303,11 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
                     (
                         measure,
                         _flag(
-                            data.patient_id, data.policy, "DR-005",
-                            "change_exceeds_demo_parameter", "change_to_review",
+                            data.patient_id,
+                            data.policy,
+                            "DR-005",
+                            "change_exceeds_demo_parameter",
+                            "change_to_review",
                             f"{label} differs from the previous recorded value by "
                             f"{amount_text} {current.unit}.",
                             (baseline, current),
@@ -324,7 +320,10 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
                 (
                     measure,
                     _flag(
-                        data.patient_id, data.policy, "DR-009", "implausible_value",
+                        data.patient_id,
+                        data.policy,
+                        "DR-009",
+                        "implausible_value",
                         "data_quality",
                         "A recorded value is outside the demo plausibility range "
                         "and may be a typo.",
@@ -341,17 +340,13 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
                 and first.trust_level == "doctor_verified"
                 and not _independent_fixture_source(first)
             ):
-                excluded.append(
-                    OfflineEvidenceExclusion(first.id, "verified_lineage_unavailable")
-                )
+                excluded.append(OfflineEvidenceExclusion(first.id, "verified_lineage_unavailable"))
             if (
                 second.source == "verified_document"
                 and second.trust_level == "doctor_verified"
                 and not _independent_fixture_source(second)
             ):
-                excluded.append(
-                    OfflineEvidenceExclusion(second.id, "verified_lineage_unavailable")
-                )
+                excluded.append(OfflineEvidenceExclusion(second.id, "verified_lineage_unavailable"))
             if (
                 stamps[first.id] == stamps[second.id]
                 and amounts[first.id] != amounts[second.id]
@@ -370,18 +365,19 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
                     (
                         measure,
                         _flag(
-                            data.patient_id, data.policy, "DR-006",
-                            "verified_source_conflict", "verification_needed",
+                            data.patient_id,
+                            data.policy,
+                            "DR-006",
+                            "verified_source_conflict",
+                            "verification_needed",
                             f"Two verified sources disagree for {label} at "
                             f"{stamps[first.id].isoformat().replace('+00:00', 'Z')}.",
-                            (first, second), evidence,
+                            (first, second),
+                            evidence,
                         ),
                     )
                 )
-            same = (
-                stamps[first.id] == stamps[second.id]
-                and amounts[first.id] == amounts[second.id]
-            )
+            same = stamps[first.id] == stamps[second.id] and amounts[first.id] == amounts[second.id]
             a_created, b_created = _clock(first.created_at), _clock(second.created_at)
             if (first.created_at is None or second.created_at is None) and not same:
                 excluded.append(
@@ -403,8 +399,11 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
                     (
                         measure,
                         _flag(
-                            data.patient_id, data.policy, "DR-008",
-                            "duplicate_or_out_of_order", "data_quality",
+                            data.patient_id,
+                            data.policy,
+                            "DR-008",
+                            "duplicate_or_out_of_order",
+                            "data_quality",
                             f"A repeated or out-of-order entry was detected for {label}.",
                             (first, second),
                         ),
@@ -422,9 +421,7 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
     flags = tuple(
         sorted(
             (item for _, item in dedup.values()),
-            key=lambda f: (
-                _HINT_ORDER[f.workflow_hint], f.rule_id, f.evidence, f.dedupe_key
-            ),
+            key=lambda f: (_HINT_ORDER[f.workflow_hint], f.rule_id, f.evidence, f.dedupe_key),
         )
     )
     return OfflineRuleResult(
