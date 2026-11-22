@@ -202,6 +202,7 @@ def _evaluate_locked(
     run_id: str,
     at: datetime,
     upload_root: str,
+    require_existing: bool = False,
 ) -> RunGateReceipt:
     run = db.get(WorkflowRun, run_id)
     if run is None:
@@ -793,6 +794,14 @@ def _evaluate_locked(
             replayed=True,
         )
 
+    # F2 MUST NOT persist a new gate/audit row when it inspects the
+    # current authoritative snapshot. Its read-only caller requires an
+    # already-existing matching immutable F1 PROCEED decision.
+    if require_existing:
+        raise ApiError(
+            409, ErrorCode.VALIDATION, "No current persisted F1 gate evidence is available."
+        )
+
     evaluation = RunGateEvaluation(
         id=new_uuid(),
         workflow_run_id=run.id,
@@ -845,6 +854,36 @@ def _evaluate_locked(
     )
 
 
+def inspect_current_run_gate_locked(
+    db: Session,
+    *,
+    principal: Principal,
+    run_id: str,
+    at: datetime,
+    upload_root: str,
+) -> RunGateReceipt:
+    """Re-evaluate current F1 state without writes inside a caller-owned SQLite lock.
+
+    Only the F2 bridge may call this with an already open BEGIN IMMEDIATE
+    transaction. The existing F1 evaluator retains its exact original
+    persisted-decision behavior. Missing or stale gate decisions cannot be
+    manufactured here. Never treat this as a graph/DR execution token.
+    """
+    if not db.in_transaction():
+        raise ApiError(409, ErrorCode.VALIDATION, "A locked read transaction is required.")
+    result = _evaluate_locked(
+        db,
+        principal=principal,
+        run_id=run_id,
+        at=at,
+        upload_root=upload_root,
+        require_existing=True,
+    )
+    if result.decision != "proceed" or result.issues or result.unavailable_reason:
+        raise ApiError(409, ErrorCode.VALIDATION, "Current F1 gate is not eligible.")
+    return result
+
+
 def evaluate_run_verification_gate(
     db: Session,
     *,
@@ -886,4 +925,10 @@ def evaluate_run_verification_gate(
         raise
 
 
-__all__ = ["GATE_VERSION", "RunGateIssue", "RunGateReceipt", "evaluate_run_verification_gate"]
+__all__ = [
+    "GATE_VERSION",
+    "RunGateIssue",
+    "RunGateReceipt",
+    "evaluate_run_verification_gate",
+    "inspect_current_run_gate_locked",
+]
