@@ -233,8 +233,13 @@ def test_partial_changed_or_retired_policy_fails_closed(change) -> None:
 
 
 def test_forged_authority_fields_are_not_part_of_typed_fixture() -> None:
-    values = dict(patient_id="demo-patient", selected_current=(), history=(),
-                  as_of_utc=AS_OF, policy=OfflineRulePolicy())
+    values = {
+        "patient_id": "demo-patient",
+        "selected_current": (),
+        "history": (),
+        "as_of_utc": AS_OF,
+        "policy": OfflineRulePolicy(),
+    }
     for forged in ("blocking_fact_count", "run_gate_completed", "policy_status"):
         with pytest.raises(TypeError):
             OfflineRuleInput(**values, **{forged: True})
