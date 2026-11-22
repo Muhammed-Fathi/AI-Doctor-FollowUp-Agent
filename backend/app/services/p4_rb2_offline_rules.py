@@ -8,7 +8,19 @@ NOT FOR CLINICAL USE.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, DecimalException, Inexact, InvalidOperation, localcontext
+from decimal import (
+    ROUND_HALF_EVEN,
+    Clamped,
+    Context,
+    Decimal,
+    DecimalException,
+    DivisionByZero,
+    Inexact,
+    InvalidOperation,
+    Overflow,
+    Underflow,
+    localcontext,
+)
 from hashlib import sha256
 from itertools import combinations
 
@@ -42,6 +54,17 @@ _RULES = ("DR-001", "DR-003", "DR-005", "DR-006", "DR-008", "DR-009")
 _ISSUES = ("VI-001", "VI-002", "VI-003", "VI-004", "VI-005", "VI-006")
 _NOTICE = "DEMO review prompts only — not clinical risk assessment. Not for clinical use."
 _PINNED_CLOCK = datetime(2026, 11, 14, 12, tzinfo=UTC)
+# Exact decimal arithmetic must never depend on a caller's ambient context.
+_ARITHMETIC_CONTEXT = Context(
+    prec=28,
+    rounding=ROUND_HALF_EVEN,
+    Emin=-999999,
+    Emax=999999,
+    capitals=1,
+    clamp=0,
+    flags=[],
+    traps=[InvalidOperation, DivisionByZero, Overflow, Underflow, Inexact, Clamped],
+)
 _SUFFIXES = {
     "doctor_verified": "",
     "self_reported": " (self-reported)",
@@ -312,7 +335,9 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
         current = selected[-1]
         current_at = stamps[current.id]
         label = _LABELS[measure]
-        past = [r for r in ordered if current_at - timedelta(days=90) <= stamps[r.id] < current_at]
+        past = [
+            r for r in ordered if timedelta(0) < current_at - stamps[r.id] <= timedelta(days=90)
+        ]
         baseline = past[-1] if past else None
         if baseline is None:
             candidates.append(
@@ -348,8 +373,7 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
             )
         if baseline is not None:
             try:
-                with localcontext() as context:
-                    context.traps[Inexact] = True
+                with localcontext(_ARITHMETIC_CONTEXT):
                     delta = abs(amounts[current.id] - amounts[baseline.id])
             except DecimalException:
                 raise OfflineRuleError("E_VALIDATION", "Unsupported numeric precision.") from None
@@ -357,8 +381,7 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
                 if delta.adjusted() > 240:
                     raise OfflineRuleError("E_VALIDATION", "Template length exceeded.")
                 try:
-                    with localcontext() as context:
-                        context.traps[Inexact] = True
+                    with localcontext(_ARITHMETIC_CONTEXT):
                         amount_text = format(delta.normalize(), "f")
                 except DecimalException:
                     raise OfflineRuleError(

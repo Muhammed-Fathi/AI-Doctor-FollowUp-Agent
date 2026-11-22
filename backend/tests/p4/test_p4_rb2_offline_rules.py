@@ -547,3 +547,77 @@ def test_rb2_evidence_delimiter_collision_is_rejected() -> None:
         with pytest.raises(OfflineRuleError) as error:
             run((record(first, value=150),), (record(second, value=100, days=2),))
         assert error.value.code == "E_VALIDATION"
+
+
+def test_rb2_r07_minimum_datetime_does_not_underflow_baseline_window() -> None:
+    minimum = datetime.min.replace(tzinfo=UTC)
+    first = record("first", measured_at=minimum, value=100)
+    result = run((first,))
+    assert "DR-001" in ids(result)
+    assert "DR-003" in ids(result)
+    current = record("second", measured_at=minimum + timedelta(days=1), value=121)
+    result = run((current,), (first,))
+    assert "DR-001" not in ids(result)
+    assert next(f for f in result.flags if f.rule_id == "DR-005").evidence == (
+        "observation:first",
+        "observation:second",
+    )
+
+
+@pytest.mark.parametrize("outside", [False, True])
+def test_rb2_r07_ordinary_90_day_baseline_boundary(outside: bool) -> None:
+    current = record("current", value=121)
+    age = timedelta(days=90, microseconds=int(outside))
+    baseline = record("baseline", value=100, measured_at=current.measured_at - age)
+    result = run((current,), (baseline,))
+    assert ("DR-001" in ids(result)) is outside
+    assert ("DR-005" in ids(result)) is not outside
+
+
+def test_rb2_r08_decimal_context_independent_and_caller_unchanged() -> None:
+    from decimal import ROUND_DOWN, ROUND_UP, Inexact, Rounded, getcontext, localcontext
+
+    selected = record("current", value="121.1")
+    prior = record("baseline", value="100", days=2)
+    results = []
+    outer = getcontext().copy()
+    for precision, rounding, exponent in ((28, ROUND_DOWN, 999999), (2, ROUND_UP, 2)):
+        with localcontext() as ambient:
+            ambient.prec = precision
+            ambient.rounding = rounding
+            ambient.Emax = exponent
+            ambient.Emin = -exponent
+            ambient.traps[Inexact] = False
+            ambient.traps[Rounded] = True
+            ambient.flags[Inexact] = True
+            before = ambient.copy()
+            result = run((selected,), (prior,))
+            assert (ambient.prec, ambient.rounding, ambient.Emin, ambient.Emax, ambient.clamp) == (
+                before.prec,
+                before.rounding,
+                before.Emin,
+                before.Emax,
+                before.clamp,
+            )
+            assert ambient.traps == before.traps
+            assert ambient.flags == before.flags
+            results.append(result)
+    assert results[0] == results[1]
+    flag = next(f for f in results[0].flags if f.rule_id == "DR-005")
+    assert flag.message == (
+        "Systolic BP differs from the previous recorded value by 21.1 mmHg (self-reported)."
+    )
+    assert getcontext().prec == outer.prec
+    assert getcontext().rounding == outer.rounding
+    assert getcontext().traps == outer.traps
+    assert getcontext().flags == outer.flags
+
+
+@pytest.mark.parametrize(("value", "emits"), [("110.0000", False), ("110.0001", True)])
+def test_rb2_r08_strict_threshold_under_low_ambient_precision(value: str, emits: bool) -> None:
+    from decimal import localcontext
+
+    with localcontext() as ambient:
+        ambient.prec = 2
+        result = run((record("current", value=value),), (record("baseline", value=100, days=2),))
+    assert ("DR-005" in ids(result)) is emits
