@@ -110,8 +110,10 @@ def test_latest_prior_tiebreak_is_stable_and_reordered_input_invariant() -> None
     replay = run((current,), (a, previous, b))
     assert first == replay
     assert not any(item.rule_id == "DR-005" for item in first.flags)
-    assert all(item.dedupe_key == run((current,), (b, a, previous)).flags[i].dedupe_key
-               for i, item in enumerate(first.flags))
+    assert all(
+        item.dedupe_key == run((current,), (b, a, previous)).flags[i].dedupe_key
+        for i, item in enumerate(first.flags)
+    )
 
 
 @pytest.mark.parametrize(
@@ -138,9 +140,14 @@ def test_stale_clock_counts_whole_utc_days(age: int, stale: bool) -> None:
 def test_dr006_requires_independent_distinct_asserted_document_sources() -> None:
     at = AS_OF - timedelta(days=3)
     left = record(
-        "left", value=112, measured_at=at, trust="doctor_verified",
-        source="verified_document", source_document_id="doc-a",
-        source_fact_id="fact-a", source_fact_verification_status="verified",
+        "left",
+        value=112,
+        measured_at=at,
+        trust="doctor_verified",
+        source="verified_document",
+        source_document_id="doc-a",
+        source_fact_id="fact-a",
+        source_fact_verification_status="verified",
         lineage_status="fixture_asserted",
     )
     right = replace(
@@ -169,10 +176,10 @@ def test_dr008_exact_duplicate_and_measured_created_order_reversal() -> None:
     dup2 = replace(dup1, id="b")
     result = run((dup2,), (dup1,))
     assert "DR-008" in ids(result)
-    first = record("early_created", measured_at=AS_OF - timedelta(days=2),
-                   created_at=AS_OF - timedelta(days=1))
-    second = record("late_created", measured_at=AS_OF - timedelta(days=5),
-                    created_at=AS_OF)
+    first = record(
+        "early_created", measured_at=AS_OF - timedelta(days=2), created_at=AS_OF - timedelta(days=1)
+    )
+    second = record("late_created", measured_at=AS_OF - timedelta(days=5), created_at=AS_OF)
     result = run((first,), (second,))
     assert "DR-008" in ids(result)
 
@@ -258,9 +265,7 @@ def test_forged_authority_fields_are_not_part_of_typed_fixture() -> None:
         ({"trust_level": "unapproved"}, "E_VALIDATION"),
     ],
 )
-def test_foreign_patient_forged_source_and_unknown_types_fail_closed(
-    change, expected: str
-) -> None:
+def test_foreign_patient_forged_source_and_unknown_types_fail_closed(change, expected: str) -> None:
     with pytest.raises(OfflineRuleError) as error:
         run((replace(record("a"), **change),))
     assert error.value.code == expected
@@ -273,7 +278,9 @@ def test_rejected_wrong_unit_future_rows_excluded_without_invented_delta() -> No
     future = replace(record("future"), measured_at=AS_OF + timedelta(days=1))
     result = run((current,), (rejected, bad_unit, future))
     assert {x.reason for x in result.excluded} == {
-        "validation_rejected", "unit_mismatch", "future_timestamp"
+        "validation_rejected",
+        "unit_mismatch",
+        "future_timestamp",
     }
     assert "DR-005" not in ids(result)
 
@@ -293,8 +300,10 @@ def test_dedupe_replay_order_trust_and_no_retired_ids() -> None:
     assert result == run((first,), (old,))
     assert len({x.dedupe_key for x in result.flags}) == len(result.flags)
     assert all(len(x.dedupe_key) == 64 for x in result.flags)
-    assert all(x.workflow_hint in {"data_quality", "verification_needed",
-                                   "change_to_review"} for x in result.flags)
+    assert all(
+        x.workflow_hint in {"data_quality", "verification_needed", "change_to_review"}
+        for x in result.flags
+    )
     assert all(x.rule_id in OfflineRulePolicy().enabled_rules for x in result.flags)
 
 
@@ -302,9 +311,18 @@ def test_no_io_run_api_or_agent_imports_in_pure_service() -> None:
     path: Path = REPO_ROOT / "backend/app/services/p4_rb2_offline_rules.py"
     source = path.read_text(encoding="utf-8")
     for forbidden in (
-        "from app.db", "import sqlalchemy", "from app.api", "from app.agents",
-        "import langgraph", "import ollama", "import requests",
-        "demo_review_policy.yaml", "blocking_fact_count", "run_gate_completed",
-        "session.add", "session.commit", "review_item",
+        "from app.db",
+        "import sqlalchemy",
+        "from app.api",
+        "from app.agents",
+        "import langgraph",
+        "import ollama",
+        "import requests",
+        "demo_review_policy.yaml",
+        "blocking_fact_count",
+        "run_gate_completed",
+        "session.add",
+        "session.commit",
+        "review_item",
     ):
         assert forbidden not in source
