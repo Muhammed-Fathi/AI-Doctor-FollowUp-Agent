@@ -49,9 +49,7 @@ def scoped(engine):
         patient = db.execute(
             select(Patient).where(Patient.external_ref == "DEMO-A-001")
         ).scalar_one()
-        doctor = db.execute(
-            select(User).where(User.username == "demo_doctor")
-        ).scalar_one()
+        doctor = db.execute(select(User).where(User.username == "demo_doctor")).scalar_one()
         session = UserSession(
             id="d5555555-5555-4555-8555-555555555555",
             user_id=doctor.id,
@@ -237,9 +235,7 @@ def test_rb1_zero_selected_is_deterministic_and_has_no_writes(scoped, engine, tm
     assert db.get(WorkflowRun, run_id).status == "queued"
 
 
-def test_rb1_365_day_f2_baseline_is_not_a_90_day_policy_baseline(
-    scoped, engine, tmp_path
-):
+def test_rb1_365_day_f2_baseline_is_not_a_90_day_policy_baseline(scoped, engine, tmp_path):
     """RB-04: day-180 F2 comparison is NOT admitted by R3-A's 90-day policy."""
     db, patient_id, doctor = scoped
     doc = _verified_document(db, patient_id, tmp_path, "long-history")
@@ -252,12 +248,8 @@ def test_rb1_365_day_f2_baseline_is_not_a_90_day_policy_baseline(
         )
     )
     db.commit()
-    baseline = _observation(
-        db, patient_id, measured_at="2026-05-19T09:00:00Z", value=70
-    )
-    current = _observation(
-        db, patient_id, measured_at="2026-11-14T11:59:00Z", value=76
-    )
+    baseline = _observation(db, patient_id, measured_at="2026-05-19T09:00:00Z", value=70)
+    current = _observation(db, patient_id, measured_at="2026-11-14T11:59:00Z", value=76)
     run_id = _start(db, patient_id, doctor, doc, selected=(current.id,))
     assert _gate(engine, doctor, run_id, tmp_path).decision == "proceed"
     with Session(engine) as fresh:
@@ -280,18 +272,12 @@ def test_rb1_365_day_f2_baseline_is_not_a_90_day_policy_baseline(
     assert compared.incomparable_reason == "no_baseline"
 
 
-def test_rb1_90_day_baseline_is_latest_prior_and_trust_retained(
-    scoped, engine, tmp_path
-):
+def test_rb1_90_day_baseline_is_latest_prior_and_trust_retained(scoped, engine, tmp_path):
     """RB-05/10: recent source is chosen, Decimal delta; no self-report promotion."""
     db, patient_id, doctor = scoped
     doc = _verified_document(db, patient_id, tmp_path, "recent")
-    prev = _observation(
-        db, patient_id, measured_at="2026-11-12T09:00:00Z", value=70
-    )
-    current = _observation(
-        db, patient_id, measured_at="2026-11-14T11:59:00Z", value=76
-    )
+    prev = _observation(db, patient_id, measured_at="2026-11-12T09:00:00Z", value=70)
+    current = _observation(db, patient_id, measured_at="2026-11-14T11:59:00Z", value=76)
     run_id = _start(db, patient_id, doctor, doc, selected=(current.id,))
     assert _gate(engine, doctor, run_id, tmp_path).decision == "proceed"
     result = _preview(engine, doctor, run_id, tmp_path)
@@ -308,12 +294,13 @@ def test_rb1_history_exclusions_remain_explicit(scoped, engine, tmp_path):
     db, patient_id, doctor = scoped
     doc = _verified_document(db, patient_id, tmp_path, "excluded")
     invalid = _observation(
-        db, patient_id, measured_at="2026-11-13T09:00:00Z", value=75,
+        db,
+        patient_id,
+        measured_at="2026-11-13T09:00:00Z",
+        value=75,
         validation="rejected",
     )
-    current = _observation(
-        db, patient_id, measured_at="2026-11-14T11:59:00Z", value=76
-    )
+    current = _observation(db, patient_id, measured_at="2026-11-14T11:59:00Z", value=76)
     run_id = _start(db, patient_id, doctor, doc, selected=(current.id,))
     assert _gate(engine, doctor, run_id, tmp_path).decision == "proceed"
     result = _preview(engine, doctor, run_id, tmp_path)
@@ -377,9 +364,7 @@ def test_rb1_wrong_role_and_dirty_session_fail_closed(scoped, engine, tmp_path):
             )
 
 
-def test_rb1_cannot_accept_caller_policy_or_gate_override(
-    scoped, engine, tmp_path
-):
+def test_rb1_cannot_accept_caller_policy_or_gate_override(scoped, engine, tmp_path):
     """RB-11/21: caller cannot inject 90/365, gate status or cached V2 DTO."""
     db, patient_id, doctor = scoped
     doc = _verified_document(db, patient_id, tmp_path, "override")
@@ -397,9 +382,7 @@ def test_rb1_cannot_accept_caller_policy_or_gate_override(
         )
 
 
-def test_rb1_pinned_policy_tamper_is_not_a_fallback(
-    scoped, engine, tmp_path, monkeypatch
-):
+def test_rb1_pinned_policy_tamper_is_not_a_fallback(scoped, engine, tmp_path, monkeypatch):
     """RB-11: a modified reference is never a second unapproved policy."""
     db, patient_id, doctor = scoped
     doc = _verified_document(db, patient_id, tmp_path, "policy-change")
