@@ -13,11 +13,13 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+import yaml
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.core.enums import Role
 from app.core.errors import ApiError
+from app.core.paths import REPO_ROOT
 from app.core.policies import Principal
 from app.db.models import (
     AuditEvent,
@@ -32,6 +34,7 @@ from app.db.models import (
     WorkflowRun,
 )
 from app.services import p4_run_bound_preview as rb
+from app.services.demo_policy import validate_demo_policy
 from app.services.p5_evidence_bridge import build_run_evaluable_review_evidence
 from app.services.p5_run_foundation import create_run_foundation
 from app.services.p5_run_gate import evaluate_run_verification_gate
@@ -382,17 +385,34 @@ def test_rb1_cannot_accept_caller_policy_or_gate_override(scoped, engine, tmp_pa
         )
 
 
-def test_rb1_pinned_policy_tamper_is_not_a_fallback(scoped, engine, tmp_path, monkeypatch):
-    """RB-11: a modified reference is never a second unapproved policy."""
+def test_rb1_fixed_reference_rejects_mutated_version_not_a_fallback(
+    scoped, engine, tmp_path, monkeypatch
+):
+    """RB-11: the internal read-only comparison constants cannot be overridden."""
     db, patient_id, doctor = scoped
     doc = _verified_document(db, patient_id, tmp_path, "policy-change")
     run_id = _start(db, patient_id, doctor, doc)
     assert _gate(engine, doctor, run_id, tmp_path).decision == "proceed"
-    bad_reference = tmp_path / "reference.yaml"
-    bad_reference.write_text("policy_version: demo-policy-1.1.0\n", encoding="utf-8")
-    monkeypatch.setattr(rb, "POLICY_PATH", bad_reference)
+    monkeypatch.setattr(rb, "POLICY_VERSION", "demo-policy-9.9.9")
     with pytest.raises(ApiError):
         _preview(engine, doctor, run_id, tmp_path)
+
+
+def test_rb1_fixed_comparison_reference_matches_offline_owner_seal():
+    """RB-11: compare compiled non-executable settings against the R3-A fixture.
+
+    This TEST can read offline reference bytes. The application runtime must
+    never open/execute the test-only fixture or derive an approval from it.
+    """
+    source = (
+        REPO_ROOT / "data" / "synthetic" / "policy" / "demo_review_policy.yaml"
+    ).read_bytes()
+    if b"\r\n" in source:
+        assert b"\n" not in source.replace(b"\r\n", b"")
+    canonical = source.replace(b"\r\n", b"\n")
+    assert b"\r" not in canonical
+    assert hashlib.sha256(canonical).hexdigest() == rb.POLICY_CANONICAL_SHA256
+    assert rb._pinned_policy() == validate_demo_policy(yaml.safe_load(canonical))
 
 
 def test_rb1_rejects_unpinned_run_clock(scoped, engine, tmp_path):
