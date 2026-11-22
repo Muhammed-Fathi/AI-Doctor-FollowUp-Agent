@@ -120,7 +120,9 @@ def _projection(
     observation_ids = tuple(x.observation_id for x in selected_obs)
     if not 1 <= len(document_ids) <= 5 or len(observation_ids) > MAX_CURRENT_OBSERVATIONS:
         raise _invalid("Run-selected current sources exceed the F2 evidence boundary.")
-    if len(set(document_ids)) != len(document_ids) or len(set(observation_ids)) != len(observation_ids):
+    if len(set(document_ids)) != len(document_ids) or len(set(observation_ids)) != len(
+        observation_ids
+    ):
         raise _invalid("Run-selected sources contain duplicate IDs.")
 
     # F1 recomputes all VI blockers; this independent P4 check also enforces
@@ -315,38 +317,54 @@ def _projection(
             "history_policy": COMPARISON_HISTORY_VERSION,
             "gate": [stored_gate.id, gate.gate_version, gate.input_fingerprint_sha256],
             "run": [
-                run.id, run.patient_id, run.doctor_id, run.as_of_utc,
-                run.workflow_version, run.state_schema_version,
-                run.mapping_version, run.policy_version,
+                run.id,
+                run.patient_id,
+                run.doctor_id,
+                run.as_of_utc,
+                run.workflow_version,
+                run.state_schema_version,
+                run.mapping_version,
+                run.policy_version,
             ],
             "documents": document_ids,
             "selected": observation_ids,
             "facts": [
                 [
-                    item.fact_id, item.document_id, item.field_name,
-                    item.normalized_value, item.unit, item.corrected_from_fact_id,
+                    item.fact_id,
+                    item.document_id,
+                    item.field_name,
+                    item.normalized_value,
+                    item.unit,
+                    item.corrected_from_fact_id,
                 ]
                 for item in verified_rows
             ],
             "observations": [
                 [
-                    item.observation_id, str(item.value), item.measured_at,
-                    item.measure_type, item.unit, item.trust_level, item.source,
-                    item.source_fact_id, item.source_document_id,
+                    item.observation_id,
+                    str(item.value),
+                    item.measured_at,
+                    item.measure_type,
+                    item.unit,
+                    item.trust_level,
+                    item.source,
+                    item.source_fact_id,
+                    item.source_document_id,
                 ]
                 for item in projected_current_rows
             ],
             "comparisons": [
                 [
-                    item.current_observation_id, item.baseline_observation_id,
-                    item.comparable, str(item.delta) if item.delta is not None else None,
-                    item.trust_basis, item.incomparable_reason,
+                    item.current_observation_id,
+                    item.baseline_observation_id,
+                    item.comparable,
+                    str(item.delta) if item.delta is not None else None,
+                    item.trust_basis,
+                    item.incomparable_reason,
                 ]
                 for item in comparisons
             ],
-            "history_exclusions": [
-                [item.observation_id, item.reason_code] for item in exclusions
-            ],
+            "history_exclusions": [[item.observation_id, item.reason_code] for item in exclusions],
             "historical_issues": gate.historical_excluded_vi002_ids,
         }
     )
