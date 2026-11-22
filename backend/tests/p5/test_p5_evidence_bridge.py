@@ -212,7 +212,9 @@ def test_f2_clear_run_is_read_only_and_never_runtime_authorized(scoped, engine, 
     assert first.contract_version == "2.0.0"
     assert first.bridge_validated and not first.runtime_evaluable
     assert first.policy_status == "unapproved" and not first.rules_executed
-    assert first.verified_facts and all(f.verification_status == "verified" for f in first.verified_facts)
+    assert first.verified_facts and all(
+        f.verification_status == "verified" for f in first.verified_facts
+    )
     assert first.comparisons == ()
     assert first.no_current_reason == "no_current_selected"
     assert first.gate_input_fingerprint_sha256
@@ -258,11 +260,15 @@ def test_f2_stale_or_corrupt_provenance_never_uses_cached_proceed(
         ).scalar_one()
         fact.raw_text = "106"
     elif mutation == "verified_decision":
-        decision = db.execute(
-            select(FactVerification)
-            .join(ExtractedFact, FactVerification.fact_id == ExtractedFact.id)
-            .where(ExtractedFact.document_id == document.id)
-        ).scalars().first()
+        decision = (
+            db.execute(
+                select(FactVerification)
+                .join(ExtractedFact, FactVerification.fact_id == ExtractedFact.id)
+                .where(ExtractedFact.document_id == document.id)
+            )
+            .scalars()
+            .first()
+        )
         assert decision is not None
         decision.decision = "rejected"
     else:
@@ -310,9 +316,7 @@ def test_f2_revoked_session_fails_closed(scoped, engine, tmp_path):
     assert err.value.status_code == 403
 
 
-def test_f2_selected_self_reported_current_and_history_preserve_trust(
-    scoped, engine, tmp_path
-):
+def test_f2_selected_self_reported_current_and_history_preserve_trust(scoped, engine, tmp_path):
     db, patient_id, doctor = scoped
     document = _doc(db, patient_id, tmp_path, "comparison")
     baseline = _observation(db, patient_id, day=12, value=70)
@@ -384,9 +388,7 @@ def test_f2_more_than_six_current_is_explicit_denial(scoped, engine, tmp_path):
         db.flush()
         selected_ids.append(row.id)
     db.commit()
-    run_id = _start(
-        db, patient_id, doctor, document.id, observation_ids=tuple(selected_ids)
-    )
+    run_id = _start(db, patient_id, doctor, document.id, observation_ids=tuple(selected_ids))
     assert _gate(engine, doctor, run_id, tmp_path).decision == "proceed"
     with pytest.raises(ApiError):
         _bridge(engine, doctor, run_id, tmp_path)
@@ -426,9 +428,7 @@ def test_f2_document_only_verified_unit_never_becomes_observation(scoped, engine
     assert result.selected_observations == ()
 
 
-def test_f2_does_not_accept_untrusted_role_or_in_transaction_session(
-    scoped, engine, tmp_path
-):
+def test_f2_does_not_accept_untrusted_role_or_in_transaction_session(scoped, engine, tmp_path):
     db, patient_id, doctor = scoped
     document = _doc(db, patient_id, tmp_path, "role")
     run_id = _start(db, patient_id, doctor, document.id)
@@ -455,9 +455,7 @@ def test_f2_does_not_accept_untrusted_role_or_in_transaction_session(
             )
 
 
-def test_f2_caller_cannot_supply_clearance_or_baseline_override(
-    scoped, engine, tmp_path
-):
+def test_f2_caller_cannot_supply_clearance_or_baseline_override(scoped, engine, tmp_path):
     db, patient_id, doctor = scoped
     document = _doc(db, patient_id, tmp_path, "caller")
     run_id = _start(db, patient_id, doctor, document.id)
