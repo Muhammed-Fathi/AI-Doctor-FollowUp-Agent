@@ -1089,3 +1089,21 @@ EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE
 > Correct it if the exact final head's pytest collection differs. The accepted
 > P3 historical results and real `GOLD-EX-11 FAIL / NOT PROVEN` remain unmodified.
 > The new F1 cases concern synthetic software consistency, not clinical validity.
+
+> **P5-F2 PR #35 owner-approved collection-pairing compatibility note (2026-11-22; collection, NOT test PASS).**
+> Repository owner `Muhammed-Fathi` explicitly approved the **one-document, append-only**
+> [collection-only exception](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/35#issuecomment-7075105100).
+> The exact-head [GitHub CI #44979500529](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/44979500529)
+> at `f09d4d97a39fc40a3fb34bd625523e94a76e293e` measured the **current**
+> backend test suite as **1140 collected**, of which **443** are the P3 suite.
+> The added synthetic P5-F2 tests increased the backend collection while the
+> historical P3 test suite remained unchanged. **1140 collected does NOT mean
+> 1140 passed**: that prior CI run actually **FAILED** the strict paired-count
+> documentation guard because the prior handoff recorded 1121 collected.
+> All historical P3 handoff results, earlier provisional/current-at-that-time
+> collection tokens, real source OCR `GOLD-EX-11 = FAIL / NOT PROVEN`, and
+> original P3 safety evidence are preserved verbatim. No P3 test, tolerance,
+> gate criterion, code, source fixture, or CI job has been altered under this
+> exception. A new exact-head full CI SUCCESS and independent owner Windows
+> acceptance remain mandatory before any PR #35 merge. F2/P4/P5 are not
+> declared accepted; SYNTHETIC EDUCATIONAL / NOT FOR CLINICAL USE.
