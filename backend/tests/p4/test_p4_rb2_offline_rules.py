@@ -161,6 +161,9 @@ def test_dr006_requires_independent_distinct_asserted_document_sources() -> None
     assert item.trust_basis == "doctor_verified"
     replay = run((left,), (replace(right, source_document_id="doc-a"),))
     assert "DR-006" not in ids(replay)
+    same_fact = run((left,), (replace(right, source_fact_id="fact-a"),))
+    assert "DR-006" not in ids(same_fact)
+    assert item.message == "Two verified sources disagree for Systolic BP at 2026-11-11T12:00:00Z."
 
 
 def test_missing_source_lineage_is_excluded_not_promoted() -> None:
@@ -182,6 +185,9 @@ def test_dr008_exact_duplicate_and_measured_created_order_reversal() -> None:
     second = record("late_created", measured_at=AS_OF - timedelta(days=5), created_at=AS_OF)
     result = run((first,), (second,))
     assert "DR-008" in ids(result)
+    assert next(f for f in result.flags if f.rule_id == "DR-008").message == (
+        "A repeated or out-of-order entry was detected for Systolic BP (self-reported)."
+    )
 
 
 def test_missing_created_at_yields_typed_exclusion_not_fake_order() -> None:
@@ -200,14 +206,19 @@ def test_dr009_closed_engineering_band_only(value: int, emit: bool) -> None:
     result = run((record("current", value=value),))
     assert ("DR-009" in ids(result)) is emit
     if emit:
-        assert "typo" in next(x.message for x in result.flags if x.rule_id == "DR-009")
+        assert next(x.message for x in result.flags if x.rule_id == "DR-009") == (
+            "A recorded value is outside the demo plausibility range and may be a typo "
+            "(self-reported)."
+        )
 
 
 def test_self_report_and_mixed_trust_never_promoted() -> None:
     self_report = run((record("self", value=150),), (record("base", value=120, days=5),))
     item = next(x for x in self_report.flags if x.rule_id == "DR-005")
     assert item.trust_basis == "self_reported"
-    assert item.message.endswith("(self-reported).")
+    assert item.message == (
+        "Systolic BP differs from the previous recorded value by 30 mmHg (self-reported)."
+    )
     mixed = run(
         (record("doc", value=150, trust="doctor_verified", source="verified_document"),),
         (record("base", value=120, days=5),),
@@ -326,3 +337,213 @@ def test_no_io_run_api_or_agent_imports_in_pure_service() -> None:
         "review_item",
     ):
         assert forbidden not in source
+
+
+# RB2-R01: the R3-A instant is independently pinned, not merely self-consistent.
+def test_rb2_r01_coordinated_clock_override_fails_and_equal_offsets_normalize() -> None:
+    from datetime import timezone
+
+    changed = AS_OF + timedelta(days=1)
+    data = OfflineRuleInput(
+        "demo-patient",
+        (record("a"),),
+        (),
+        changed,
+        replace(OfflineRulePolicy(), demo_as_of_utc=changed),
+    )
+    with pytest.raises(OfflineRuleError) as error:
+        evaluate_p4_rb2_offline_fixture(data)
+    assert error.value.code == "E_RULE_POLICY_INVALID"
+    offset = AS_OF.astimezone(timezone(timedelta(hours=3)))
+    approved = replace(
+        data,
+        as_of_utc=offset.isoformat(),
+        policy=replace(OfflineRulePolicy(), demo_as_of_utc=offset),
+    )
+    assert evaluate_p4_rb2_offline_fixture(approved) == run((record("a"),))
+
+
+# RB2-R02: the absence of independently asserted lineage is per observation.
+def test_rb2_r02_single_document_lineage_excluded() -> None:
+    doc = record("doc", source="verified_document", trust="doctor_verified")
+    result = run((doc,))
+    assert ("doc", "verified_lineage_unavailable") in {
+        (e.observation_id, e.reason) for e in result.excluded
+    }
+    assert "DR-006" not in ids(result)
+
+
+# RB2-R03: created-time absence never fabricates ordering, including duplicates.
+@pytest.mark.parametrize("missing", [None, "not-a-date", "2026-11-01T12:00:00", 42])
+def test_rb2_r03_bad_created_at_per_row_and_duplicate_independent(missing) -> None:
+    a = replace(record("a", days=1), created_at=missing)
+    b = replace(record("b", days=2), created_at=missing)
+    result = run((a,), (b,))
+    assert {e.observation_id for e in result.excluded if e.reason == "missing_created_at"} == {
+        "a",
+        "b",
+    }
+    assert "DR-008" not in ids(result)
+    duplicate = replace(a, id="duplicate")
+    result = run((a,), (duplicate,))
+    assert "DR-008" in ids(result)
+    assert {e.observation_id for e in result.excluded if e.reason == "missing_created_at"} == {
+        "a",
+        "duplicate",
+    }
+
+
+def test_rb2_r03_one_missing_created_at() -> None:
+    result = run((record("a", days=1),), (replace(record("b", days=2), created_at=None),))
+    assert [(e.observation_id, e.reason) for e in result.excluded] == [("b", "missing_created_at")]
+    assert "DR-008" not in ids(result)
+
+
+# RB2-R04: the selected type scopes DR-003; historical records never select a type.
+def test_rb2_r04_newer_history_dr003_only_does_not_change_current_comparison() -> None:
+    selected = record("selected", days=45, value=140)
+    newest = record("history", days=5, value=130)
+    result = run((selected,), (newest,))
+    assert "DR-003" not in ids(result)
+    assert "DR-001" in ids(result)
+    assert next(f for f in result.flags if f.rule_id == "DR-001").message == (
+        "No previous recorded Systolic BP to compare against (self-reported)."
+    )
+    assert "DR-005" not in ids(result)
+    assert result == run((selected,), (newest,))
+
+
+def test_rb2_r04_stale_newest_history_evidence_trust_template_and_replay() -> None:
+    selected = record("selected", days=65, value=130)
+    newest = record("newest", days=40, value=130, trust="doctor_verified")
+    other = record("other", days=50, value=130)
+    result = run((selected,), (newest, other))
+    assert result == run((selected,), (other, newest))
+    stale = next(flag for flag in result.flags if flag.rule_id == "DR-003")
+    assert stale.evidence == ("observation:newest",)
+    assert stale.trust_basis == "doctor_verified"
+    assert stale.message == "The most recent Systolic BP was recorded 40 days ago."
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"validation": "rejected"},
+        {"measured_at": AS_OF + timedelta(days=1)},
+        {"unit": "bpm"},
+        {"measured_at": "invalid"},
+    ],
+)
+def test_rb2_r04_inadmissible_newer_history_cannot_determine_age(change) -> None:
+    selected = record("selected", days=45)
+    newer = replace(record("newer", days=5), **change)
+    stale = next(flag for flag in run((selected,), (newer,)).flags if flag.rule_id == "DR-003")
+    assert stale.evidence == ("observation:selected",)
+    assert stale.message == "The most recent Systolic BP was recorded 45 days ago (self-reported)."
+
+
+def test_rb2_r04_unselected_type_and_zero_selected_never_evaluated() -> None:
+    selected = record("selected", days=1)
+    other_type = record("old-heart", measure="heart_rate", days=60, value=70)
+    assert "DR-003" not in ids(run((selected,), (other_type,)))
+    assert run((), (other_type,)).flags == ()
+
+
+def test_rb2_r04_equal_newest_timestamp_stable_tiebreak() -> None:
+    selected = record("old", days=60)
+    a = record("a", days=40, trust="self_reported_validated")
+    b = record("b", days=40, trust="doctor_verified")
+    x, y = run((selected,), (a, b)), run((selected,), (b, a))
+    assert x == y
+    stale = next(f for f in x.flags if f.rule_id == "DR-003")
+    assert stale.evidence == ("observation:b",)
+    assert stale.trust_basis == "doctor_verified"
+
+
+@pytest.mark.parametrize(("days", "expected"), [(29, False), (30, False), (31, True)])
+def test_rb2_r04_newest_history_whole_day_boundary(days, expected) -> None:
+    result = run((record("old", days=60),), (record("new", days=days),))
+    assert ("DR-003" in ids(result)) is expected
+
+
+# RB2-R05: do not silently consume contradictory source-fact assertions.
+@pytest.mark.parametrize("status", ["pending", "rejected"])
+@pytest.mark.parametrize("as_history", [False, True])
+def test_rb2_r05_unverified_fact_assertion_fails_closed(status, as_history) -> None:
+    doc = record(
+        "doc",
+        source="verified_document",
+        trust="doctor_verified",
+        source_fact_verification_status=status,
+    )
+    with pytest.raises(OfflineRuleError) as error:
+        run((record("current"),) if as_history else (doc,), (doc,) if as_history else (), facts=())
+    assert error.value.code == "E_UNVERIFIED_FACT"
+
+
+# RB2-R06: malformed dataclass fields cannot escape as raw Python exceptions.
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"measure_type": []},
+        {"id": []},
+        {"patient_id": []},
+        {"validation": []},
+        {"trust_level": []},
+        {"source": []},
+        {"lineage_status": []},
+        {"unit": []},
+        {"value": []},
+        {"source_fact_verification_status": []},
+        {"source_document_id": []},
+        {"source_fact_id": []},
+        {"id": "a|observation:b"},
+        {"id": "a\n"},
+        {"id": "\ud800"},
+    ],
+)
+def test_rb2_r06_malformed_fields_are_typed_failures(change) -> None:
+    with pytest.raises(OfflineRuleError) as error:
+        run((replace(record("a"), **change),))
+    assert error.value.code == "E_VALIDATION"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"demo_delta_systolic_mmHg": []},
+        {"conflict_tolerance": {}},
+        {"enabled_rules": []},
+        {"demo_as_of_utc": []},
+        {"max_items_per_type": True},
+    ],
+)
+def test_rb2_r06_malformed_policy_is_typed_failure(change) -> None:
+    with pytest.raises(OfflineRuleError) as error:
+        run((record("a"),), policy=replace(OfflineRulePolicy(), **change))
+    assert error.value.code == "E_RULE_POLICY_INVALID"
+
+
+def test_rb2_r06_bad_active_status_and_patient_id_are_typed() -> None:
+    with pytest.raises(OfflineRuleError) as error:
+        run((record("a"),), facts=([],))
+    assert error.value.code == "E_VALIDATION"
+    data = OfflineRuleInput("p|DR-005", (), (), AS_OF, OfflineRulePolicy())
+    with pytest.raises(OfflineRuleError) as error:
+        evaluate_p4_rb2_offline_fixture(data)
+    assert error.value.code == "E_VALIDATION"
+
+
+def test_rb2_r06_decimal_overflow_fails_closed() -> None:
+    huge = record("huge", value="1e999999999")
+    with pytest.raises(OfflineRuleError) as error:
+        run((huge,), (record("baseline", value=100, days=2),))
+    assert error.value.code == "E_VALIDATION"
+
+
+def test_rb2_evidence_delimiter_collision_is_rejected() -> None:
+    # Before the fix, the two distinct evidence pairs serialized identically.
+    for first, second in (("a", "b|observation:c"), ("a|observation:b", "c")):
+        with pytest.raises(OfflineRuleError) as error:
+            run((record(first, value=150),), (record(second, value=100, days=2),))
+        assert error.value.code == "E_VALIDATION"

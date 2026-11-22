@@ -7,8 +7,8 @@ NOT FOR CLINICAL USE.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal, DecimalException, Inexact, InvalidOperation, localcontext
 from hashlib import sha256
 from itertools import combinations
 
@@ -41,6 +41,7 @@ _HINT_ORDER = {"verification_needed": 0, "data_quality": 1, "change_to_review": 
 _RULES = ("DR-001", "DR-003", "DR-005", "DR-006", "DR-008", "DR-009")
 _ISSUES = ("VI-001", "VI-002", "VI-003", "VI-004", "VI-005", "VI-006")
 _NOTICE = "DEMO review prompts only — not clinical risk assessment. Not for clinical use."
+_PINNED_CLOCK = datetime(2026, 11, 14, 12, tzinfo=UTC)
 _SUFFIXES = {
     "doctor_verified": "",
     "self_reported": " (self-reported)",
@@ -50,8 +51,8 @@ _SUFFIXES = {
 
 def _decimal(value: object, *, policy: bool = False) -> Decimal:
     code = "E_RULE_POLICY_INVALID" if policy else "E_VALIDATION"
-    if isinstance(value, bool):
-        raise OfflineRuleError(code, "Boolean cannot be a numeric measurement.")
+    if type(value) not in (Decimal, str, int, float):
+        raise OfflineRuleError(code, "Unsupported numeric value type.")
     try:
         amount = Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError):
@@ -78,7 +79,8 @@ def _policy(policy: OfflineRulePolicy, clock: datetime) -> dict[str, Decimal]:
     if (
         policy.policy_version != "demo-policy-1.1.0"
         or policy.demo_only is not True
-        or _clock(policy.demo_as_of_utc) != clock
+        or clock != _PINNED_CLOCK
+        or _clock(policy.demo_as_of_utc) != _PINNED_CLOCK
         or policy.notice != _NOTICE
         or type(policy.baseline_lookback_days) is not int
         or policy.baseline_lookback_days != 90
@@ -149,34 +151,74 @@ def _flag(
     )
 
 
+def _valid_id(value: object) -> bool:
+    # The policy hash uses | as a separator; refusing ambiguous identifiers
+    # preserves the published serialization without inventing a new format.
+    if not isinstance(value, str) or not value or value != value.strip():
+        return False
+    if "|" in value or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _validate_row(row: OfflineObservation, patient_id: str) -> None:
     if not isinstance(row, OfflineObservation):
         raise OfflineRuleError("E_VALIDATION", "Typed synthetic evidence required.")
-    if not isinstance(row.id, str) or not row.id.strip():
+    if not _valid_id(row.id):
         raise OfflineRuleError("E_VALIDATION", "Missing observation ID.")
+    if not _valid_id(row.patient_id):
+        raise OfflineRuleError("E_VALIDATION", "Invalid observation patient ID.")
     if row.patient_id != patient_id:
         raise OfflineRuleError("E_SCOPE_VIOLATION", "Foreign patient evidence.")
-    if row.measure_type not in _LABELS:
+    if not isinstance(row.measure_type, str) or row.measure_type not in _LABELS:
         raise OfflineRuleError("E_VALIDATION", "Unknown measure type.")
-    if row.validation not in {"ok", "ok_with_warning", "rejected"}:
+    if not isinstance(row.validation, str) or row.validation not in {
+        "ok",
+        "ok_with_warning",
+        "rejected",
+    }:
         raise OfflineRuleError("E_VALIDATION", "Unknown validation status.")
-    if row.trust_level not in {"doctor_verified", "self_reported_validated"}:
+    if not isinstance(row.trust_level, str) or row.trust_level not in {
+        "doctor_verified",
+        "self_reported_validated",
+    }:
         raise OfflineRuleError("E_VALIDATION", "Unknown trust level.")
-    if row.source not in {"seed_fixture", "verified_document", "patient_checkin"}:
+    if not isinstance(row.source, str) or row.source not in {
+        "seed_fixture",
+        "verified_document",
+        "patient_checkin",
+    }:
         raise OfflineRuleError("E_VALIDATION", "Unknown source.")
     if row.source == "patient_checkin" and row.trust_level != "self_reported_validated":
         raise OfflineRuleError("E_VALIDATION", "Patient check-in cannot be doctor-verified.")
-    if row.lineage_status not in {"unavailable", "fixture_asserted"}:
+    if not isinstance(row.lineage_status, str) or row.lineage_status not in {
+        "unavailable",
+        "fixture_asserted",
+    }:
         raise OfflineRuleError("E_VALIDATION", "Unsupported or forged provenance authority.")
     if (
         row.source_document_id is not None or row.source_fact_id is not None
     ) and row.source != "verified_document":
         raise OfflineRuleError("E_VALIDATION", "Provenance claims on non-document row.")
-    if (
-        row.source_fact_verification_status is not None
-        and row.source_fact_verification_status not in {"verified", "pending", "rejected"}
+    for identifier in (row.source_document_id, row.source_fact_id):
+        if identifier is not None and not _valid_id(identifier):
+            raise OfflineRuleError("E_VALIDATION", "Invalid source identity.")
+    if not isinstance(row.unit, str):
+        raise OfflineRuleError("E_VALIDATION", "Invalid unit type.")
+    if row.source_fact_verification_status is not None and (
+        not isinstance(row.source_fact_verification_status, str)
+        or row.source_fact_verification_status not in {"verified", "pending", "rejected"}
     ):
         raise OfflineRuleError("E_VALIDATION", "Invalid fact verification label.")
+    if row.source_fact_verification_status in ("pending", "rejected"):
+        # The snapshot does not indicate whether this fact is active or a
+        # superseded historical original. Refuse the contradictory fixture;
+        # do not claim to have independently evaluated a real VI gate.
+        raise OfflineRuleError("E_UNVERIFIED_FACT", "Unverified source fact assertion.")
 
 
 def _independent_fixture_source(row: OfflineObservation) -> bool:
@@ -200,7 +242,7 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
     if clock is None:
         raise OfflineRuleError("E_RULE_POLICY_INVALID", "Invalid injected UTC clock.")
     deltas = _policy(data.policy, clock)
-    if not isinstance(data.patient_id, str) or not data.patient_id.strip():
+    if not _valid_id(data.patient_id):
         raise OfflineRuleError("E_VALIDATION", "Missing patient scope.")
     if (
         not isinstance(data.selected_current, tuple)
@@ -210,7 +252,7 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
     ):
         raise OfflineRuleError("E_VALIDATION", "Invalid bounded fixture selection.")
     if not isinstance(data.active_fact_verification_statuses, tuple) or any(
-        status not in {"verified", "pending", "rejected"}
+        not isinstance(status, str) or status not in {"verified", "pending", "rejected"}
         for status in data.active_fact_verification_statuses
     ):
         raise OfflineRuleError("E_VALIDATION", "Invalid fixture fact status.")
@@ -246,6 +288,14 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
         if amount <= 0:
             raise OfflineRuleError("E_VALIDATION", "Non-positive measurement.")
         eligible.append(row)
+        if _clock(row.created_at) is None:
+            excluded.append(OfflineEvidenceExclusion(row.id, "missing_created_at"))
+        if (
+            row.source == "verified_document"
+            and row.trust_level == "doctor_verified"
+            and not _independent_fixture_source(row)
+        ):
+            excluded.append(OfflineEvidenceExclusion(row.id, "verified_lineage_unavailable"))
         stamps[row.id] = stamp
         amounts[row.id] = amount
 
@@ -279,7 +329,8 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
                     ),
                 )
             )
-        days = (clock - current_at).days
+        newest = next(r for r in reversed(ordered) if r.unit == current.unit)
+        days = (clock - stamps[newest.id]).days
         if days > 30:
             candidates.append(
                 (
@@ -291,14 +342,28 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
                         "measurement_stale",
                         "data_quality",
                         f"The most recent {label} was recorded {days} days ago.",
-                        (current,),
+                        (newest,),
                     ),
                 )
             )
         if baseline is not None:
-            delta = abs(amounts[current.id] - amounts[baseline.id])
+            try:
+                with localcontext() as context:
+                    context.traps[Inexact] = True
+                    delta = abs(amounts[current.id] - amounts[baseline.id])
+            except DecimalException:
+                raise OfflineRuleError("E_VALIDATION", "Unsupported numeric precision.") from None
             if delta > deltas[measure]:
-                amount_text = format(delta.normalize(), "f")
+                if delta.adjusted() > 240:
+                    raise OfflineRuleError("E_VALIDATION", "Template length exceeded.")
+                try:
+                    with localcontext() as context:
+                        context.traps[Inexact] = True
+                        amount_text = format(delta.normalize(), "f")
+                except DecimalException:
+                    raise OfflineRuleError(
+                        "E_VALIDATION", "Unsupported numeric precision."
+                    ) from None
                 candidates.append(
                     (
                         measure,
@@ -336,18 +401,6 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
         # qualifying records do not constitute a real doctor's attestation.
         for first, second in combinations(ordered, 2):
             if (
-                first.source == "verified_document"
-                and first.trust_level == "doctor_verified"
-                and not _independent_fixture_source(first)
-            ):
-                excluded.append(OfflineEvidenceExclusion(first.id, "verified_lineage_unavailable"))
-            if (
-                second.source == "verified_document"
-                and second.trust_level == "doctor_verified"
-                and not _independent_fixture_source(second)
-            ):
-                excluded.append(OfflineEvidenceExclusion(second.id, "verified_lineage_unavailable"))
-            if (
                 stamps[first.id] == stamps[second.id]
                 and amounts[first.id] != amounts[second.id]
                 and _independent_fixture_source(first)
@@ -379,13 +432,6 @@ def evaluate_p4_rb2_offline_fixture(data: OfflineRuleInput) -> OfflineRuleResult
                 )
             same = stamps[first.id] == stamps[second.id] and amounts[first.id] == amounts[second.id]
             a_created, b_created = _clock(first.created_at), _clock(second.created_at)
-            if (first.created_at is None or second.created_at is None) and not same:
-                excluded.append(
-                    OfflineEvidenceExclusion(
-                        first.id if first.created_at is None else second.id,
-                        "missing_created_at",
-                    )
-                )
             out_of_order = (
                 a_created is not None
                 and b_created is not None
