@@ -404,9 +404,7 @@ def test_rb1_fixed_comparison_reference_matches_offline_owner_seal():
     This TEST can read offline reference bytes. The application runtime must
     never open/execute the test-only fixture or derive an approval from it.
     """
-    source = (
-        REPO_ROOT / "data" / "synthetic" / "policy" / "demo_review_policy.yaml"
-    ).read_bytes()
+    source = (REPO_ROOT / "data" / "synthetic" / "policy" / "demo_review_policy.yaml").read_bytes()
     if b"\r\n" in source:
         assert b"\n" not in source.replace(b"\r\n", b"")
     canonical = source.replace(b"\r\n", b"\n")
