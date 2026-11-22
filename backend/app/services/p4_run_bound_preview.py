@@ -11,20 +11,16 @@ SYNTHETIC EDUCATIONAL ONLY — NOT FOR CLINICAL USE.
 
 from __future__ import annotations
 
-import hashlib
 from datetime import datetime
 from decimal import Decimal
-from pathlib import Path
 from typing import Literal, cast
 
-import yaml
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.clock import format_utc, parse_utc, to_utc
 from app.core.errors import ApiError, ErrorCode
-from app.core.paths import REPO_ROOT
 from app.core.policies import Principal
 from app.db.models import RunSelectedObservation, WorkflowRun
 from app.schemas.p4_run_bound_preview import (
@@ -38,7 +34,6 @@ from app.services.p4_readonly_provenance import load_readonly_provenance_evidenc
 from app.services.p5_evidence_bridge import build_run_evaluable_review_evidence
 from app.services.p5_run_gate import inspect_current_run_gate_locked
 
-POLICY_PATH: Path = REPO_ROOT / "data" / "synthetic" / "policy" / "demo_review_policy.yaml"
 POLICY_CANONICAL_SHA256 = "f3bdad3f6a958b65b50598910cc91501dcc53ca210ff90d2e09b14695cb6bd36"
 POLICY_VERSION = "demo-policy-1.1.0"
 POLICY_LOOKBACK_DAYS = 90
@@ -50,49 +45,46 @@ def _deny(message: str) -> ApiError:
     return ApiError(409, ErrorCode.VALIDATION, message)
 
 
-class _NoDuplicateSafeLoader(yaml.SafeLoader):
-    """The official reference must not silently override a repeated YAML key."""
-
-
-def _unique_mapping(loader: _NoDuplicateSafeLoader, node: yaml.nodes.MappingNode) -> dict:
-    result: dict = {}
-    for k_node, v_node in node.value:
-        key = loader.construct_object(k_node)
-        if not isinstance(key, str) or key in result:
-            raise DemoPolicyError("Duplicate or non-string synthetic policy key.")
-        result[key] = loader.construct_object(v_node)
-    return result
-
-
-_NoDuplicateSafeLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _unique_mapping
-)
-
-
 def _pinned_policy() -> DemoPolicyCandidate:
-    """Verify immutable approved *reference*, not an executable policy token."""
-    try:
-        original = POLICY_PATH.read_bytes()
-        if b"\r\n" in original and b"\n" in original.replace(b"\r\n", b""):
-            raise DemoPolicyError("Mixed line endings in pinned synthetic reference.")
-        canonical = original.replace(b"\r\n", b"\n")
-        if b"\r" in canonical or hashlib.sha256(canonical).hexdigest() != POLICY_CANONICAL_SHA256:
-            raise DemoPolicyError("The synthetic policy reference hash changed.")
-        decoded = yaml.load(canonical.decode("utf-8"), Loader=_NoDuplicateSafeLoader)
-        candidate = validate_demo_policy(decoded)
-        if (
-            candidate.policy_version != POLICY_VERSION
-            or candidate.baseline_lookback_days != POLICY_LOOKBACK_DAYS
-            or candidate.enabled_rules != EXPECTED_RULE_IDS
-            or candidate.disabled_rules
-            or candidate.enabled_verification_issues != EXPECTED_VI_IDS
-            or candidate.disabled_verification_issues
-        ):
-            raise DemoPolicyError("Unapproved synthetic policy reference.")
-    except (OSError, UnicodeError, yaml.YAMLError, DemoPolicyError, TypeError, ValueError):
-        raise _deny("Trusted offline demo policy reference is unavailable.") from None
-    return candidate
+    """Reference-only immutable literals; DO NOT load test-only policy files here.
 
+    The owner-pinned LF source hash is asserted by the offline P4 reference
+    tests. This internal adapter merely recompiles its exact reviewed values
+    as non-executable comparison settings, NEVER a runtime policy permission.
+    """
+    raw: dict[str, object] = {
+        "policy_version": "demo-policy-1.1.0",
+        "demo_only": True,
+        "demo_as_of_utc": "2026-11-14T12:00:00Z",
+        "notice": "DEMO review prompts only — not clinical risk assessment. Not for clinical use.",
+        "parameters": {
+            "baseline_lookback_days": 90,
+            "stale_measurement_days": 30,
+            "demo_delta_systolic_mmHg": 10,
+            "demo_delta_diastolic_mmHg": 8,
+            "demo_delta_heart_rate_bpm": 15,
+            "demo_delta_glucose_mgdl": 40,
+            "ocr_confidence_floor": 0.70,
+            "conflict_tolerance": 0,
+            "max_items_per_type": 3,
+        },
+        "verification_issues": [{"id": key, "enabled": True} for key in EXPECTED_VI_IDS],
+        "rules": [{"id": key, "enabled": True} for key in EXPECTED_RULE_IDS],
+    }
+    try:
+        candidate = validate_demo_policy(raw)
+    except DemoPolicyError:
+        raise _deny("The fixed synthetic comparison reference is invalid.") from None
+    if (
+        candidate.policy_version != POLICY_VERSION
+        or candidate.baseline_lookback_days != POLICY_LOOKBACK_DAYS
+        or candidate.enabled_rules != EXPECTED_RULE_IDS
+        or candidate.disabled_rules
+        or candidate.enabled_verification_issues != EXPECTED_VI_IDS
+        or candidate.disabled_verification_issues
+    ):
+        raise _deny("The fixed synthetic comparison reference was altered.")
+    return candidate
 
 def _policy_projection_locked(
     db: Session,
