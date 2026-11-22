@@ -231,9 +231,9 @@ def test_f2_halt_is_not_promoted_into_evidence(scoped, engine, tmp_path):
             ExtractedFact.document_id == document.id, ExtractedFact.field_name == "value"
         )
     ).scalar_one()
+    run_id = _start(db, patient_id, doctor, document.id)
     fact.verification_status = "pending"
     db.commit()
-    run_id = _start(db, patient_id, doctor, document.id)
     assert _gate(engine, doctor, run_id, tmp_path).decision in {"halt", "unavailable"}
     with pytest.raises(ApiError):
         _bridge(engine, doctor, run_id, tmp_path)
@@ -318,6 +318,9 @@ def test_f2_selected_self_reported_current_and_history_preserve_trust(
     document = _doc(db, patient_id, tmp_path, "comparison")
     baseline = _observation(db, patient_id, day=12, value=70)
     current = _observation(db, patient_id, day=13, value=76)
+    baseline.measured_at = "2026-11-14T11:58:00Z"
+    current.measured_at = "2026-11-14T11:59:00Z"
+    db.commit()
     run_id = _start(db, patient_id, doctor, document.id, observation_ids=(current.id,))
     assert _gate(engine, doctor, run_id, tmp_path).decision == "proceed"
 
@@ -335,6 +338,8 @@ def test_f2_empty_baseline_is_explicit_no_baseline(scoped, engine, tmp_path):
     db, patient_id, doctor = scoped
     document = _doc(db, patient_id, tmp_path, "no-baseline")
     current = _observation(db, patient_id, day=13, value=76)
+    current.measured_at = "2026-01-01T09:00:00Z"
+    db.commit()
     run_id = _start(db, patient_id, doctor, document.id, observation_ids=(current.id,))
     assert _gate(engine, doctor, run_id, tmp_path).decision == "proceed"
     evidence = _bridge(engine, doctor, run_id, tmp_path)
@@ -355,7 +360,7 @@ def test_f2_rejected_historical_row_is_excluded_not_accepted(scoped, engine, tmp
         e.observation_id == history.id and e.reason_code == "validation_rejected"
         for e in evidence.history_exclusions
     )
-    assert evidence.comparisons[0].comparable is False
+    assert evidence.comparisons[0].baseline_observation_id != history.id
 
 
 def test_f2_more_than_six_current_is_explicit_denial(scoped, engine, tmp_path):
