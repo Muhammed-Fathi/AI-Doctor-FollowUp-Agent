@@ -7,6 +7,7 @@ The parent F1 gate is persisted separately and must be rechecked by the preview.
 from __future__ import annotations
 
 import hashlib
+import secrets
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -47,7 +48,10 @@ RECORDED_AT = "2026-06-14T08:00:00Z"
 @pytest.fixture()
 def scoped(engine):
     with Session(engine) as db:
-        seed_demo_data(db, password="synthetic-rb1-fixture", now=CLOCK, iterations=1000)
+        # Ephemeral fixture-only credential: no assigned literal and no real account secret.
+        seed_demo_data(
+            db, password=secrets.token_urlsafe(24), now=CLOCK, iterations=1000
+        )
         db.commit()
         patient = db.execute(
             select(Patient).where(Patient.external_ref == "DEMO-A-001")
