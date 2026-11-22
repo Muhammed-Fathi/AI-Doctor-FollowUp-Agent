@@ -49,16 +49,30 @@ def _expected(case: str) -> dict:
 
 
 def _ob(
-    name: str, measure: str, value: int, date: str, *,
-    patient: str, trust: str = "self_reported_validated",
+    name: str,
+    measure: str,
+    value: int,
+    date: str,
+    *,
+    patient: str,
+    trust: str = "self_reported_validated",
     validation: str = "ok",
 ) -> OfflineObservation:
     return OfflineObservation(
-        id=name, patient_id=patient, measure_type=measure, value=value,
-        unit={"systolic_bp": "mmHg", "diastolic_bp": "mmHg",
-              "heart_rate": "bpm", "glucose": "mg/dL"}[measure],
-        measured_at=f"{date}T09:00:00Z", validation=validation,
-        trust_level=trust, source="seed_fixture",
+        id=name,
+        patient_id=patient,
+        measure_type=measure,
+        value=value,
+        unit={
+            "systolic_bp": "mmHg",
+            "diastolic_bp": "mmHg",
+            "heart_rate": "bpm",
+            "glucose": "mg/dL",
+        }[measure],
+        measured_at=f"{date}T09:00:00Z",
+        validation=validation,
+        trust_level=trust,
+        source="seed_fixture",
         created_at="2026-11-04T08:00:00Z",
     )
 
@@ -66,9 +80,12 @@ def _ob(
 def _run(patient: str, selected, history, *, statuses=()):
     return evaluate_p4_rb2_offline_fixture(
         OfflineRuleInput(
-            patient_id=patient, selected_current=tuple(selected),
-            history=tuple(history), policy=OfflineRulePolicy(),
-            as_of_utc=AS_OF, active_fact_verification_statuses=tuple(statuses),
+            patient_id=patient,
+            selected_current=tuple(selected),
+            history=tuple(history),
+            policy=OfflineRulePolicy(),
+            as_of_utc=AS_OF,
+            active_fact_verification_statuses=tuple(statuses),
         )
     )
 
@@ -107,8 +124,7 @@ def test_gold_b_one_self_reported_systolic_change_without_other_rule() -> None:
     patient = spec["patient_external_ref"]
     selected = [
         _ob("b-s", "systolic_bp", 132, "2026-11-03", patient=patient),
-        _ob("b-g", "glucose", 104, "2026-11-02", patient=patient,
-            trust="doctor_verified"),
+        _ob("b-g", "glucose", 104, "2026-11-02", patient=patient, trust="doctor_verified"),
     ]
     history = [
         _ob("b-s0", "systolic_bp", 120, "2026-10-20", patient=patient),
@@ -118,17 +134,17 @@ def test_gold_b_one_self_reported_systolic_change_without_other_rule() -> None:
     assert [f.rule_id for f in result.flags] == spec["expected_review_rule_ids"]
     assert len(result.flags) == spec["expected_review_count"] == 1
     gold = spec["expected_dr005"]
-    assert (result.flags[0].reason_code, result.flags[0].trust_basis,
-            result.flags[0].message) == (
-        "change_exceeds_demo_parameter", gold["trust_basis"], gold["message"]
+    assert (result.flags[0].reason_code, result.flags[0].trust_basis, result.flags[0].message) == (
+        "change_exceeds_demo_parameter",
+        gold["trust_basis"],
+        gold["message"],
     )
 
 
 def test_gold_c_before_fixture_correction_blocks_and_after_is_clean() -> None:
     spec = _expected("C")
     patient = spec["patient_external_ref"]
-    current = [_ob("c-g", "glucose", 105, "2026-11-03", patient=patient,
-                   trust="doctor_verified")]
+    current = [_ob("c-g", "glucose", 105, "2026-11-03", patient=patient, trust="doctor_verified")]
     history = [_ob("c-base", "glucose", 96, "2026-10-10", patient=patient)]
     before = spec["pre_verification"]
     assert before["pending_active_fact_count"] == 3
@@ -152,8 +168,9 @@ def test_gold_d_five_rules_without_doctor_verified_source_conflict() -> None:
         _ob("d-d0", "diastolic_bp", 82, "2026-10-05", patient=patient),
         _ob("d-s1", "systolic_bp", 130, "2026-10-20", patient=patient),
         _ob("d-s2", "systolic_bp", 130, "2026-10-20", patient=patient),
-        _ob("d-d1", "diastolic_bp", 250, "2026-10-25", patient=patient,
-            validation="ok_with_warning"),
+        _ob(
+            "d-d1", "diastolic_bp", 250, "2026-10-25", patient=patient, validation="ok_with_warning"
+        ),
     ]
     selected = (rows[0], rows[4], rows[5])
     history = (rows[1], rows[2], rows[3])
