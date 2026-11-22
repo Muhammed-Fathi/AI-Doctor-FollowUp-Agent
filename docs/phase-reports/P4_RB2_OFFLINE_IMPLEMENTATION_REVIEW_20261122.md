@@ -29,3 +29,11 @@ Acceptance requires complete exact-head CI + independent Windows gate, negative/
 ## Deferred to distinct phases
 
 RB3 must independently verify F0/F1/F2/RB1, selected document bytes, patient+doctor scope, and actual policy/clock under a new owner-gated write boundary before `review_item` or `evidence_link` storage. RB4 must perform real run-backed GOLD acceptance. Neither is implemented here. P6/P7/P8 remain to be completed separately. Rollback: close this draft PR; main and stored rows remain untouched.
+
+
+## CI review checkpoint: exact-head failure is historical P3 collection pairing (2026-11-22)
+
+- [PR CI #45006265207](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45006265207) ran at branch HEAD `1a8405f666ca4211613cbfd0e42bbac1280b77ef`, reported **Backend Python 3.12 FAILURE** and **Frontend Node 22 SUCCESS**.
+- Backend **Ruff lint SUCCESS; Ruff format SUCCESS (141 files already formatted)**. Full `python -m pytest -q` completed collection and reported **exactly one failure**: `backend/tests/p3/test_windows_ocr_acceptance.py::test_handoff_test_count_matches_the_suite_it_describes`. The failure is the historical handoff's absence of the required exact string **`**1204 collected**`**. This is a **collected test count, never 1204 tests passed**. Historical P3 count remains **443**. New RB2 tests did not appear in the test failure summary, but this is not a separate independently certified all-pass RB2 run.
+- Backend later Alembic, OpenAPI, secret/artifact scan were **SKIPPED by the CI job after failed Pytest**, so no green claim for them. Independent Windows PowerShell 5.1 `setup.ps1` and `test_all.ps1` **NOT RUN**.
+- **MANDATORY STOP:** the original eight-path permit explicitly excludes `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md`. **Do not edit that file without an entirely new owner PR #41 Conversation permission** limited to a ninth path, append-only `**1204 collected**` / `**443**` P3 pairing, preserving all historical Windows/OCR evidence and statuses. No P3 tests/code or fixtures may be changed. An eventual new CI run must verify the exact final head and all downstream gates before owner Windows testing or merge.
