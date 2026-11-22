@@ -15,7 +15,7 @@ import hashlib
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import yaml
 from sqlalchemy import select
@@ -224,7 +224,7 @@ def _policy_projection_locked(
                 "no_baseline" if item.incomparable_reason == "missing_baseline" else None
             ),
             trust_basis=cast(
-                "Literal['self_reported', 'doctor_verified', 'mixed']", item.trust_basis
+                Literal["self_reported", "doctor_verified", "mixed"], item.trust_basis
             ),
         )
         for item in compared.comparisons
