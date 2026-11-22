@@ -207,7 +207,11 @@ def _projection(
         row = entry.observation
         if source_reason(entry):
             raise _invalid("Selected observation has invalid recorded provenance.")
-        if selected.trust_level != row.trust_level or selected.source_fact_id != entry.source_fact_id:
+        if (
+            selected.trust_level != row.trust_level
+            or selected.source_fact_id != entry.source_fact_id
+            or selected.observation_created_at != entry.created_at
+        ):
             raise _invalid("Selected observation manifest changed.")
         try:
             why = admissibility_reason(row, patient_id=run.patient_id, as_of_utc=run_clock)
