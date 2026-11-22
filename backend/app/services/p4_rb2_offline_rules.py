@@ -13,7 +13,7 @@ from hashlib import sha256
 from itertools import combinations
 
 from app.core.clock import parse_utc, to_utc
-from app.core.enums import MEASURE_PLAUSIBLE_BANDS, MEASURE_UNITS, MeasureType
+from app.core.enums import MEASURE_PLAUSIBLE_BANDS, MEASURE_UNITS
 from app.schemas.p4_rb2_offline_rules import (
     OfflineEvidenceExclusion,
     OfflineObservation,
