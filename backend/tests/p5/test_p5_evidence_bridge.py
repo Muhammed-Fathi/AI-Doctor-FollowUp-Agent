@@ -27,7 +27,6 @@ from app.db.models import (
     UserSession,
     WorkflowRun,
 )
-from app.services.p4_recovery_selection_candidate import CandidateDoctorOmission
 from app.services.p5_evidence_bridge import build_run_evaluable_review_evidence
 from app.services.p5_run_foundation import create_run_foundation
 from app.services.p5_run_gate import evaluate_run_verification_gate
@@ -463,16 +462,15 @@ def test_f2_caller_cannot_supply_clearance_or_baseline_override(
     document = _doc(db, patient_id, tmp_path, "caller")
     run_id = _start(db, patient_id, doctor, document.id)
     assert _gate(engine, doctor, run_id, tmp_path).decision == "proceed"
-    with Session(engine) as fresh:
-        with pytest.raises(TypeError):
-            build_run_evaluable_review_evidence(
-                fresh,
-                principal=doctor,
-                run_id=run_id,
-                validation_clock=CLOCK,
-                upload_root=str(tmp_path),
-                blocking_fact_count=0,
-            )
+    with Session(engine) as fresh, pytest.raises(TypeError):
+        build_run_evaluable_review_evidence(
+            fresh,
+            principal=doctor,
+            run_id=run_id,
+            validation_clock=CLOCK,
+            upload_root=str(tmp_path),
+            blocking_fact_count=0,
+        )
 
 
 def test_f2_frozen_evidence_cannot_become_graph_token(scoped, engine, tmp_path):
