@@ -36,15 +36,15 @@ class OfflineRulePolicy:
     conflict_tolerance: Decimal | str | int = 0
     max_items_per_type: int = 3
     enabled_verification_issues: tuple[str, ...] = (
-        "VI-001", "VI-002", "VI-003", "VI-004", "VI-005", "VI-006"
+        "VI-001",
+        "VI-002",
+        "VI-003",
+        "VI-004",
+        "VI-005",
+        "VI-006",
     )
-    enabled_rules: tuple[str, ...] = (
-        "DR-001", "DR-003", "DR-005", "DR-006", "DR-008", "DR-009"
-    )
-    notice: str = (
-        "DEMO review prompts only — not clinical risk assessment. "
-        "Not for clinical use."
-    )
+    enabled_rules: tuple[str, ...] = ("DR-001", "DR-003", "DR-005", "DR-006", "DR-008", "DR-009")
+    notice: str = "DEMO review prompts only — not clinical risk assessment. Not for clinical use."
 
 
 @dataclass(frozen=True, slots=True)
