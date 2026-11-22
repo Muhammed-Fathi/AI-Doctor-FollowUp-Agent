@@ -49,9 +49,7 @@ RECORDED_AT = "2026-06-14T08:00:00Z"
 def scoped(engine):
     with Session(engine) as db:
         # Ephemeral fixture-only credential: no assigned literal and no real account secret.
-        seed_demo_data(
-            db, password=secrets.token_urlsafe(24), now=CLOCK, iterations=1000
-        )
+        seed_demo_data(db, password=secrets.token_urlsafe(24), now=CLOCK, iterations=1000)
         db.commit()
         patient = db.execute(
             select(Patient).where(Patient.external_ref == "DEMO-A-001")
