@@ -86,6 +86,7 @@ def _pinned_policy() -> DemoPolicyCandidate:
         raise _deny("The fixed synthetic comparison reference was altered.")
     return candidate
 
+
 def _policy_projection_locked(
     db: Session,
     *,
