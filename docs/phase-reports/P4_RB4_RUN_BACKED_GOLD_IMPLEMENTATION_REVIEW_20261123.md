@@ -148,3 +148,52 @@ Corrections to Round-1 text: "full row snapshot" → now genuinely scalar (§8.2
 | Windows | NOT RUN — owner-only |
 
 Exact-head CI results for the Round-2 commit are recorded in the PR #45 conversation (not pre-claimed here).
+
+## 9. Final owner acceptance and Windows evidence recording (2026-11-23) — documentation-only
+
+**Scope of this section: P4-RB4 owner-accepted *bounded* integration only.** It is not overall P4 acceptance, not full P5 execution, not actual human verification, not real OCR success and not clinical clearance. P4 remains **IN_REVIEW**; issue #14 **OPEN**; full P5 **NOT ACCEPTED**; original real-OCR `GOLD-EX-11` **FAIL / NOT PROVEN**; RB3-75..77 deferred; DR-006 persistence prohibited and genuine end-to-end reachability unproven. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
+
+### 9.1 Authorization (independently verified)
+
+- **Marker:** `OWNER-ACCEPT-P4-RB4` — exactly one such comment on PR #45.
+- **Author / association:** `Muhammed-Fathi`, `author_association: OWNER`; repository owner confirmed as `Muhammed-Fathi`.
+- **URL / timestamp:** [PR #45 comment #7113168956](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/45#issuecomment-7113168956), created **2026-11-23T20:30:40Z** (never updated).
+- **Accepted implementation SHA:** `935283577e55f9ed92821393eec088e02017d6d0` (stated verbatim in the comment; equals PR #45 head at acceptance).
+- **Basis stated by the owner:** independent engineering review with R01–R05 closure, exact-head Actions runs #45253520543 and #45253532699, the reported Linux integration results and the owner's own Windows verification; the ratified C-F0-C reconciliation is accepted as implemented and tested.
+- **Documentation-only authorization:** ONE documentation-only commit, append-only, limited to `docs/phase-reports/P4_RB4_RUN_BACKED_GOLD_IMPLEMENTATION_REVIEW_20261123.md`, `docs/phase-reports/PHASE_4_REPORT.md`, `docs/roadmap/PHASE_PROGRESS.md`. "No production, test, model, migration, policy, fixture, scanner, dependency, CI or P3 handoff changes are authorized." No agent merge, auto-merge, direct main edits, self-approval or next-phase implementation.
+
+### 9.2 Exact-head CI reconfirmed at `935283577e55f9ed92821393eec088e02017d6d0`
+
+| Run | Event | Status / conclusion | Backend (Python 3.12) | Frontend (Node 22) |
+|---|---|---|---|---|
+| [#45253520543](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45253520543) | push | COMPLETED / **SUCCESS** (created 19:53:00Z, updated 19:56:32Z) | 14/14 steps success | 11/11 steps success |
+| [#45253532699](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45253532699) | pull_request | COMPLETED / **SUCCESS** (created 19:53:04Z, updated 19:57:27Z) | 14/14 steps success | 11/11 steps success |
+
+All **50** reported CI steps across both runs are successful (0 non-success). Re-read from the Actions API while recording this section.
+
+### 9.3 Actual owner Windows evidence (owner-executed; recorded, not executed here)
+
+The owner confirms personal execution in an isolated worktree on the owner's local machine. Sources: the owner comment above, plus the independent reviewer's inspection of the owner-supplied full PowerShell output (details marked † come from that inspection; this agent has not seen the raw output and does not claim to have).
+
+- Isolated worktree `E:\DEPI\AI-Doctor-RB4-verify`†; exact HEAD `935283577e55f9ed92821393eec088e02017d6d0` verified **before and after** testing; no tracked working-tree changes.
+- Environment: Windows PowerShell `5.1.22621.4249`, Python `3.12.9`, Node `v24.15.0`, npm `11.17.0`, Git `2.50.0.windows.2`; fresh `.env`† and isolated virtual environment†; hash-pinned runtime and development dependencies installed†; `npm ci` installed 235 packages† with a non-fatal esbuild allow-scripts warning† (setup, tests and build nevertheless succeeded†).
+- Setup: **PASS**, 128.6 s, `SETUP_EXIT_CODE=0`. Command-wrapper self-test 14 checks PASS†; shutdown-identity self-test 38 checks PASS†.
+- Gates: Ruff lint and format PASS (146 formatted files†); backend pytest **PASS with four visible skipped markers** — **the exact Windows backend passed count was not printed and is not claimed**; Alembic upgrade/downgrade/upgrade through revision `0008` PASS; OpenAPI PASS (17 paths / 18 operations / 43 schemas); frontend typecheck† and lint† PASS; Vitest 13 passed; production build PASS; repository scanner PASS (297 tracked files, 7 secret patterns, 4 claim patterns).
+- Full quality gate: **PASS**, 602.1 s — **12 mandatory gates PASS / 0 FAIL / 1 optional Playwright SKIP**; `TEST_ALL_EXIT_CODE=0`; final output† `RB4 WINDOWS VERIFICATION PASSED`.
+
+**Attribution rule preserved:** `1294 passed` is the *Linux* (Python 3.11.2, full backend) result recorded in §8.7; it is not a Windows count. The Windows backend result is "PASS, exact passed count not printed".
+
+### 9.4 Final acceptance matrix (correct attribution)
+
+| Evidence | Result | Where executed | Attribution |
+|---|---|---|---|
+| RB4-01 … RB4-11 | **PASS** | Linux (local Py 3.11.2; CI Py 3.12 step success) | genuine run-backed GOLD A/B/C/D integration; bounded synthetic scope only |
+| RB4-12 | **PASS (Linux schema guard only)** | Linux | migrated head `0008`, RB3 tables/triggers present, source-presence labelled as such; **not** portability or Windows evidence |
+| Windows acceptance | **PASS** (owner) | Owner's isolated Windows worktree | owner-executed per §9.3; 12 mandatory PASS / 0 FAIL / 1 optional SKIP |
+| Round-2 closures R01–R05 | **Accepted** by independent review and owner | — | R01 genuine scalar snapshots + sensitivity proof; R02 stored fingerprints, audit and replay evidence; R03 genuine GOLD-C refusal / HALT / corrected-new-run reconciliation; R04 complete RB2→RB3 semantic equivalence; R05 truthful evidence attribution |
+| Supporting RB3/P5/RB1/RB2 suites | executed (216 focused; 1294 full backend Linux) | Linux | supporting evidence, not GOLD acceptance by themselves |
+| Source-presence checks (RB4-11 text, RB4-12 guard module) | present | inside RB4 tests | **not** execution, not proof of DR-006 reachability, migration behaviour or portability |
+
+### 9.5 Historical evidence-attribution clarification (Round-1 CI)
+
+The original Round-1 CI runs [#45245954024](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45245954024) (push) and [#45246015431](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45246015431) (pull request) at `baff43e08e7549d0776829cc134f6be539439dbd` were **directly verified** to fail at the **Backend tests** step (Ruff lint/format succeeded; later backend steps skipped). The **exact failing-test identity was inferred** from the identical local execution and the actual collection guard (`test_handoff_test_count_matches_the_suite_it_describes` → missing `**1294 collected**` token); it was **not** independently retrieved from the CI logs, which this sandbox could not fetch. The subsequent owner-authorized collection note (`APPROVE-P4-RB4-P3-HANDOFF-COLLECTION-ONLY`, #7111663704) and the Round-2 test-strengthening changes were then followed by green exact-head CI (§9.2). The original inference must not be represented as a direct CI-log observation. The historical P3 handoff file is not edited by this recording.
