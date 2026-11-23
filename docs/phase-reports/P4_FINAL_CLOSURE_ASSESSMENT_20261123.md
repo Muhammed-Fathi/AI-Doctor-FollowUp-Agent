@@ -575,3 +575,123 @@ P4 **IN_REVIEW** · issue #14 **OPEN** · full P5 **NOT ACCEPTED** · GOLD-EX-11
 | **Total P5** | **47** | — |
 
 Function counts are **not** pass counts. The authoritative executed statement is: full backend suite **passed** in CI #45262091228 at `main@96cb275` (count not printed by CI), and **1294 passed / 0 failed** on local Linux Python 3.11.2 at `9352835`/`679ccb5` (a Linux count, never a Windows count).
+
+---
+
+## 10. Owner bounded conditional acceptance — recording (2026-11-23)
+
+**Recording class:** documentation-only, append-only. This section records an owner decision that has **already been made**; it does not make one, and the agent claims no acceptance. It changes **no** requirement status: every row of §2 keeps its recorded status (`satisfied` / `partially satisfied` / `deferred` / `superseded by explicit owner decision` / `outside P4 scope`). **No partial, deferred or unexecuted requirement is converted to PASS.** Sections §0–§9 above are the historical assessment and remain unchanged; where §10 sharpens a wording, §10 is the operative reading for the closure record and the earlier text stands as history.
+
+### 10.1 Verified owner decision
+
+| Field | Verified value |
+|---|---|
+| Marker | `OWNER-ACCEPT-P4-BOUNDED-CLOSURE-B` |
+| Comment id | `7114121198` |
+| Author | `Muhammed-Fathi` |
+| Association | `OWNER` (repository owner) |
+| Created | `2026-11-23T21:11:11Z` |
+| Updated | `2026-11-23T21:11:11Z` — identical, therefore **never edited** |
+| URL | https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/46#issuecomment-7114121198 |
+| Reviewed assessment HEAD | `c9b80e77f17852174488d7aa4995ac94f48c4f92` |
+| PR | #46 |
+| Accepted implementation baseline | `main@96cb275136f9f80608709ce8c7d83693bffa36c3` |
+
+### 10.2 What the owner accepted — scope as written
+
+The owner approves **Outcome B: bounded conditional academic acceptance of Phase 4**, and accepts the implemented and independently reviewed **P4-1 through P4-4** components, **including the accepted F0/F1/F2 foundations and RB1/RB2/RB3/RB4 integration evidence**, subject to their existing bounded authorizations.
+
+The owner **explicitly ratifies** these eight dispositions:
+
+1. **DR-006** remains pure-evaluator-only. Durable persistence remains **prohibited**. **MON-03 is only partially satisfied in the run-backed context.** **C-RB3-08 remains open**, with genuine reachability **unproven in both directions**.
+2. **RB3-75..77** remain **deferred and unexecuted**; assigned to a separately authorized future evidence-persistence extension, considered during P5/P7 planning if required.
+3. **Agent-tool adapters** are deferred to **P5**.
+4. **Public review-item read and decision APIs** are deferred to **P6**.
+5. **TRUST-01 draft-related acceptance** is deferred to **P5**.
+6. **Runtime demo-policy activation** requires **separate explicit authorization before use by P5**.
+7. **RULE-04 exhaustive wording coverage** remains incomplete and is assigned to **P7**.
+8. **RULE-08 literal advanced-clock replay** remains **unexecuted** and is assigned to **P7** for contract reconciliation and appropriate testing.
+
+The owner accepts the current **pinned-clock and exact-template safeguards as sufficient for this bounded closure, without claiming that they prove the unexecuted literal RULE-04 or RULE-08 requirements**. The ratified **GOLD-C refusal / post-selection HALT / corrected-new-run reconciliation remains accepted within P4**; full graph halt/resume and draft behaviour remain **future P5 obligations**. **Original real-OCR GOLD-EX-11 remains FAIL / NOT PROVEN.**
+
+The owner authorizes **ONE documentation-only, append-only recording commit** limited to exactly the three paths in §10.7, requires all historical evidence to be preserved and the residual obligations with their assigned future phases to be recorded, requires **issue #14 to remain open** for residual-obligation tracking until a separate owner disposition, and authorizes **no** production, test, migration, model, policy, contract, fixture, dependency, CI, scanner or P3-handoff modification, **no** runtime activation, DR-006 persistence, graph, LLM, API, UI, task, notification or P5 implementation, and **no** agent merge, auto-merge, direct main edit or self-approval.
+
+### 10.3 Effective conditional acceptance boundary
+
+**P4 becomes `CONDITIONALLY_ACCEPTED_SYNTHETIC` only when all three have occurred:**
+
+1. this recording is **independently verified**;
+2. the owner **merges PR #46**;
+3. **exact merged-main CI succeeds**.
+
+**Until all three occur, P4 remains `IN_REVIEW` and the acceptance is pending, not effective.** This document cannot make it effective. §0's phrase "until the owner posts a consolidated decision" is now satisfied by §10.1; the remaining conditions are the merge and the merged-main CI.
+
+**Explicitly not implied by the acceptance:** unconditional PASS · clinical acceptance · real-OCR validation · complete public-API acceptance · full-agent-runtime acceptance · full P5 acceptance.
+
+### 10.4 Consolidated residual-obligation register
+
+| # | Obligation | Current status (unchanged by this recording) | Assigned phase / next gate | Authority |
+|---|---|---|---|---|
+| 1 | DR-006 durable persistence | **Prohibited.** Pure-evaluator-only; MON-03 partially satisfied in the run-backed context; C-RB3-08 **open**; genuine F1-PROCEED reachability **unproven in both directions** | No phase assigned. Revisitable only under a separately authorized DR-006 persistence extension that first settles reachability | Owner disposition 1 |
+| 2 | RB3-75, RB3-76, RB3-77 (six-key DR-006 mapping; stored document/fact spans; unresolvable-span denial) | **Deferred / NOT EXECUTED** — never relabelled as passed | Separately authorized future evidence-persistence extension; considered during P5/P7 planning if required | Owner disposition 2 |
+| 3 | Agent-tool adapters (`compare_observations` §3.5, `evaluate_demo_review_rules` §3.7) | Unimplemented as tools; internal services only | **P5** | Owner disposition 3 |
+| 4 | Public review-item read and decision APIs | Unimplemented; OpenAPI remains 17 paths / 18 operations / 43 schemas | **P6** | Owner disposition 4 |
+| 5 | TRUST-01 draft-related acceptance | Draft half unexecuted; review-item half satisfied | **P5** | Owner disposition 5 |
+| 6 | Demo-policy runtime authority | Reference values pinned and byte-sealed; **not activated** | **Separate explicit authorization before P5 runtime use** | Owner disposition 6 |
+| 7 | RULE-04 exhaustive wording coverage | Incomplete; exact templates + spot assertions only | **P7** | Owner disposition 7 |
+| 8 | RULE-08 literal advanced-clock replay | **Unexecuted**; fail-closed clock immutability enforced instead | **P7** — contract reconciliation and appropriate testing | Owner disposition 8 |
+| 9 | Full graph halt/resume and draft behaviour | Unexecuted; P4 implemented the ratified C-F0-C decomposition instead | **P5** | Owner comment |
+| 10 | GOLD-EX-11 real OCR (`1O5` → `105`) | **FAIL / NOT PROVEN**; not reopened by P4 | Permanent disclosed limitation; no phase assignment | Owner comment |
+| 11 | Issue #14 | **OPEN** — 19 comments at recording time | Remains open for residual-obligation tracking until a separate owner disposition | Owner comment |
+
+### 10.5 Independent-review clarifications (appended; they do not alter §2–§5)
+
+1. **Fixed-clock fail-closed enforcement is an accepted safeguard for the bounded implementation. It does not prove the literal +400-day DR-003 evaluation requirement.** The safeguard is stronger against stale-clock evaluation but is not the literal RULE-08 test; RULE-08 remains unexecuted and assigned to P7.
+2. **Exact-template and spot-wording assertions support the current bounded acceptance. They are not equivalent to exhaustive RULE-04 execution.** RULE-04 remains incomplete and assigned to P7.
+3. **The future assigned tests remain outstanding, not passed.** No P5, P6 or P7 obligation is discharged, scheduled or evidenced by this recording.
+4. **DR-006 denial prevents unauthorized persistence but can result in missing review output whenever that conflict genuinely reaches the evaluator. Signal loss is not equivalent full functionality.** §4 C01's "loss of signal, not a safety violation" is a safety statement only; it is not a claim of functional completeness.
+5. **The existing RB4 owner Windows quality gate passed with 12 mandatory gates, zero failures, one optional Playwright skip, and four visible backend skipped markers. The entire Windows run is not unexecuted merely because RB4-12 itself is a Linux schema guard.** Executed Windows evidence: `setup.ps1` PASS, `test_all.ps1` 12 mandatory PASS / 0 FAIL / 1 optional Playwright SKIP, `TEST_ALL_EXIT_CODE=0`, at `935283577e55f9ed92821393eec088e02017d6d0`; only **RB4-12** specifically was not executed on Windows (it is a Linux schema guard). The exact Windows backend passed count was not printed.
+6. **Recorded CI outcomes are authoritative for actual CI job status.** Preserve the distinctions between direct log observation, reported execution and inferred failure attribution. In particular, the historical Round-1 CI failures at `baff43e…` were verified at the Backend-tests **step** level, while the failing-test **identity** was inferred from the identical local run and the real collection guard — it was not read from the CI log.
+7. **No clinical, real-OCR, complete public-API or full-agent-runtime acceptance is implied** by this recording or by the owner's bounded acceptance.
+
+### 10.6 P5 handoff — **planning record only, not authorization**
+
+Nothing here authorizes P5. **No P5 branch is created and no P5 implementation is performed.** P5 requires **separate explicit authorization after P4 closure** (owner comment, final paragraphs).
+
+**P5-S0 must first reconcile the actual merged state and the graph contracts**, including at minimum:
+
+- **Typed state and strict server-derived evidence.**
+- **Immutable run identity and selections.**
+- **Existing F0/F1/F2 and sealed RB3 completion semantics.**
+- **The difference between resuming an unchanged run and creating a new run after corrected source identity.**
+- **Explicit runtime policy authority before connecting rule execution to a graph** (owner disposition 6).
+- **Fail-closed handling of DR-006 and other denied persistence outcomes** (owner disposition 1).
+
+**Binding planning constraint:** do **not** assume graph resume can overwrite or reuse a sealed evaluation after source correction. RB3 enforces `ux_review_evaluation_run` (one evaluation per run) with run-completion seals G15–G17 and immutable completion rows, and RB4-05 demonstrates that a corrected source identity produces a **new** run, not a resumed one. Any P5 design that needs to re-evaluate after correction must therefore create a new run identity or obtain a separately authorized, migration-backed change to the sealing semantics — never a silent overwrite.
+
+### 10.7 Recording verification and exact inventories
+
+**Re-verified before writing this section:**
+
+| Check | Result |
+|---|---|
+| Owner comment | id `7114121198`, `Muhammed-Fathi`, `OWNER`, created = updated `2026-11-23T21:11:11Z` (never edited) |
+| PR #45 | `merged=true`, `merged_at=2026-11-23T20:42:08Z`, `merged_by=Muhammed-Fathi`, `merge_commit_sha=96cb275…`, head `679ccb5…` |
+| Accepted implementation unchanged | merged main tree `86b8645a4e7d5f3f6be514586a155448ad17046e` **identical** to `679ccb5` tree; empty diff; `origin/main` still `96cb275…` |
+| Main CI | [#45262091228](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45262091228) — `push`, `main@96cb275`, **success**, Backend 14/14 + Frontend 11/11 steps, 0 failed |
+| Assessment push CI | [#45265811703](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45265811703) — `push`, `c9b80e7…`, **success**, Backend 14/14 + Frontend 11/11, 0 failed |
+| Assessment PR CI | [#45265861635](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45265861635) — `pull_request`, `c9b80e7…`, **success**, Backend 14/14 + Frontend 11/11, 0 failed |
+| Assessment-head step totals | 25 + 25 = **50/50 reported CI steps successful across both runs** |
+| Issue #14 | `state=open`, 19 comments |
+
+**Exact recording inventory (this commit):** exactly three paths, all append-only, **zero deletions** — `docs/phase-reports/P4_FINAL_CLOSURE_ASSESSMENT_20261123.md`, `docs/phase-reports/PHASE_4_REPORT.md`, `docs/roadmap/PHASE_PROGRESS.md`. No other path changes.
+
+**Cumulative inventory (PR #46 vs `main@96cb275`):** the same three paths — the new assessment plus append-only sections in the two historical registers. No source, test, migration, model, policy, fixture, dependency, scanner, script, CI, contract, traceability, evaluation or historical-report change; no P3 handoff edit; no production implementation.
+
+**Recording-head CI:** the recording commit's own push and pull-request runs are verified **after** pushing and reported in the PR conversation and the final report; they are deliberately **not embedded here**, because embedding them would require a second commit and the owner authorized exactly one.
+
+### 10.8 Status preservation
+
+P4 **IN_REVIEW** until the recording is independently verified, PR #46 is owner-merged and exact merged-main CI succeeds — thereafter `CONDITIONALLY_ACCEPTED_SYNTHETIC`. Issue #14 **OPEN**. Full P5 **NOT ACCEPTED**. GOLD-EX-11 **FAIL / NOT PROVEN**. RB3-75..77 **deferred / NOT EXECUTED**. DR-006 persistence **prohibited**; genuine end-to-end reachability **unproven in both directions**. Demo policy **not activated**. No P5 implementation, runtime activation, agent merge, auto-merge, direct main edit or self-approval.
+
+**ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
