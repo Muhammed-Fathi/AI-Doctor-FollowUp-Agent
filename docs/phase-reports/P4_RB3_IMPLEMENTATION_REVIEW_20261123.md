@@ -233,4 +233,31 @@ Completed atop Round-3 commit `7936bb535fb24ac4a4d9278921cdcbcd400bdf77` on draf
    - Ruff lint & format: PASS (`145` files); Alembic 9-state upgrade/downgrade/re-upgrade + exact 11-trigger `check_alembic_smoke.py`: PASS; `check_openapi.py`: PASS (`17 paths / 18 operations, 43 schemas`); `scan_repository.py`: PASS (`294` files); frontend `lint`/`typecheck`/`vitest 13`/`build`: PASS.
    - `RB3-75..77` remain **`DEFERRED FUTURE EXTENSION / NOT EXECUTED`**, end-to-end DR-006 reachability remains **NOT PROVEN / NOT CLAIMED**, `GOLD-EX-11` remains **FAIL / NOT PROVEN**, P4 remains **IN_REVIEW**, issue #14 remains **OPEN**, full P5 remains **NOT ACCEPTED**, and PR #43 remains **OPEN / DRAFT / NOT MERGED**. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
 
+---
+
+## 11. Final Owner Acceptance & Windows Verification Record (2026-11-23)
+
+- **Scope distinction:** This section is added in an incremental documentation-only recording commit layered atop the **accepted implementation HEAD** `c929dee4dbc72028fe18d047766553e5909faa35` (PR #43, base `main@6d121228a9e742849337366c6880a2cb887b1486`). No code, migration, model, test, fixture, scanner, policy, or E1–E6 file was changed after `c929dee4dbc72028fe18d047766553e5909faa35`.
+- **Owner acceptance record:**
+  - **Marker:** `OWNER-ACCEPT-P4-RB3`
+  - **Author & association:** `Muhammed-Fathi` (`OWNER`)
+  - **Timestamp:** `2026-11-23T15:26:52Z`
+  - **Comment URL:** [`#issuecomment-7105580779`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/43#issuecomment-7105580779)
+  - **Accepted implementation SHA:** `c929dee4dbc72028fe18d047766553e5909faa35` (PR #43; independent engineering review recommended acceptance of the bounded RB3 implementation).
+- **Exact-head CI evidence on `c929dee4dbc72028fe18d047766553e5909faa35`:**
+  - **Push run:** `#45191070030` (`completed` / `success`, `2026-11-23T14:08:55Z` -> `2026-11-23T14:12:58Z`, [`actions/runs/45191070030`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45191070030))
+  - **Pull request run:** `#45191082779` (`completed` / `success`, `2026-11-23T14:09:00Z` -> `2026-11-23T14:11:53Z`, [`actions/runs/45191082779`](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45191082779))
+- **Owner-executed Windows PowerShell 5.1 verification (isolated local worktree at `c929dee4dbc72028fe18d047766553e5909faa35`):**
+  - **Environment:** Windows PowerShell `5.1.22621.4249`, Python `3.12.9`, Node `v24.15.0`, npm `11.17.0`, Git `2.50.0.windows.2`.
+  - **Git integrity:** Exact `HEAD` (`c929dee4dbc72028fe18d047766553e5909faa35`) matched before and after execution; no tracked working-tree changes reported.
+  - **Setup (`scripts/powershell/setup.ps1`):** **PASS**, `114.7 seconds`, `SETUP_EXIT_CODE=0`.
+  - **Full quality gate (`scripts/powershell/test_all.ps1`):** **PASS**, `669.9 seconds`, `TEST_ALL_EXIT_CODE=0` (**12 mandatory gates PASS**, **0 FAIL**, **1 optional Playwright gate SKIPPED**).
+  - **Backend pytest (Windows):** **PASS**, with four visible skipped test markers; exact backend passed count was **not printed** (the `1282 passed` count belongs strictly to the observed Linux result and is not claimed for Windows).
+  - **Frontend Vitest (Windows):** **13 passed**.
+  - **Alembic lifecycle (Windows):** Upgrade/downgrade/upgrade through revision `0008` **PASS**.
+  - **OpenAPI check (Windows):** **PASS** (`17 paths / 18 operations, 43 schemas`).
+  - **Repository scanner (Windows):** **PASS** (`294 tracked files`, `7 secret patterns`, `4 claim patterns`).
+- **Scope & status boundaries (unchanged):** Acceptance applies **only to `P4-RB3`** at `c929dee4dbc72028fe18d047766553e5909faa35` (plus this authorized documentation-only recording commit). **P4 remains `IN_REVIEW`**, **Issue #14 remains `OPEN`**, **Full P5 remains `NOT ACCEPTED`**, **original real-OCR `GOLD-EX-11` remains `FAIL / NOT PROVEN`**, **`RB3-75..77` remain deferred and not executed**, **DR-006 end-to-end reachability remains `NOT PROVEN`**, **RB4 has not started**, and **PR #43 remains `OPEN`, `DRAFT`, and `NOT MERGED`**. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
+
+
 
