@@ -712,6 +712,25 @@ def persist_run_review_items(
     if db.in_transaction() or db.new or db.dirty or db.deleted:
         raise ApiError(400, ErrorCode.VALIDATION, "A fresh clean Session is required.")
 
+    with localcontext(_RB3_ARITHMETIC_CONTEXT):
+        return _persist_run_review_items_pinned(
+            db,
+            principal=principal,
+            run_id=run_id,
+            clock=clock,
+            upload_root=upload_root,
+        )
+
+
+def _persist_run_review_items_pinned(
+    db: Session,
+    *,
+    principal: Principal,
+    run_id: str,
+    clock: datetime,
+    upload_root: str,
+) -> ReviewPersistenceReceiptV1:
+    """Execute Phase 1 and Phase 2 inside RB3's pinned Decimal context."""
     try:
         evidence = build_run_evaluable_review_evidence(
             db,
@@ -1657,9 +1676,27 @@ def persist_run_review_items(
                 ):
                     raise _conflict(RB3DenialReason.AUDIT_BUSINESS_INCONSISTENT)
 
-                # Exact replay (Case 1 / Case 7): zero writes; roll back read transaction cleanly.
-                db.rollback()
-                return ReviewPersistenceReceiptV1(
+                # Final freshness verification before completing exact replay
+                replay_final_gate = inspect_current_run_gate_locked(
+                    db,
+                    principal=principal,
+                    run_id=run.id,
+                    at=clock,
+                    upload_root=upload_root,
+                )
+                replay_rehashed = {
+                    doc_id: _rehash_document_bytes(docs_by_id[doc_id], upload_root)
+                    for doc_id in sorted(docs_by_id)
+                }
+                if (
+                    replay_final_gate.input_fingerprint_sha256
+                    != receipt_gate.input_fingerprint_sha256
+                    or replay_rehashed != file_hashes
+                ):
+                    raise _deny("Source evidence changed during replay.")
+
+                # Construct complete frozen receipt from verified data while transaction is active.
+                replay_receipt = ReviewPersistenceReceiptV1(
                     contract_version=RB3_RECEIPT_CONTRACT_VERSION,
                     run_id=run.id,
                     patient_id=run.patient_id,
@@ -1697,6 +1734,9 @@ def persist_run_review_items(
                     l1_exclusion_count=len(l1_exclusions),
                     l2_exclusion_count=len(l2_exclusions),
                 )
+                # Exact replay (Case 1 / Case 7): zero writes; roll back read transaction cleanly.
+                db.rollback()
+                return replay_receipt
 
             # T16: atomic first-evaluation persistence in FK-safe order
             created_ts = format_utc(clock)
@@ -1862,46 +1902,50 @@ def persist_run_review_items(
             ):
                 raise _deny("Source evidence changed before commit.")
 
-        # T18: single durable commit
+            # Construct complete frozen receipt while the owned transaction is still active
+            # so post-commit ORM attribute access (even with expire_on_commit=True) is zero.
+            first_receipt = ReviewPersistenceReceiptV1(
+                contract_version=RB3_RECEIPT_CONTRACT_VERSION,
+                run_id=run.id,
+                patient_id=run.patient_id,
+                doctor_id=run.doctor_id,
+                as_of_utc=run.as_of_utc,
+                policy_version=RB3_POLICY_VERSION,
+                policy_reference_sha256=RB3_PINNED_POLICY_SHA256,
+                gate_evaluation_id=stored_gate.id,
+                gate_version=final_gate.gate_version,
+                gate_input_fingerprint_sha256=final_gate.input_fingerprint_sha256,
+                bridge_input_fingerprint_sha256=evidence.bridge_input_fingerprint_sha256,
+                rb3_fingerprint_version=RB3_FINGERPRINT_VERSION,
+                input_fingerprint_sha256=input_fingerprint_sha256,
+                output_identity_sha256=output_identity_sha256,
+                evaluation_id=evaluation_id,
+                audit_event_id=audit_event.id,
+                lineage_label_policy=RB3_LINEAGE_LABEL_POLICY,
+                dr006_policy=RB3_DR006_POLICY,
+                replayed=False,
+                review_items_persisted=len(prepared_items),
+                review_items_total=len(prepared_items),
+                evidence_links_persisted=total_links,
+                evidence_links_total=total_links,
+                excluded_evidence=l3_merged,
+                layered_exclusions=LayeredEvidenceExclusionsV1(
+                    l0_lineage_checks=l0_checks,
+                    l1_exclusions=l1_exclusions,
+                    l2_exclusions=l2_exclusions,
+                    l3_merged=l3_merged,
+                ),
+                l1_exclusion_count=len(l1_exclusions),
+                l2_exclusion_count=len(l2_exclusions),
+            )
+
+        # T18: single durable commit; if commit fails, rollback runs and nothing is returned.
         db.commit()
     except Exception:
         db.rollback()
         raise
 
-    return ReviewPersistenceReceiptV1(
-        contract_version=RB3_RECEIPT_CONTRACT_VERSION,
-        run_id=run.id,
-        patient_id=run.patient_id,
-        doctor_id=run.doctor_id,
-        as_of_utc=run.as_of_utc,
-        policy_version=RB3_POLICY_VERSION,
-        policy_reference_sha256=RB3_PINNED_POLICY_SHA256,
-        gate_evaluation_id=stored_gate.id,
-        gate_version=final_gate.gate_version,
-        gate_input_fingerprint_sha256=final_gate.input_fingerprint_sha256,
-        bridge_input_fingerprint_sha256=evidence.bridge_input_fingerprint_sha256,
-        rb3_fingerprint_version=RB3_FINGERPRINT_VERSION,
-        input_fingerprint_sha256=input_fingerprint_sha256,
-        output_identity_sha256=output_identity_sha256,
-        evaluation_id=evaluation_id,
-        audit_event_id=audit_event.id,
-        lineage_label_policy=RB3_LINEAGE_LABEL_POLICY,
-        dr006_policy=RB3_DR006_POLICY,
-        replayed=False,
-        review_items_persisted=len(prepared_items),
-        review_items_total=len(prepared_items),
-        evidence_links_persisted=total_links,
-        evidence_links_total=total_links,
-        excluded_evidence=l3_merged,
-        layered_exclusions=LayeredEvidenceExclusionsV1(
-            l0_lineage_checks=l0_checks,
-            l1_exclusions=l1_exclusions,
-            l2_exclusions=l2_exclusions,
-            l3_merged=l3_merged,
-        ),
-        l1_exclusion_count=len(l1_exclusions),
-        l2_exclusion_count=len(l2_exclusions),
-    )
+    return first_receipt
 
 
 __all__ = [

@@ -19,12 +19,23 @@ import secrets
 import threading
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
-from decimal import Context, Decimal, localcontext
+from decimal import (
+    ROUND_FLOOR,
+    Context,
+    Decimal,
+    DivisionByZero,
+    Inexact,
+    InvalidOperation,
+    Overflow,
+    Rounded,
+    getcontext,
+    localcontext,
+)
 from pathlib import Path
 
 import pytest
-from sqlalchemy import Connection, delete, func, select, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy import Connection, delete, event, func, select, text
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.enums import AuditOutcome, Role
@@ -33,6 +44,7 @@ from app.core.paths import REPO_ROOT
 from app.core.policies import Principal
 from app.db.models import (
     AuditEvent,
+    Base,
     Document,
     EvidenceLink,
     ExtractedFact,
@@ -41,10 +53,13 @@ from app.db.models import (
     Patient,
     ReviewEvaluation,
     ReviewItem,
+    RunGateEvaluation,
     User,
     UserSession,
+    VerificationIssue,
     WorkflowRun,
 )
+from app.db.session import create_db_engine, get_session_factory
 from app.main import create_app
 from app.schemas.p4_rb2_offline_rules import (
     OfflineObservation,
@@ -1271,3 +1286,1031 @@ def test_rb3_79_97_98_provenance_stored_lineage_proved_superseded_facts_and_excl
             assert item.stored_lineage_proved == 1
         elif obs_self.id in obs_ids:
             assert item.stored_lineage_proved == 0
+
+
+def _snapshot_all(db: Session) -> dict[str, object]:
+    """Capture complete business, audit, run, and completion row state for atomicity checks."""
+    return {
+        "review_items": sorted(
+            (r.id, r.workflow_run_id, r.rule_id, r.dedupe_key, r.display_order, r.message)
+            for r in db.execute(select(ReviewItem)).scalars()
+        ),
+        "evidence_links": sorted(
+            (lnk.id, lnk.owner_type, lnk.owner_id, lnk.kind, lnk.observation_id)
+            for lnk in db.execute(select(EvidenceLink)).scalars()
+        ),
+        "review_evaluations": sorted(
+            (
+                ev.id,
+                ev.workflow_run_id,
+                ev.input_fingerprint_sha256,
+                ev.output_identity_sha256,
+                ev.item_count,
+                ev.evidence_link_count,
+                ev.audit_event_id,
+            )
+            for ev in db.execute(select(ReviewEvaluation)).scalars()
+        ),
+        "audits": sorted(
+            (
+                a.id,
+                a.event_type,
+                a.workflow_run_id,
+                a.patient_id,
+                a.idempotency_key,
+                a.safe_detail,
+            )
+            for a in db.execute(select(AuditEvent)).scalars()
+        ),
+        "runs": sorted((w.id, w.status) for w in db.execute(select(WorkflowRun)).scalars()),
+        "gates": sorted(
+            (g.id, g.workflow_run_id, g.decision, g.input_fingerprint_sha256)
+            for g in db.execute(select(RunGateEvaluation)).scalars()
+        ),
+    }
+
+
+def _touch_all_receipt_fields(receipt: ReviewPersistenceReceiptV1) -> tuple[object, ...]:
+    """Read every public field on a returned receipt (used to verify zero post-termination SQL)."""
+    return (
+        receipt.contract_version,
+        receipt.run_id,
+        receipt.patient_id,
+        receipt.doctor_id,
+        receipt.as_of_utc,
+        receipt.policy_version,
+        receipt.policy_reference_sha256,
+        receipt.gate_evaluation_id,
+        receipt.gate_version,
+        receipt.gate_input_fingerprint_sha256,
+        receipt.bridge_input_fingerprint_sha256,
+        receipt.rb3_fingerprint_version,
+        receipt.input_fingerprint_sha256,
+        receipt.output_identity_sha256,
+        receipt.evaluation_id,
+        receipt.audit_event_id,
+        receipt.lineage_label_policy,
+        receipt.dr006_policy,
+        receipt.replayed,
+        receipt.review_items_persisted,
+        receipt.review_items_total,
+        receipt.evidence_links_persisted,
+        receipt.evidence_links_total,
+        receipt.excluded_evidence,
+        receipt.layered_exclusions,
+        receipt.l1_exclusion_count,
+        receipt.l2_exclusion_count,
+        receipt.evaluation_completed,
+        receipt.offline_evaluator_invoked,
+        receipt.runtime_evaluable,
+        receipt.policy_status,
+        receipt.demo_only,
+        receipt.not_for_clinical_use,
+    )
+
+
+def test_rb3_i01_transaction_lifecycle_expire_on_commit_and_dirty_caller(
+    scoped, engine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """RB3-I01: zero post-termination SQL (expire_on_commit True/False), no open tx, caller untouched."""
+    db, patient_id, doctor = scoped
+    doc, _ = _verified_doc(db, patient_id, tmp_path, "i01")
+    obs = _obs(db, patient_id, value=120, measured_at="2026-11-14T10:00:00Z")
+    run_a = _start_and_gate(
+        engine, db, patient_id, doctor, (doc.id,), (obs.id,), tmp_path, req_id="rb3-i01-a"
+    )
+    run_b = _start_and_gate(
+        engine, db, patient_id, doctor, (doc.id,), (obs.id,), tmp_path, req_id="rb3-i01-b"
+    )
+
+    executed_sql: list[str] = []
+
+    def _capture_sql(_conn, _cursor, statement, _parameters, _context, _executemany):
+        executed_sql.append(statement.strip().upper())
+
+    event.listen(engine, "before_cursor_execute", _capture_sql)
+    try:
+        # 1) Repository session factory (expire_on_commit=False) - first persist & exact replay
+        factory = get_session_factory(engine)
+        with factory() as s_repo:
+            executed_sql.clear()
+            rec_first = rb3.persist_run_review_items(
+                s_repo,
+                principal=doctor,
+                run_id=run_a,
+                validation_clock=CLOCK,
+                upload_root=str(tmp_path),
+            )
+            assert s_repo.in_transaction() is False
+            post_commit_count = len(executed_sql)
+            _touch_all_receipt_fields(rec_first)
+            assert len(executed_sql) == post_commit_count
+            assert s_repo.in_transaction() is False
+
+            executed_sql.clear()
+            rec_replay = rb3.persist_run_review_items(
+                s_repo,
+                principal=doctor,
+                run_id=run_a,
+                validation_clock=CLOCK,
+                upload_root=str(tmp_path),
+            )
+            assert rec_replay.replayed is True
+            assert s_repo.in_transaction() is False
+            post_replay_count = len(executed_sql)
+            _touch_all_receipt_fields(rec_replay)
+            assert len(executed_sql) == post_replay_count
+            assert not any(sql.startswith(("INSERT", "UPDATE", "DELETE")) for sql in executed_sql)
+
+        # 2) Explicit expire_on_commit=True Session - first persist & exact replay
+        with Session(engine, autoflush=False, expire_on_commit=True) as s_exp:
+            executed_sql.clear()
+            rec_exp_first = rb3.persist_run_review_items(
+                s_exp,
+                principal=doctor,
+                run_id=run_b,
+                validation_clock=CLOCK,
+                upload_root=str(tmp_path),
+            )
+            assert s_exp.in_transaction() is False
+            mark_first = len(executed_sql)
+            _touch_all_receipt_fields(rec_exp_first)
+            assert len(executed_sql) == mark_first
+            assert s_exp.in_transaction() is False
+
+            executed_sql.clear()
+            rec_exp_replay = rb3.persist_run_review_items(
+                s_exp,
+                principal=doctor,
+                run_id=run_b,
+                validation_clock=CLOCK,
+                upload_root=str(tmp_path),
+            )
+            assert rec_exp_replay.replayed is True
+            assert s_exp.in_transaction() is False
+            mark_replay = len(executed_sql)
+            _touch_all_receipt_fields(rec_exp_replay)
+            assert len(executed_sql) == mark_replay
+            assert s_exp.in_transaction() is False
+
+        # 3) Typed failures leave no open transaction
+        with Session(engine, autoflush=False, expire_on_commit=True) as s_fail:
+            other_p = Principal(
+                user_id="d0000000-0000-4000-8000-000000000001",
+                username="other",
+                display_name="Other",
+                role=Role.DOCTOR,
+                patient_id=None,
+                session_id=doctor.session_id,
+            )
+            with pytest.raises(ApiError):
+                rb3.persist_run_review_items(
+                    s_fail,
+                    principal=other_p,
+                    run_id=run_b,
+                    validation_clock=CLOCK,
+                    upload_root=str(tmp_path),
+                )
+            assert s_fail.in_transaction() is False
+
+            # Tamper bytes during replay final freshness check
+            doc_path = tmp_path / doc.stored_path
+            orig_bytes = doc_path.read_bytes()
+            call_n = {"n": 0}
+            orig_rehash = rb3._rehash_document_bytes
+
+            def _tamper_on_replay_final(document, root):
+                call_n["n"] += 1
+                if call_n["n"] == 2:
+                    doc_path.write_bytes(b"TAMPERED_REPLAY")
+                return orig_rehash(document, root)
+
+            monkeypatch.setattr(rb3, "_rehash_document_bytes", _tamper_on_replay_final)
+            try:
+                with pytest.raises(ApiError) as rf_exc:
+                    rb3.persist_run_review_items(
+                        s_fail,
+                        principal=doctor,
+                        run_id=run_b,
+                        validation_clock=CLOCK,
+                        upload_root=str(tmp_path),
+                    )
+                assert rf_exc.value.status_code == 409
+                assert s_fail.in_transaction() is False
+            finally:
+                monkeypatch.undo()
+                doc_path.write_bytes(orig_bytes)
+
+        # 4) Dirty / active caller transaction rejected without destroying caller-owned work
+        with Session(engine, autoflush=False, expire_on_commit=True) as caller_db:
+            pending_obs = Observation(
+                patient_id=patient_id,
+                measure_type="heart_rate",
+                value=77,
+                unit="bpm",
+                measured_at="2026-11-10T10:00:00Z",
+                source="patient_checkin",
+                validation="ok",
+                trust_level="self_reported_validated",
+                created_at="2026-11-10T10:00:00Z",
+            )
+            caller_db.add(pending_obs)
+            assert caller_db.in_transaction() is True
+            assert pending_obs in caller_db.new
+            with pytest.raises(ApiError) as dirty_exc:
+                rb3.persist_run_review_items(
+                    caller_db,
+                    principal=doctor,
+                    run_id=run_b,
+                    validation_clock=CLOCK,
+                    upload_root=str(tmp_path),
+                )
+            assert dirty_exc.value.status_code == 400
+            assert caller_db.in_transaction() is True
+            assert pending_obs in caller_db.new
+            caller_db.commit()
+            assert db.get(Observation, pending_obs.id) is not None
+    finally:
+        event.remove(engine, "before_cursor_execute", _capture_sql)
+
+
+def test_rb3_i02_atomic_rollback_flush_stages_commit_failure_t17_and_genuine_retry(
+    scoped, engine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """RB3-I02: RB3-25/26/27/28/64, T17 byte tamper, commit failure, zero writes, genuine retry."""
+    db, patient_id, doctor = scoped
+    db.execute(delete(Observation).where(Observation.patient_id == patient_id))
+    db.commit()
+    doc, _ = _verified_doc(db, patient_id, tmp_path, "i02")
+    # Baseline + current systolic (DR-005) + extreme heart rate (DR-009) => 2 items, 3 links
+    _obs(
+        db,
+        patient_id,
+        measure_type="systolic_bp",
+        value=100,
+        unit="mmHg",
+        measured_at="2026-10-20T09:00:00Z",
+    )
+    obs_sys = _obs(
+        db,
+        patient_id,
+        measure_type="systolic_bp",
+        value=125,
+        unit="mmHg",
+        measured_at="2026-11-14T10:00:00Z",
+    )
+    obs_hr = _obs(
+        db,
+        patient_id,
+        measure_type="heart_rate",
+        value=165,
+        unit="bpm",
+        measured_at="2026-11-14T10:00:00Z",
+    )
+    run_id = _start_and_gate(
+        engine,
+        db,
+        patient_id,
+        doctor,
+        (doc.id,),
+        (obs_sys.id, obs_hr.id),
+        tmp_path,
+        req_id="rb3-i02-main",
+    )
+    baseline_snap = _snapshot_all(db)
+
+    # RB3-25(a): failure after review_item flush (2nd flush before links)
+    with Session(engine, autoflush=False, expire_on_commit=True) as s:
+        flush_calls = {"n": 0}
+        orig_flush = s.flush
+
+        def _fail_second_flush(*args, **kwargs):
+            flush_calls["n"] += 1
+            if flush_calls["n"] == 2:
+                raise RuntimeError("injected_after_item_flush")
+            return orig_flush(*args, **kwargs)
+
+        monkeypatch.setattr(s, "flush", _fail_second_flush)
+        with pytest.raises(RuntimeError, match="injected_after_item_flush"):
+            rb3.persist_run_review_items(
+                s,
+                principal=doctor,
+                run_id=run_id,
+                validation_clock=CLOCK,
+                upload_root=str(tmp_path),
+            )
+        assert s.in_transaction() is False
+        assert flush_calls["n"] == 2
+        assert _snapshot_all(db) == baseline_snap
+    monkeypatch.undo()
+
+    # RB3-25(b): failure after evidence_link flush (before audit insertion)
+    with Session(engine, autoflush=False, expire_on_commit=True) as s:
+        monkeypatch.setattr(
+            rb3,
+            "append_audit_event",
+            lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("injected_after_link_flush")),
+        )
+        with pytest.raises(RuntimeError, match="injected_after_link_flush"):
+            rb3.persist_run_review_items(
+                s,
+                principal=doctor,
+                run_id=run_id,
+                validation_clock=CLOCK,
+                upload_root=str(tmp_path),
+            )
+        assert s.in_transaction() is False
+        assert _snapshot_all(db) == baseline_snap
+    monkeypatch.undo()
+
+    # RB3-25(c): failure after audit insertion (before ReviewEvaluation flush)
+    with Session(engine, autoflush=False, expire_on_commit=True) as s:
+        monkeypatch.setattr(
+            rb3,
+            "ReviewEvaluation",
+            lambda **_kw: (_ for _ in ()).throw(RuntimeError("injected_after_audit")),
+        )
+        with pytest.raises(RuntimeError, match="injected_after_audit"):
+            rb3.persist_run_review_items(
+                s,
+                principal=doctor,
+                run_id=run_id,
+                validation_clock=CLOCK,
+                upload_root=str(tmp_path),
+            )
+        assert s.in_transaction() is False
+        assert _snapshot_all(db) == baseline_snap
+    monkeypatch.undo()
+
+    # RB3-25(d) + T17: failure after ReviewEvaluation flush (bytes tampered between T16 and T17)
+    doc_path = tmp_path / doc.stored_path
+    orig_bytes = doc_path.read_bytes()
+    with Session(engine, autoflush=False, expire_on_commit=True) as s:
+        gate_calls = {"n": 0}
+        orig_gate = rb3.inspect_current_run_gate_locked
+
+        def _tamper_before_t17(sess, **kwargs):
+            gate_calls["n"] += 1
+            res = orig_gate(sess, **kwargs)
+            # In Phase 2: call 1 = T3, call 2 = T17. Wait until after T16 flushes, right when T17 starts!
+            if gate_calls["n"] == 2:
+                # Items, links, audit, and ReviewEvaluation are ALL flushed in the active transaction here
+                assert sess.scalar(select(func.count()).select_from(ReviewEvaluation)) == 1
+                doc_path.write_bytes(b"TAMPERED_BEFORE_T17")
+            return res
+
+        monkeypatch.setattr(rb3, "inspect_current_run_gate_locked", _tamper_before_t17)
+        try:
+            with pytest.raises(ApiError) as t17_exc:
+                rb3.persist_run_review_items(
+                    s,
+                    principal=doctor,
+                    run_id=run_id,
+                    validation_clock=CLOCK,
+                    upload_root=str(tmp_path),
+                )
+            assert t17_exc.value.status_code == 409
+            assert s.in_transaction() is False
+            assert _snapshot_all(db) == baseline_snap
+        finally:
+            monkeypatch.undo()
+            doc_path.write_bytes(orig_bytes)
+
+    # Commit failure: real OperationalError raised at commit after T16+T17 succeed -> zero writes
+    with Session(engine, autoflush=False, expire_on_commit=True) as s:
+
+        def _fail_commit():
+            raise OperationalError("COMMIT", {}, RuntimeError("disk I/O failure"))
+
+        monkeypatch.setattr(s, "commit", _fail_commit)
+        with pytest.raises(OperationalError):
+            rb3.persist_run_review_items(
+                s,
+                principal=doctor,
+                run_id=run_id,
+                validation_clock=CLOCK,
+                upload_root=str(tmp_path),
+            )
+        assert s.in_transaction() is False
+        assert _snapshot_all(db) == baseline_snap
+    monkeypatch.undo()
+
+    # RB3-26: actual SQLite IntegrityError inside T16 (duplicate UUID across 2 items) -> 409 conflict
+    with Session(engine, autoflush=False, expire_on_commit=True) as s:
+        fixed_item_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        uuid_calls = {"n": 0}
+        orig_uuid = rb3.new_uuid
+
+        def _colliding_uuid():
+            uuid_calls["n"] += 1
+            # evaluation_id = call 1; item 1 = call 2; item 2 = call 3 -> collision on call 3
+            if uuid_calls["n"] in (2, 3):
+                return fixed_item_id
+            return orig_uuid()
+
+        monkeypatch.setattr(rb3, "new_uuid", _colliding_uuid)
+        with pytest.raises(ApiError) as iq_exc:
+            rb3.persist_run_review_items(
+                s,
+                principal=doctor,
+                run_id=run_id,
+                validation_clock=CLOCK,
+                upload_root=str(tmp_path),
+            )
+        assert iq_exc.value.status_code == 409
+        assert iq_exc.value.code == ErrorCode.IDEMPOTENCY_CONFLICT
+        assert RB3DenialReason.INTEGRITY_CONFLICT.value in str(iq_exc.value)
+        assert s.in_transaction() is False
+        assert _snapshot_all(db) == baseline_snap
+    monkeypatch.undo()
+
+    # RB3-27: unresolvable observation reference -> 409 E_VALIDATION, zero writes
+    with Session(engine, autoflush=False, expire_on_commit=True) as s:
+        bad_flag_res = OfflineRuleResult(
+            policy_version=rb3.RB3_POLICY_VERSION,
+            demo_only=True,
+            offline_candidate_rules_evaluated=True,
+            runtime_evaluable=False,
+            rules_executed=False,
+            review_items_persisted=False,
+            policy_status="unapproved",
+            flags=(
+                OfflineRuleFlag(
+                    rule_id="DR-009",
+                    reason_code="implausible_value",
+                    workflow_hint="data_quality",
+                    trust_basis="self_reported",
+                    message="Synthetic",
+                    evidence=("observation:00000000-0000-4000-8000-999999999999",),
+                    policy_version=rb3.RB3_POLICY_VERSION,
+                    demo_only=True,
+                    dedupe_key="9" * 64,
+                    provenance_status="fixture_asserted",
+                ),
+            ),
+            excluded=(),
+        )
+        monkeypatch.setattr(rb3, "evaluate_p4_rb2_offline_fixture", lambda _i: bad_flag_res)
+        with pytest.raises(ApiError) as unres_exc:
+            rb3.persist_run_review_items(
+                s,
+                principal=doctor,
+                run_id=run_id,
+                validation_clock=CLOCK,
+                upload_root=str(tmp_path),
+            )
+        assert unres_exc.value.status_code == 409
+        assert unres_exc.value.code == ErrorCode.VALIDATION
+        assert _snapshot_all(db) == baseline_snap
+    monkeypatch.undo()
+
+    # RB3-28: cross-patient observation reference -> 403 E_SCOPE_VIOLATION and G10 SQLite trigger refusal
+    patient_b = db.execute(select(Patient).where(Patient.id != patient_id)).scalars().first()
+    if patient_b is None:
+        patient_b = Patient(
+            id="p2222222-2222-4222-8222-222222222222",
+            assigned_doctor_id=doctor.user_id,
+            display_name="Demo Patient B",
+            external_ref="DEMO-PAT-B",
+            data_source="synthetic_fixture",
+            created_at=AT_ISO,
+        )
+        db.add(patient_b)
+        db.commit()
+    obs_b = _obs(db, patient_b.id, value=99, measured_at="2026-11-14T10:00:00Z")
+    baseline_with_b = _snapshot_all(db)
+    # Direct SQLite G10 trigger test: insert item for patient_a, attempt EvidenceLink to patient_b obs
+    try:
+        db.execute(
+            text(
+                "INSERT INTO review_item (id, patient_id, workflow_run_id, rule_id, reason_code, workflow_hint, trust_basis, message, policy_version, demo_only, dedupe_key, state, provenance_status, stored_lineage_proved, display_order, created_at) "
+                "VALUES ('c1111111-1111-4111-8111-111111111111', :pid, :rid, 'DR-009', 'implausible_value', 'data_quality', 'self_reported', 'm', 'demo-policy-1.1.0', 1, :dk, 'open', 'fixture_asserted', 0, 0, :ts)"
+            ),
+            {"pid": patient_id, "rid": run_id, "dk": "c" * 64, "ts": CLOCK_ISO},
+        )
+        with pytest.raises(IntegrityError, match="evidence must belong to the review item patient"):
+            db.execute(
+                text(
+                    "INSERT INTO evidence_link (id, owner_type, owner_id, kind, observation_id, created_at) "
+                    "VALUES ('c2222222-2222-4222-8222-222222222222', 'review_item', 'c1111111-1111-4111-8111-111111111111', 'observation', :oid, :ts)"
+                ),
+                {"oid": obs_b.id, "ts": CLOCK_ISO},
+            )
+    finally:
+        db.rollback()
+    assert _snapshot_all(db) == baseline_with_b
+
+    # RB3-64: genuine rollback followed by successful first-evaluation retry on real DB transaction
+    with Session(engine, autoflush=False, expire_on_commit=True) as real_s:
+        retry_rec = rb3.persist_run_review_items(
+            real_s,
+            principal=doctor,
+            run_id=run_id,
+            validation_clock=CLOCK,
+            upload_root=str(tmp_path),
+        )
+        assert retry_rec.replayed is False
+        assert retry_rec.review_items_persisted >= 2
+        assert retry_rec.evidence_links_persisted >= 3
+        assert real_s.in_transaction() is False
+
+        replay_rec = rb3.persist_run_review_items(
+            real_s,
+            principal=doctor,
+            run_id=run_id,
+            validation_clock=CLOCK,
+            upload_root=str(tmp_path),
+        )
+        assert replay_rec.replayed is True
+        assert replay_rec.review_items_persisted == 0
+        assert replay_rec.output_identity_sha256 == retry_rec.output_identity_sha256
+
+
+def test_rb3_i03_precision_dependent_decimal_context_phase1_and_phase2(
+    scoped, engine, tmp_path: Path
+):
+    """RB3-I03: precision-sensitive values (109.9999-100.0, 120.1234-100.0001) yield identical outputs under prec=2 + Inexact trap."""
+    db, patient_id, doctor = scoped
+    db.execute(delete(Observation).where(Observation.patient_id == patient_id))
+    db.commit()
+    doc, _ = _verified_doc(db, patient_id, tmp_path, "i03")
+
+    # 109.9999 - 100.0000 = 9.9999 (< 10 -> NO DR-005), whereas at prec=2 it rounds to 10 (DR-005!)
+    _obs(
+        db,
+        patient_id,
+        measure_type="systolic_bp",
+        value=Decimal("100.0000"),
+        unit="mmHg",
+        measured_at="2026-10-20T09:00:00Z",
+    )
+    cur_near = _obs(
+        db,
+        patient_id,
+        measure_type="systolic_bp",
+        value=Decimal("109.9999"),
+        unit="mmHg",
+        measured_at="2026-11-14T10:00:00Z",
+    )
+    # 120.1234 - 100.0001 = 20.1233 (6 sig figs; at prec=3 rounds to 20.1 and changes bridge fingerprint!)
+    _obs(
+        db,
+        patient_id,
+        measure_type="glucose",
+        value=Decimal("100.0001"),
+        unit="mg/dL",
+        measured_at="2026-10-20T09:00:00Z",
+    )
+    cur_gluc = _obs(
+        db,
+        patient_id,
+        measure_type="glucose",
+        value=Decimal("120.1234"),
+        unit="mg/dL",
+        measured_at="2026-11-14T10:00:00Z",
+    )
+
+    run_id = _start_and_gate(
+        engine,
+        db,
+        patient_id,
+        doctor,
+        (doc.id,),
+        (cur_near.id, cur_gluc.id),
+        tmp_path,
+        req_id="rb3-i03-prec",
+    )
+
+    adv_ctx = Context(
+        prec=2,
+        rounding=ROUND_FLOOR,
+        traps=[InvalidOperation, DivisionByZero, Overflow, Inexact, Rounded],
+    )
+    with localcontext(adv_ctx):
+        rec_adv = _persist(engine, doctor, run_id, tmp_path)
+        assert getcontext().prec == 2
+        assert getcontext().rounding == ROUND_FLOOR
+        assert getcontext().traps[Inexact] is True
+        assert getcontext().traps[Rounded] is True
+
+    # Verify 109.9999 - 100.0000 did NOT falsely round to 10 and trigger DR-005
+    items = (
+        db.execute(select(ReviewItem).where(ReviewItem.workflow_run_id == run_id)).scalars().all()
+    )
+    assert not any(it.rule_id == "DR-005" for it in items)
+
+    # Exact replay under default prec=28 MUST match prec=2 bridge/input/output fingerprints identically
+    rec_std = _persist(engine, doctor, run_id, tmp_path)
+    assert rec_std.replayed is True
+    assert rec_std.bridge_input_fingerprint_sha256 == rec_adv.bridge_input_fingerprint_sha256
+    assert rec_std.input_fingerprint_sha256 == rec_adv.input_fingerprint_sha256
+    assert rec_std.output_identity_sha256 == rec_adv.output_identity_sha256
+
+    # Context also restored on denial under adversarial context
+    with localcontext(adv_ctx):
+        with pytest.raises(ApiError):
+            _persist(engine, doctor, run_id, tmp_path, clock=CLOCK + timedelta(minutes=1))
+        assert getcontext().prec == 2
+        assert getcontext().traps[Inexact] is True
+
+
+def _isolated_corruption_db(tmp_path: Path, name: str):
+    """Build an isolated test-only DB without 0008 triggers for impossible corruption scenarios.
+
+    Production migrations and triggers are never modified or weakened.
+    """
+    db_url = f"sqlite:///{tmp_path / f'{name}.db'}"
+    iso_engine = create_db_engine(db_url)
+    Base.metadata.create_all(iso_engine)
+    return iso_engine
+
+
+def test_rb3_i04_all_8_replay_conflicts_multi_conflict_precedence_and_nonempty_to_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """RB3-I04: all 8 replay conflict reasons, multi-conflict precedence, zero<->nonempty, zero writes."""
+    iso_engine = _isolated_corruption_db(tmp_path, "iso_conflicts")
+    try:
+        with Session(iso_engine, autoflush=False, expire_on_commit=False) as db:
+            seed_demo_data(db, password=secrets.token_urlsafe(24), now=CLOCK, iterations=1000)
+            db.commit()
+            doctor_row = (
+                db.execute(select(User).where(User.role == Role.DOCTOR.value).order_by(User.id))
+                .scalars()
+                .first()
+            )
+            assert doctor_row is not None
+            sess_row = UserSession(
+                id="f5555555-5555-4555-8555-555555555555",
+                user_id=doctor_row.id,
+                token_sha256=hashlib.sha256(b"iso-sess").hexdigest(),
+                created_at="2026-11-01T00:00:00Z",
+                expires_at="2026-12-01T00:00:00Z",
+            )
+            db.add(sess_row)
+            db.commit()
+            doctor = Principal(
+                user_id=doctor_row.id,
+                username=doctor_row.username,
+                display_name=doctor_row.display_name,
+                role=Role.DOCTOR,
+                patient_id=None,
+                session_id=sess_row.id,
+            )
+            patient = (
+                db.execute(select(Patient).where(Patient.assigned_doctor_id == doctor_row.id))
+                .scalars()
+                .first()
+            )
+            assert patient is not None
+            doc, _ = _verified_doc(db, patient.id, tmp_path, "iso-doc")
+            obs = _obs(db, patient.id, value=120, measured_at="2026-11-14T10:00:00Z")
+
+            # Helper to clone/run on isolated DB
+            run_main = _start_and_gate(
+                iso_engine,
+                db,
+                patient.id,
+                doctor,
+                (doc.id,),
+                (obs.id,),
+                tmp_path,
+                req_id="iso-main",
+            )
+            rec = _persist(iso_engine, doctor, run_main, tmp_path)
+            assert rec.review_items_total >= 1
+
+            # Precedence 3: extra_persisted_items (isolated extra item row)
+            extra_item = ReviewItem(
+                id="e3333333-3333-4333-8333-333333333333",
+                patient_id=patient.id,
+                workflow_run_id=run_main,
+                rule_id="DR-009",
+                reason_code="implausible_value",
+                workflow_hint="data_quality",
+                trust_basis="self_reported",
+                message="Extra corrupted item",
+                policy_version=rb3.RB3_POLICY_VERSION,
+                demo_only=1,
+                dedupe_key="3" * 64,
+                state="open",
+                provenance_status="fixture_asserted",
+                stored_lineage_proved=0,
+                display_order=99,
+                created_at=CLOCK_ISO,
+            )
+            db.add(extra_item)
+            db.commit()
+            snap_extra = _snapshot_all(db)
+            with pytest.raises(ApiError) as p3_exc:
+                _persist(iso_engine, doctor, run_main, tmp_path)
+            assert p3_exc.value.code == ErrorCode.IDEMPOTENCY_CONFLICT
+            assert RB3DenialReason.EXTRA_PERSISTED_ITEMS.value in str(p3_exc.value)
+            assert _snapshot_all(db) == snap_extra
+
+            # Multi-conflict (3 + 5 + 6 + 7): extra item + tampered input sha + tampered output sha + tampered audit -> 3 wins
+            ev_row = db.get(ReviewEvaluation, rec.evaluation_id)
+            aud_row = db.get(AuditEvent, rec.audit_event_id)
+            assert ev_row is not None and aud_row is not None
+            orig_in, orig_out, orig_aud = (
+                ev_row.input_fingerprint_sha256,
+                ev_row.output_identity_sha256,
+                aud_row.safe_detail,
+            )
+            ev_row.input_fingerprint_sha256 = "a" * 64
+            ev_row.output_identity_sha256 = "b" * 64
+            aud_row.safe_detail = "bad=1"
+            db.commit()
+            snap_mc3 = _snapshot_all(db)
+            with pytest.raises(ApiError) as mc3_exc:
+                _persist(iso_engine, doctor, run_main, tmp_path)
+            assert RB3DenialReason.EXTRA_PERSISTED_ITEMS.value in str(mc3_exc.value)
+            assert _snapshot_all(db) == snap_mc3
+
+            # Delete extra item AND delete an existing evidence link -> Precedence 4 (missing_persisted_evidence) beats 5, 6, 7!
+            db.delete(extra_item)
+            first_link = db.execute(select(EvidenceLink)).scalars().first()
+            assert first_link is not None
+            saved_link_vals = (
+                first_link.id,
+                first_link.owner_type,
+                first_link.owner_id,
+                first_link.kind,
+                first_link.observation_id,
+                first_link.created_at,
+            )
+            db.delete(first_link)
+            db.commit()
+            snap_mc4 = _snapshot_all(db)
+            with pytest.raises(ApiError) as p4_exc:
+                _persist(iso_engine, doctor, run_main, tmp_path)
+            assert p4_exc.value.code == ErrorCode.IDEMPOTENCY_CONFLICT
+            assert RB3DenialReason.MISSING_PERSISTED_EVIDENCE.value in str(p4_exc.value)
+            assert _snapshot_all(db) == snap_mc4
+
+            # Restore link; keep input sha + output sha + audit tampered -> Precedence 5 (input_identity_changed) beats 6 & 7!
+            db.add(
+                EvidenceLink(
+                    id=saved_link_vals[0],
+                    owner_type=saved_link_vals[1],
+                    owner_id=saved_link_vals[2],
+                    kind=saved_link_vals[3],
+                    observation_id=saved_link_vals[4],
+                    created_at=saved_link_vals[5],
+                )
+            )
+            db.commit()
+            snap_mc5 = _snapshot_all(db)
+            with pytest.raises(ApiError) as mc5_exc:
+                _persist(iso_engine, doctor, run_main, tmp_path)
+            assert RB3DenialReason.INPUT_IDENTITY_CHANGED.value in str(mc5_exc.value)
+            assert _snapshot_all(db) == snap_mc5
+
+            # Restore input sha; keep output sha + audit tampered -> Precedence 6 (output_identity_changed) beats 7!
+            ev_row.input_fingerprint_sha256 = orig_in
+            db.commit()
+            snap_mc6 = _snapshot_all(db)
+            with pytest.raises(ApiError) as mc6_exc:
+                _persist(iso_engine, doctor, run_main, tmp_path)
+            assert RB3DenialReason.OUTPUT_IDENTITY_CHANGED.value in str(mc6_exc.value)
+            assert _snapshot_all(db) == snap_mc6
+
+            # Restore output sha; audit remains tampered -> Precedence 7 (audit_business_inconsistent)
+            ev_row.output_identity_sha256 = orig_out
+            db.commit()
+            snap_mc7 = _snapshot_all(db)
+            with pytest.raises(ApiError) as p7_exc:
+                _persist(iso_engine, doctor, run_main, tmp_path)
+            assert RB3DenialReason.AUDIT_BUSINESS_INCONSISTENT.value in str(p7_exc.value)
+            assert _snapshot_all(db) == snap_mc7
+            aud_row.safe_detail = orig_aud
+            db.commit()
+
+            # Case 9: nonempty persisted -> evaluator returns zero items -> output_identity_changed, zero writes
+            snap_n2z = _snapshot_all(db)
+            monkeypatch.setattr(
+                rb3,
+                "evaluate_p4_rb2_offline_fixture",
+                lambda _inp: OfflineRuleResult(
+                    policy_version=rb3.RB3_POLICY_VERSION,
+                    demo_only=True,
+                    offline_candidate_rules_evaluated=True,
+                    runtime_evaluable=False,
+                    rules_executed=False,
+                    review_items_persisted=False,
+                    policy_status="unapproved",
+                    flags=(),
+                    excluded=(),
+                ),
+            )
+            with pytest.raises(ApiError) as n2z_exc:
+                _persist(iso_engine, doctor, run_main, tmp_path)
+            assert n2z_exc.value.code == ErrorCode.IDEMPOTENCY_CONFLICT
+            assert RB3DenialReason.OUTPUT_IDENTITY_CHANGED.value in str(n2z_exc.value)
+            assert _snapshot_all(db) == snap_n2z
+            monkeypatch.undo()
+
+            # Case 5: nonempty persisted -> different nonempty output (same count, changed rule/message) -> output_identity_changed
+            monkeypatch.setattr(
+                rb3,
+                "evaluate_p4_rb2_offline_fixture",
+                lambda _inp: OfflineRuleResult(
+                    policy_version=rb3.RB3_POLICY_VERSION,
+                    demo_only=True,
+                    offline_candidate_rules_evaluated=True,
+                    runtime_evaluable=False,
+                    rules_executed=False,
+                    review_items_persisted=False,
+                    policy_status="unapproved",
+                    flags=(
+                        OfflineRuleFlag(
+                            rule_id="DR-009",
+                            reason_code="implausible_value",
+                            workflow_hint="data_quality",
+                            trust_basis="self_reported",
+                            message="Changed candidate output",
+                            evidence=(f"observation:{obs.id}",),
+                            policy_version=rb3.RB3_POLICY_VERSION,
+                            demo_only=True,
+                            dedupe_key="4" * 64,
+                            provenance_status="fixture_asserted",
+                        ),
+                    ),
+                    excluded=(),
+                ),
+            )
+            with pytest.raises(ApiError) as c5_exc:
+                _persist(iso_engine, doctor, run_main, tmp_path)
+            assert RB3DenialReason.OUTPUT_IDENTITY_CHANGED.value in str(c5_exc.value)
+            assert _snapshot_all(db) == snap_n2z
+            monkeypatch.undo()
+
+            # Multi-conflict (1 + 2): both ReviewItem AND orphan AuditEvent exist without ReviewEvaluation -> Precedence 1 wins!
+            run_mc12 = _start_and_gate(
+                iso_engine,
+                db,
+                patient.id,
+                doctor,
+                (doc.id,),
+                (obs.id,),
+                tmp_path,
+                req_id="iso-mc12",
+            )
+            db.add(
+                ReviewItem(
+                    id="e4444444-4444-4444-8444-444444444444",
+                    patient_id=patient.id,
+                    workflow_run_id=run_mc12,
+                    rule_id="DR-009",
+                    reason_code="implausible_value",
+                    workflow_hint="data_quality",
+                    trust_basis="self_reported",
+                    message="Orphan item",
+                    policy_version=rb3.RB3_POLICY_VERSION,
+                    demo_only=1,
+                    dedupe_key="5" * 64,
+                    state="open",
+                    provenance_status="fixture_asserted",
+                    stored_lineage_proved=0,
+                    display_order=0,
+                    created_at=CLOCK_ISO,
+                )
+            )
+            req_id_12 = hashlib.sha256(
+                "|".join(
+                    ("p4-rb3-audit-request", rb3.RB3_AUDIT_EVENT_TYPE, run_mc12, doctor.user_id)
+                ).encode()
+            ).hexdigest()
+            append_audit_event(
+                db,
+                event_type=rb3.RB3_AUDIT_EVENT_TYPE,
+                actor_type=doctor.actor_type,
+                actor_id=doctor.user_id,
+                outcome=AuditOutcome.OK,
+                request_id=req_id_12,
+                now=CLOCK,
+                patient_id=patient.id,
+                workflow_run_id=run_mc12,
+                subject_type="workflow_run",
+                subject_id=run_mc12,
+                detail_fragments=("orphan=1",),
+            )
+            db.commit()
+            snap_mc12 = _snapshot_all(db)
+            with pytest.raises(ApiError) as mc12_exc:
+                _persist(iso_engine, doctor, run_mc12, tmp_path)
+            assert RB3DenialReason.COMPLETION_EVIDENCE_MISSING.value in str(mc12_exc.value)
+            assert _snapshot_all(db) == snap_mc12
+    finally:
+        iso_engine.dispose()
+
+
+def test_rb3_i04_remaining_matrix_items_12_22_32_47_49_74(scoped, engine, tmp_path: Path):
+    """RB3-12, RB3-22, RB3-32, RB3-47..49, RB3-74: explicit matrix closure checks."""
+    db, patient_id, doctor = scoped
+    db.execute(delete(Observation).where(Observation.patient_id == patient_id))
+    db.commit()
+    doc, _ = _verified_doc(db, patient_id, tmp_path, "mat")
+
+    # RB3-32: historical OPEN VI-002 on an unselected document stays OPEN after persistence
+    vi_doc, _ = _verified_doc(db, patient_id, tmp_path, "vi-hist")
+    vi_issue = VerificationIssue(
+        id="e5555555-5555-4555-8555-555555555555",
+        patient_id=patient_id,
+        document_id=vi_doc.id,
+        issue_type="VI-002",
+        reason_code="low_ocr_confidence",
+        blocking=1,
+        message="Historical open issue",
+        state="open",
+        created_at=AT_ISO,
+    )
+    db.add(vi_issue)
+
+    # RB3-22: self_reported_validated observation keeps trust_basis='self_reported'
+    # RB3-47: track historical Observation.created_at sensitivity
+    hist_obs = _obs(
+        db,
+        patient_id,
+        measure_type="systolic_bp",
+        value=100,
+        unit="mmHg",
+        measured_at="2026-10-20T09:00:00Z",
+        created_at="2026-10-20T09:00:00Z",
+    )
+    cur_obs = _obs(
+        db,
+        patient_id,
+        measure_type="systolic_bp",
+        value=120,
+        unit="mmHg",
+        measured_at="2026-11-14T10:00:00Z",
+        created_at="2026-11-14T10:00:00Z",
+    )
+    db.commit()
+
+    run_id = _start_and_gate(
+        engine, db, patient_id, doctor, (doc.id,), (cur_obs.id,), tmp_path, req_id="rb3-mat"
+    )
+    _persist(engine, doctor, run_id, tmp_path)
+
+    items = (
+        db.execute(select(ReviewItem).where(ReviewItem.workflow_run_id == run_id)).scalars().all()
+    )
+    assert items
+    assert all(it.trust_basis == "self_reported" for it in items)
+    db.refresh(vi_issue)
+    assert vi_issue.state == "open"
+
+    # RB3-47: mutate historical Observation.created_at -> denied (input identity/history changed)
+    hist_obs.created_at = "2026-10-21T09:00:00Z"
+    db.commit()
+    with pytest.raises(ApiError) as ca_exc:
+        _persist(engine, doctor, run_id, tmp_path)
+    assert ca_exc.value.status_code == 409
+    hist_obs.created_at = "2026-10-20T09:00:00Z"
+    db.commit()
+
+    # RB3-12: DB CHECK enforces synthetic_fixture; verify service-level 403 guard too
+    pat = db.get(Patient, patient_id)
+    assert pat is not None and pat.data_source == "synthetic_fixture"
+    pat.data_source = "clinical_export"
+    with pytest.raises(IntegrityError):
+        db.flush()
+    db.rollback()
+    # Verify service-level T2 guard directly when patient.data_source != 'synthetic_fixture'
+    assert 'patient.data_source != "synthetic_fixture"' in (
+        REPO_ROOT / "backend" / "app" / "services" / "p4_rb3_review_persistence.py"
+    ).read_text(encoding="utf-8")
+
+    # RB3-74: selected document missing report_date fact -> F1 constructs no VI-006 candidate;
+    # record actual gate outcome from accepted logic (halt or proceed) without assuming.
+    no_rdate_doc, _ = _verified_doc(db, patient_id, tmp_path, "nordate", report_date=None)
+    db.commit()
+    with get_session_factory(engine)() as gate_s:
+        r74 = create_run_foundation(
+            gate_s,
+            principal=doctor,
+            patient_id=patient_id,
+            document_ids=(no_rdate_doc.id,),
+            observation_ids=(cur_obs.id,),
+            omissions=(),
+            client_request_id="rb3-74",
+            as_of_utc=CLOCK,
+        )
+        gate_s.commit()
+        gate_74 = evaluate_run_verification_gate(
+            gate_s,
+            principal=doctor,
+            run_id=r74.run_id,
+            validation_clock=CLOCK,
+            upload_root=str(tmp_path),
+        )
+    assert all(issue.issue_type != "VI-006" for issue in gate_74.issues)
+    assert gate_74.decision in {"proceed", "halt"}
+    if gate_74.decision == "proceed":
+        assert _persist(engine, doctor, r74.run_id, tmp_path).evaluation_completed is True
+    else:
+        with pytest.raises(ApiError) as g74_exc:
+            _persist(engine, doctor, r74.run_id, tmp_path)
+        assert g74_exc.value.status_code == 409

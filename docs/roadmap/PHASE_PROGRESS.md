@@ -1562,3 +1562,16 @@ After owner-merged [PR #27](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp
   - Full `pytest`: **1270 passed, 7 failed** out of **1277 collected** (**443** P3 collected). All **7** failures are exclusively the untouched E1–E5 legacy guards (`test_database.py` ×2, `test_p2_migration.py` ×2, `test_p2_scope_guards.py` ×1, `check_alembic_smoke.py` via `test_p5_run_gate.py` ×1, `test_windows_ocr_acceptance.py` ×1 expecting literal `**1277 collected**, of which **443** are the P3 suite` in `PHASE_3_WINDOWS_ACCEPTANCE.md`).
 - **Next gate:** Owner review of `docs/phase-reports/P4_RB3_IMPLEMENTATION_REVIEW_20261123.md` (N10) and standalone owner exception markers for E1–E5 (plus optional E6 docstring note) before Python 3.12 CI and Windows verification. P4 remains **IN_REVIEW**; issue #14 **OPEN**; full P5 **NOT ACCEPTED**; original real-OCR `GOLD-EX-11` **FAIL / NOT PROVEN**. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
 
+## P4-RB3 Round-2 implementation review blockers resolved (`RB3-I01`–`RB3-I05`; E1–E6 untouched) (2026-11-23)
+
+- **Baseline & scope:** Resolved all five Round-2 implementation review blockers (`RB3-I01`–`RB3-I05`) atop Round-1 commit `414284de40f0cee23be85deebf1e5310aa0ff043` on draft PR #43 (base `main@6d121228a9e4a1c0571c513d158c2cb887b1486`), strictly inside the ratified Revision-6 architecture and the same 13 authorized **N1–N13** paths. Zero edits to F2, RB1, RB2, `monitoring.py`, `session.py`, or any E1–E6 path.
+- **Measured Round-2 verification (Linux Python 3.11.2 `/tmp/rb3-venv` from `requirements/requirements-dev.lock`):**
+  - Targeted RB3 suite (`test_p4_rb3_review_persistence.py` + `test_p4_rb3_migration_guards.py`): **25 passed** (`18` service + `7` migration guards).
+  - RB3 + safety guards (`test_safety_guards.py`): **34 passed**.
+  - `ruff check .` & `ruff format --check .`: **PASS** (`145 files`).
+  - `check_openapi.py`: **PASS** (`17 paths / 18 operations, 43 schemas`).
+  - `scan_repository.py`: **PASS** (`294` tracked files).
+  - Full `pytest`: **1275 passed, 7 failed** out of **1282 collected** (**443** P3 collected). All **7** failures remain exclusively the untouched E1–E5 legacy expectations (`test_windows_ocr_acceptance.py` now expects literal `**1282 collected**, of which **443** are the P3 suite` in `PHASE_3_WINDOWS_ACCEPTANCE.md`).
+- **Next gate:** Owner review of `docs/phase-reports/P4_RB3_IMPLEMENTATION_REVIEW_20261123.md` (N10, including §5–§8 and the complete `RB3-01..128` matrix) and standalone owner markers for E1–E4, updated-count E5 (`1282` / `443`), and optional docstring-only E6 before Python 3.12 CI and Windows verification. PR #43 stays **OPEN / DRAFT / NOT MERGED**; P4 remains **IN_REVIEW**; issue #14 **OPEN**; full P5 **NOT ACCEPTED**; original real-OCR `GOLD-EX-11` **FAIL / NOT PROVEN**. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
+
+
