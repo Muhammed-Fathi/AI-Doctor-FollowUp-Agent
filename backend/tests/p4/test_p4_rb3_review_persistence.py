@@ -62,6 +62,7 @@ from app.db.models import (
 from app.db.session import create_db_engine, get_session_factory
 from app.main import create_app
 from app.schemas.p4_rb2_offline_rules import (
+    OfflineEvidenceExclusion,
     OfflineObservation,
     OfflineRuleFlag,
     OfflineRuleInput,
@@ -1362,7 +1363,7 @@ def test_rb3_79_97_98_provenance_stored_lineage_proved_superseded_facts_and_excl
     assert unsup_exc.value.status_code == 409
     assert _counts(db) == before_unsup
 
-    # RB3-98: bounded valid exclusions + no truncation + service cap boundary (>200)
+    # RB3-98: (a) retain reduced-cap supplemental regression (MAX_EXCLUSIONS=4)
     excl_ids: list[str] = []
     for idx in range(5):
         bad_o = _obs(
@@ -1378,7 +1379,6 @@ def test_rb3_79_97_98_provenance_stored_lineage_proved_superseded_facts_and_excl
     run_excl = _start_and_gate(
         engine, db, patient_id, doctor, (doc.id,), (obs_self.id,), tmp_path, req_id="rb3-98"
     )
-    # Boundary check: exceeding MAX_EXCLUSIONS fails closed with zero writes
     assert rb3.MAX_EXCLUSIONS == 200
     before_cap = _counts(db)
     monkeypatch.setattr(rb3, "MAX_EXCLUSIONS", 4)
@@ -1400,6 +1400,181 @@ def test_rb3_79_97_98_provenance_stored_lineage_proved_superseded_facts_and_excl
     assert eval_98.exclusion_count == len(rec_98.excluded_evidence)
     assert len(audit_98.safe_detail) <= SAFE_DETAIL_MAX
     assert f"exclusions={eval_98.exclusion_count}" in audit_98.safe_detail
+
+    # RB3-98: (b) largest legitimately reachable end-to-end exclusion count (100, capped by MAX_HISTORY_OBSERVATIONS=100),
+    # canonical deduplication/ordering, zero truncation, and exact receipt/completion/audit count agreement;
+    # plus (c) actual MAX_EXCLUSIONS=200 service boundary (200 allowed, 201 denied with zero writes) without reducing MAX_EXCLUSIONS.
+    patient_98 = Patient(
+        id="p9898989-8989-4898-8989-989898989898",
+        assigned_doctor_id=doctor.user_id,
+        display_name="Demo RB3-98 Patient",
+        external_ref="DEMO-RB3-98",
+        data_source="synthetic_fixture",
+        created_at=AT_ISO,
+        updated_at=AT_ISO,
+    )
+    db.add(patient_98)
+    db.commit()
+    doc_98, _ = _verified_doc(db, patient_98.id, tmp_path, "doc98")
+    obs_cur_100 = _obs(
+        db,
+        patient_98.id,
+        measure_type="heart_rate",
+        value=120,
+        unit="bpm",
+        measured_at="2026-11-14T10:00:00Z",
+        created_at="not-an-iso",  # passes L1, triggers L2 missing_created_at
+    )
+    hist_99: list[tuple[str, str]] = []
+    for idx in range(99):
+        if idx % 3 == 0:
+            ho = _obs(
+                db,
+                patient_98.id,
+                measure_type="glucose",
+                value=100 + idx,
+                unit="mg/dL",
+                measured_at="2026-11-01T10:00:00Z",
+                validation="rejected",
+            )
+            hist_99.append((ho.id, "validation_rejected"))
+        elif idx % 3 == 1:
+            ho = _obs(
+                db,
+                patient_98.id,
+                measure_type="glucose",
+                value=100 + idx,
+                unit="mmHg",
+                measured_at="2026-11-02T10:00:00Z",
+                validation="ok",
+            )
+            hist_99.append((ho.id, "unit_mismatch"))
+        else:
+            ho = _obs(
+                db,
+                patient_98.id,
+                measure_type="glucose",
+                value=100 + idx,
+                unit="mg/dL",
+                measured_at="not-an-iso",
+                validation="ok",
+            )
+            hist_99.append((ho.id, "missing_timestamp"))
+    db.commit()
+
+    run_reach_100 = _start_and_gate(
+        engine,
+        db,
+        patient_98.id,
+        doctor,
+        (doc_98.id,),
+        (obs_cur_100.id,),
+        tmp_path,
+        req_id="rb3-98-100",
+    )
+    rec_100 = _persist(engine, doctor, run_reach_100, tmp_path)
+    eval_100 = db.execute(
+        select(ReviewEvaluation).where(ReviewEvaluation.workflow_run_id == run_reach_100)
+    ).scalar_one()
+    audit_100 = db.execute(
+        select(AuditEvent).where(AuditEvent.id == eval_100.audit_event_id)
+    ).scalar_one()
+    assert len(rec_100.layered_exclusions.l1_exclusions) == 99
+    assert len(rec_100.layered_exclusions.l2_exclusions) == 1
+    assert len(rec_100.excluded_evidence) == 100
+    assert rec_100.excluded_evidence == rec_100.layered_exclusions.l3_merged
+    assert rec_100.excluded_evidence == tuple(sorted(set(rec_100.excluded_evidence)))
+    assert eval_100.exclusion_count == 100
+    assert len(audit_100.safe_detail) <= SAFE_DETAIL_MAX
+    assert "exclusions=100" in audit_100.safe_detail
+
+    # Boundary-injected 200 (exact MAX_EXCLUSIONS=200 allowed) vs 201 (denied, zero writes)
+    # Distinguishes theoretical 200-pair cap from the 100-observation end-to-end F2 limit.
+    assert rb3.MAX_EXCLUSIONS == 200
+    run_b200 = _start_and_gate(
+        engine,
+        db,
+        patient_98.id,
+        doctor,
+        (doc_98.id,),
+        (obs_cur_100.id,),
+        tmp_path,
+        req_id="rb3-98-b200",
+    )
+    run_b201 = _start_and_gate(
+        engine,
+        db,
+        patient_98.id,
+        doctor,
+        (doc_98.id,),
+        (obs_cur_100.id,),
+        tmp_path,
+        req_id="rb3-98-b201",
+    )
+    orig_eval_98 = rb3.evaluate_p4_rb2_offline_fixture
+
+    def _inject_exclusions(extra_pairs: tuple[OfflineEvidenceExclusion, ...]):
+        def _wrapper(inp: OfflineRuleInput) -> OfflineRuleResult:
+            base = orig_eval_98(inp)
+            return OfflineRuleResult(
+                policy_version=base.policy_version,
+                demo_only=base.demo_only,
+                offline_candidate_rules_evaluated=base.offline_candidate_rules_evaluated,
+                runtime_evaluable=base.runtime_evaluable,
+                rules_executed=base.rules_executed,
+                review_items_persisted=base.review_items_persisted,
+                policy_status=base.policy_status,
+                flags=base.flags,
+                excluded=base.excluded + extra_pairs,
+            )
+
+        return _wrapper
+
+    # 99 L1 pairs + 1 base L2 pair (obs_cur_100, missing_created_at) = 100;
+    # add 1 duplicate of an existing L1 pair (canonical deduplication check) + 100 new distinct L2 pairs => exact 200 L3 pairs
+    dup_l1_pair = OfflineEvidenceExclusion(hist_99[0][0], hist_99[0][1])
+    new_100_pairs = (
+        *(OfflineEvidenceExclusion(oid, "missing_created_at") for oid, _r in hist_99),
+        OfflineEvidenceExclusion(obs_cur_100.id, "future_timestamp"),
+    )
+    assert len(new_100_pairs) == 100
+
+    monkeypatch.setattr(
+        rb3,
+        "evaluate_p4_rb2_offline_fixture",
+        _inject_exclusions((dup_l1_pair, *new_100_pairs)),
+    )
+    rec_200 = _persist(engine, doctor, run_b200, tmp_path)
+    monkeypatch.undo()
+
+    eval_200 = db.execute(
+        select(ReviewEvaluation).where(ReviewEvaluation.workflow_run_id == run_b200)
+    ).scalar_one()
+    audit_200 = db.execute(
+        select(AuditEvent).where(AuditEvent.id == eval_200.audit_event_id)
+    ).scalar_one()
+    assert len(rec_200.excluded_evidence) == 200
+    assert rec_200.excluded_evidence == rec_200.layered_exclusions.l3_merged
+    assert rec_200.excluded_evidence == tuple(sorted(set(rec_200.excluded_evidence)))
+    assert eval_200.exclusion_count == 200
+    assert len(audit_200.safe_detail) <= SAFE_DETAIL_MAX
+    assert "exclusions=200" in audit_200.safe_detail
+
+    # 201 distinct L3 pairs -> service denies with 409 E_VALIDATION and zero writes (MAX_EXCLUSIONS remains 200)
+    extra_201st = OfflineEvidenceExclusion(hist_99[0][0], "future_timestamp")
+    before_201 = _counts(db)
+    monkeypatch.setattr(
+        rb3,
+        "evaluate_p4_rb2_offline_fixture",
+        _inject_exclusions((*new_100_pairs, extra_201st)),
+    )
+    with pytest.raises(ApiError) as exc_201:
+        _persist(engine, doctor, run_b201, tmp_path)
+    monkeypatch.undo()
+    assert exc_201.value.status_code == 409
+    assert exc_201.value.code == ErrorCode.VALIDATION
+    assert "Exclusion count exceeds bounded design maximum." in str(exc_201.value)
+    assert _counts(db) == before_201
 
 
 def _snapshot_all(db: Session) -> dict[str, object]:

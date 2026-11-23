@@ -205,3 +205,32 @@ Round 3 addressed `RB3-I06`, `RB3-I07`, factual report corrections, and authoriz
 
 - **P4 remains `IN_REVIEW`**, issue #14 remains **OPEN**, full P5 remains **NOT ACCEPTED**, original real-OCR `GOLD-EX-11` remains **FAIL / NOT PROVEN**, and PR #43 remains **OPEN / DRAFT / NOT MERGED**. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
 
+---
+
+## 10. Final Bounded Acceptance Evidence Closure (Round 4 — 2026-11-23)
+
+Completed atop Round-3 commit `7936bb535fb24ac4a4d9278921cdcbcd400bdf77` on draft PR #43 (base `main@6d121228a9e742849337366c6880a2cb887b1486`) within authorized files (`N5`, `N6`, `N10`–`N12`, and owner-authorized `E4` `scripts/python/check_alembic_smoke.py`; `E5` and `E6` untouched):
+
+1. **`RB3-110` / `RB3-127` — Exact `sqlite_master` Schema, Autoindex & 11-Trigger SQL Equivalence (`N6`, `E4`):**
+   - `backend/tests/p4/test_p4_rb3_migration_guards.py` (`test_rb3_29_30_31_127_migration_populated_refusal_and_empty_roundtrip`) captures all `62` non-autoindex `sqlite_master` objects (`type, name, tbl_name, sql`) plus per-table `sqlite_autoindex_*` counts and full historical row snapshots across `12` populated pre-RB3 tables at genuine `0007_p5_run_gate`:
+     - On upgrade to `0008_p4_rb3_review_persistence`: asserts **exact byte-for-byte identity** of all `62` pre-existing non-RB3 `sqlite_master` definitions (including all `11` historical trigger SQL definitions verbatim), all `25` RB3 trigger definitions on the `3` RB3 tables, `WITHOUT ROWID` confined to the `3` RB3 tables, and exact preservation of historical rows.
+     - On empty RB3 downgrade `0008 -> 0007`: asserts **exact** `sqlite_master` equality (`62/62` non-autoindex objects + `sqlite_autoindex_*` counts) and exact historical row preservation.
+     - Re-upgrades to `0008` and verifies populated downgrade refusal and historical data preservation.
+   - `scripts/python/check_alembic_smoke.py` (`E4`) now verifies exact whitespace-normalized SQL definitions (`HISTORICAL_11_TRIGGER_SQL`) for all `11` historical triggers at `0008` `head`, not merely trigger names or `"RAISE(ABORT"` substrings.
+2. **`RB3-98` — Bounded Reachability (`100` E2E) vs Storage/Service Maximum (`200`/`201`) (`N5`, `N6`):**
+   - **End-to-end legitimately reachable cap (`100`):** `backend/app/services/p5_evidence_bridge.py` enforces `MAX_HISTORY_OBSERVATIONS = 100` across total patient observations in L1. Using an unmodified `persist_run_review_items` (`MAX_EXCLUSIONS == 200`) and a fresh synthetic `patient_98` with `100` observations (`1` selected current with `created_at="not-an-iso"` -> L2 `missing_created_at`, plus `99` historical across `validation_rejected`/`unit_mismatch`/`missing_timestamp` -> L1), a genuine F1 `proceed` evaluation (`input_obs=1`, `history=99`) runs end-to-end and persists `len(l1) == 99`, `len(l2) == 1`, `len(l3_merged) == 100`, `eval.exclusion_count == 100`, `len(audit.safe_detail) <= 500`, and `"exclusions=100"` with zero truncation.
+   - **Theoretical `200`/`201` service & SQLite boundary:** Separately verified without weakening production limits:
+     - `N6` (`test_rb3_54_to_57_67_68_78_79_80_81_checks_and_vocabulary`): on an otherwise valid `review_evaluation` row passing `G14` triggers (`6` items, `6` evidence links, matching audit/gate/run), SQLite CHECK constraint `ck_review_evaluation_review_eval_excl_count_range` **accepts** `exclusion_count=200` and **refuses** `201` and `-1`.
+     - `N5` (`test_rb3_79_97_98_...`): with `MAX_EXCLUSIONS == 200` unmodified, injecting via `evaluate_p4_rb2_offline_fixture` boundary: (i) a duplicate L1 exclusion plus `100` distinct L2 pairs canonicalizes/deduplicates to exact **`200`** L3 exclusions (`eval.exclusion_count == 200`, `len(audit.safe_detail) <= 500`, `"exclusions=200"`, zero truncation); and (ii) `101` distinct L2 pairs yields **`201`** L3 exclusions and is **denied** (`409 E_VALIDATION`, `"Exclusion count exceeds bounded design maximum."`) with **zero writes**.
+     - The reduced-cap (`MAX_EXCLUSIONS = 4`) regression check is retained as supplemental coverage.
+3. **Collection Baseline Accounting (`1255` -> `1282`, `443` P3):**
+   - Verified directly on detached `main@6d121228a9e742849337366c6880a2cb887b1486` via `pytest --collect-only`: **`1255` tests collected** across `backend/tests` (**`443`** in `backend/tests/p3`, **`87`** in `backend/tests/p2/test_p2_scope_guards.py`).
+   - Exact `+27` delta on PR #43 (`1282` collected, `443` P3 unchanged): adding `N1` (`p4_rb3_review_persistence.py`) and `N2` (`schemas/p4_rb3_review_persistence.py`) expanded `app_sources()` in `backend/tests/p2/test_p2_scope_guards.py` by **`+2`** parametrized checks (`87 -> 89`), and `N5` (`18`) + `N6` (`7`) added **`+25`** RB3 tests (`1255 + 2 + 25 = 1282`).
+   - Earlier Round-3 prose in `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md` (`E5`) had assumed `1257` as the pre-RB3 baseline; `E5` is intentionally left **untouched** without fresh owner authorization because its reported collection pairing (`**1282 collected**, of which **443** are the P3 suite`) remains **unchanged**.
+4. **Closure Verification (Linux Python 3.11.2 `/tmp/rb3-venv`, Node `v22.22.3`):**
+   - Focused RB3 + P5: **49 passed** (`18` N5 + `7` N6 + `24` P5), `0` failed.
+   - Full backend pytest: **1282 passed, 0 failed**; collection: **1282 collected** (**443** P3).
+   - Ruff lint & format: PASS (`145` files); Alembic 9-state upgrade/downgrade/re-upgrade + exact 11-trigger `check_alembic_smoke.py`: PASS; `check_openapi.py`: PASS (`17 paths / 18 operations, 43 schemas`); `scan_repository.py`: PASS (`294` files); frontend `lint`/`typecheck`/`vitest 13`/`build`: PASS.
+   - `RB3-75..77` remain **`DEFERRED FUTURE EXTENSION / NOT EXECUTED`**, end-to-end DR-006 reachability remains **NOT PROVEN / NOT CLAIMED**, `GOLD-EX-11` remains **FAIL / NOT PROVEN**, P4 remains **IN_REVIEW**, issue #14 remains **OPEN**, full P5 remains **NOT ACCEPTED**, and PR #43 remains **OPEN / DRAFT / NOT MERGED**. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
+
+

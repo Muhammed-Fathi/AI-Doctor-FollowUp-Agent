@@ -384,36 +384,86 @@ def _setup_populated_db(tmp_path: Path) -> tuple[str, Path, tuple[str, str, str,
 
 
 def test_rb3_29_30_31_127_migration_populated_refusal_and_empty_roundtrip(tmp_path: Path):
-    """RB3-29/30/31/127: upgrade populated DB, nonempty downgrade refused, empty roundtrip."""
+    """RB3-29/30/31/110/127: 0007->0008->0007 exact sqlite_master & data preservation, populated refusal."""
     db_url, _upload_root, run_info = _setup_populated_db(tmp_path)
     run_id, patient_id, doctor_id, obs_id, gate_id, gate_fp = run_info
     cfg = _alembic_cfg(db_url)
     mig0008 = _load_0008_module()
 
+    def _capture_master(conn):
+        objs = conn.execute(
+            text(
+                "SELECT type, name, tbl_name, sql FROM sqlite_master "
+                "WHERE name NOT LIKE 'sqlite_autoindex_%' "
+                "ORDER BY type, name, tbl_name"
+            )
+        ).all()
+        auto_counts = conn.execute(
+            text(
+                "SELECT tbl_name, COUNT(*) FROM sqlite_master "
+                "WHERE name LIKE 'sqlite_autoindex_%' "
+                "GROUP BY tbl_name ORDER BY tbl_name"
+            )
+        ).all()
+        return [(r[0], r[1], r[2], r[3]) for r in objs], [(r[0], r[1]) for r in auto_counts]
+
+    def _capture_historical_data(conn):
+        tables = (
+            "schema_meta",
+            "user",
+            "patient",
+            "document",
+            "observation",
+            "extracted_fact",
+            "fact_verification",
+            "workflow_run",
+            "run_selected_document",
+            "run_selected_observation",
+            "run_gate_evaluation",
+            "audit_event",
+        )
+        return {tbl: conn.execute(text(f"SELECT * FROM {tbl}")).all() for tbl in tables}
+
     eng = create_db_engine(db_url)
     try:
-        with Session(eng) as db:
-            before_patients = db.execute(select(Patient.id)).scalars().all()
-            before_runs = db.execute(select(User.id)).scalars().all()
-        command.upgrade(cfg, "head")
-        with Session(eng) as db:
-            assert db.execute(select(Patient.id)).scalars().all() == before_patients
-            assert db.execute(select(User.id)).scalars().all() == before_runs
+        with eng.connect() as conn:
+            hist_master_0007, hist_auto_0007 = _capture_master(conn)
+            hist_data_0007 = _capture_historical_data(conn)
+            hist_triggers_0007 = {
+                name: sql for typ, name, _tbl, sql in hist_master_0007 if typ == "trigger"
+            }
+            assert set(hist_triggers_0007) == EXPECTED_HISTORICAL_TRIGGERS
 
-        # Empty-DB roundtrip: downgrade 0008 -> 0007 restores exact 0007 tables & 0 RB3 triggers
+        command.upgrade(cfg, "head")
+        with eng.connect() as conn:
+            head_master, head_auto = _capture_master(conn)
+            # Every pre-existing non-RB3 sqlite_master object (tables, indexes, and all 11 historical triggers)
+            # must be byte-for-byte identical at 0008 head
+            head_non_rb3 = [row for row in head_master if row[2] not in RB3_TABLES]
+            assert head_non_rb3 == hist_master_0007
+            assert [row for row in head_auto if row[0] not in RB3_TABLES] == hist_auto_0007
+            # All 25 RB3 triggers exist on RB3 tables, and WITHOUT ROWID is confined to RB3 tables
+            head_rb3_triggers = {
+                name
+                for typ, name, tbl, _sql in head_master
+                if typ == "trigger" and tbl in RB3_TABLES
+            }
+            assert head_rb3_triggers == EXPECTED_RB3_TRIGGERS
+            for typ, tbl, _t, ddl in head_master:
+                if typ == "table" and tbl in RB3_TABLES:
+                    assert "WITHOUT ROWID" in (ddl or "")
+                elif typ == "table" and tbl != "sqlite_sequence":
+                    assert "WITHOUT ROWID" not in (ddl or "")
+            # Historical data remains completely intact
+            assert _capture_historical_data(conn) == hist_data_0007
+
+        # Empty-DB roundtrip: downgrade 0008 -> 0007 restores exact 0007 sqlite_master & data
         command.downgrade(cfg, "0007_p5_run_gate")
         with eng.connect() as conn:
-            tables = {
-                row[0]
-                for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
-            }
-            assert tables.isdisjoint(set(RB3_TABLES))
-            triggers = {
-                row[0]
-                for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='trigger'"))
-            }
-            assert triggers.isdisjoint(EXPECTED_RB3_TRIGGERS)
-            assert EXPECTED_HISTORICAL_TRIGGERS.issubset(triggers)
+            down_master, down_auto = _capture_master(conn)
+            assert down_master == hist_master_0007
+            assert down_auto == hist_auto_0007
+            assert _capture_historical_data(conn) == hist_data_0007
 
         # Re-upgrade and verify nonempty downgrade refusal on each RB3 table
         command.upgrade(cfg, "head")
@@ -450,6 +500,12 @@ def test_rb3_29_30_31_127_migration_populated_refusal_and_empty_roundtrip(tmp_pa
                 for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
             }
             assert set(RB3_TABLES).issubset(tables_after)
+            after_refusal = _capture_historical_data(conn)
+            for tbl_name, expected_rows in hist_data_0007.items():
+                if tbl_name == "audit_event":
+                    assert set(expected_rows).issubset(set(after_refusal[tbl_name]))
+                else:
+                    assert after_refusal[tbl_name] == expected_rows
     finally:
         eng.dispose()
 
@@ -747,18 +803,35 @@ def test_rb3_54_to_57_67_68_78_79_80_81_checks_and_vocabulary(engine, tmp_path: 
             )
         db.rollback()
 
-        # Bounds CHECK on review_evaluation (item_count>12, link_count>24, wrong policy_sha)
+        # Attach 1 link per item (6 items, 6 links) so evidence_link_count >= item_count and G14 passes
+        for idx in range(6):
+            _insert_link(
+                db,
+                link_id=f"77777777-7777-4777-8777-77777777780{idx}",
+                owner_id=f"55555555-5555-4555-8555-55555555550{idx}",
+                obs_id=obs_id,
+            )
+
+        # Bounds CHECK on review_evaluation (item_count>12, link_count>24, wrong policy_sha, exclusion_count<0 or >200)
         audit_id = "33333333-3333-4333-8333-333333333335"
         _insert_audit_for_run(
-            db, audit_id=audit_id, run_id=run_id, patient_id=patient_id, doctor_id=doctor_id
+            db,
+            audit_id=audit_id,
+            run_id=run_id,
+            patient_id=patient_id,
+            doctor_id=doctor_id,
+            item_count=6,
+            link_count=6,
         )
         db.commit()
-        for bad_items_cnt, bad_links_cnt, bad_sha in (
-            (13, 13, POLICY_SHA),
-            (1, 25, POLICY_SHA),
-            (1, 1, "0" * 64),
+        for bad_items_cnt, bad_links_cnt, bad_excl_cnt, bad_sha, expected_err in (
+            (13, 13, 0, POLICY_SHA, None),
+            (1, 25, 0, POLICY_SHA, None),
+            (6, 6, 201, POLICY_SHA, "review_eval_excl_count_range"),
+            (6, 6, -1, POLICY_SHA, "review_eval_excl_count_range"),
+            (6, 6, 0, "0" * 64, "CHECK constraint failed"),
         ):
-            with pytest.raises(IntegrityError):
+            with pytest.raises(IntegrityError, match=expected_err):
                 db.execute(
                     text(
                         """
@@ -773,7 +846,7 @@ def test_rb3_54_to_57_67_68_78_79_80_81_checks_and_vocabulary(engine, tmp_path: 
                             '88888888-8888-4888-8888-888888888801', :run_id, :pid, :did, :ts,
                             'demo-policy-1.1.0', :psha, 'rb3-full-input-1.0.0', :sha, :sha,
                             :gid, :gfp, :sha, '2.0.0', '1.0.0', 'demo-policy-1.1.0',
-                            'a2_transport_label', 'prohibited_denied', :ic, :lc, 0, :aid, 1, :ts
+                            'a2_transport_label', 'prohibited_denied', :ic, :lc, :ec, :aid, 1, :ts
                         )
                         """
                     ),
@@ -788,10 +861,53 @@ def test_rb3_54_to_57_67_68_78_79_80_81_checks_and_vocabulary(engine, tmp_path: 
                         "gfp": gate_fp,
                         "ic": bad_items_cnt,
                         "lc": bad_links_cnt,
+                        "ec": bad_excl_cnt,
                         "aid": audit_id,
                     },
                 )
             db.rollback()
+
+        # Structural acceptance of exclusion_count=200 on the same otherwise valid row (RB3-98)
+        db.execute(
+            text(
+                """
+                INSERT INTO review_evaluation (
+                    id, workflow_run_id, patient_id, doctor_id, as_of_utc, policy_version,
+                    policy_reference_sha256, fingerprint_version, input_fingerprint_sha256,
+                    output_identity_sha256, gate_evaluation_id, gate_input_fingerprint_sha256,
+                    bridge_input_fingerprint_sha256, f2_contract_version, gate_version,
+                    rb2_policy_version, lineage_label_policy, dr006_policy, item_count,
+                    evidence_link_count, exclusion_count, audit_event_id, demo_only, created_at
+                ) VALUES (
+                    '88888888-8888-4888-8888-888888888802', :run_id, :pid, :did, :ts,
+                    'demo-policy-1.1.0', :psha, 'rb3-full-input-1.0.0', :sha, :sha,
+                    :gid, :gfp, :sha, '2.0.0', '1.0.0', 'demo-policy-1.1.0',
+                    'a2_transport_label', 'prohibited_denied', 6, 6, 200, :aid, 1, :ts
+                )
+                """
+            ),
+            {
+                "run_id": run_id,
+                "pid": patient_id,
+                "did": doctor_id,
+                "ts": CLOCK_ISO,
+                "psha": POLICY_SHA,
+                "sha": POLICY_SHA,
+                "gid": gate_id,
+                "gfp": gate_fp,
+                "aid": audit_id,
+            },
+        )
+        db.commit()
+        assert (
+            db.execute(
+                text(
+                    "SELECT exclusion_count FROM review_evaluation "
+                    "WHERE id = '88888888-8888-4888-8888-888888888802'"
+                )
+            ).scalar_one()
+            == 200
+        )
 
 
 def test_rb3_69_89_90_100_to_108_118_121_replacement_and_rowid_closure(engine, tmp_path: Path):

@@ -174,18 +174,63 @@ P4_RB3_TRIGGERS = {
     "trg_review_evaluation_insert_id_conflict",
     "trg_review_evaluation_insert_run_conflict",
 }
-HISTORICAL_11_TRIGGERS = {
-    DOCTOR_TRIGGER_NAME,
-    "trg_run_selected_document_update_immutable",
-    "trg_run_selected_document_delete_immutable",
-    "trg_run_selected_observation_update_immutable",
-    "trg_run_selected_observation_delete_immutable",
-    "trg_run_source_omission_update_immutable",
-    "trg_run_source_omission_delete_immutable",
-    "trg_run_gate_evaluation_update_immutable",
-    "trg_run_gate_evaluation_delete_immutable",
-    "trg_run_gate_blocker_update_immutable",
-    "trg_run_gate_blocker_delete_immutable",
+HISTORICAL_11_TRIGGER_SQL = {
+    DOCTOR_TRIGGER_NAME: (
+        "CREATE TRIGGER trg_fact_verification_doctor_only "
+        "BEFORE INSERT ON fact_verification FOR EACH ROW "
+        "WHEN (SELECT role FROM user WHERE id = NEW.verified_by_user_id) IS NOT 'doctor' "
+        "BEGIN SELECT RAISE(ABORT, 'fact_verification.verified_by_user_id must reference a doctor'); END"
+    ),
+    "trg_run_selected_document_update_immutable": (
+        "CREATE TRIGGER trg_run_selected_document_update_immutable "
+        "BEFORE UPDATE ON run_selected_document "
+        "BEGIN SELECT RAISE(ABORT, 'run source manifest is immutable'); END"
+    ),
+    "trg_run_selected_document_delete_immutable": (
+        "CREATE TRIGGER trg_run_selected_document_delete_immutable "
+        "BEFORE DELETE ON run_selected_document "
+        "BEGIN SELECT RAISE(ABORT, 'run source manifest is immutable'); END"
+    ),
+    "trg_run_selected_observation_update_immutable": (
+        "CREATE TRIGGER trg_run_selected_observation_update_immutable "
+        "BEFORE UPDATE ON run_selected_observation "
+        "BEGIN SELECT RAISE(ABORT, 'run source manifest is immutable'); END"
+    ),
+    "trg_run_selected_observation_delete_immutable": (
+        "CREATE TRIGGER trg_run_selected_observation_delete_immutable "
+        "BEFORE DELETE ON run_selected_observation "
+        "BEGIN SELECT RAISE(ABORT, 'run source manifest is immutable'); END"
+    ),
+    "trg_run_source_omission_update_immutable": (
+        "CREATE TRIGGER trg_run_source_omission_update_immutable "
+        "BEFORE UPDATE ON run_source_omission "
+        "BEGIN SELECT RAISE(ABORT, 'run source manifest is immutable'); END"
+    ),
+    "trg_run_source_omission_delete_immutable": (
+        "CREATE TRIGGER trg_run_source_omission_delete_immutable "
+        "BEFORE DELETE ON run_source_omission "
+        "BEGIN SELECT RAISE(ABORT, 'run source manifest is immutable'); END"
+    ),
+    "trg_run_gate_evaluation_update_immutable": (
+        "CREATE TRIGGER trg_run_gate_evaluation_update_immutable "
+        "BEFORE UPDATE ON run_gate_evaluation "
+        "BEGIN SELECT RAISE(ABORT, 'run gate evidence is immutable'); END"
+    ),
+    "trg_run_gate_evaluation_delete_immutable": (
+        "CREATE TRIGGER trg_run_gate_evaluation_delete_immutable "
+        "BEFORE DELETE ON run_gate_evaluation "
+        "BEGIN SELECT RAISE(ABORT, 'run gate evidence is immutable'); END"
+    ),
+    "trg_run_gate_blocker_update_immutable": (
+        "CREATE TRIGGER trg_run_gate_blocker_update_immutable "
+        "BEFORE UPDATE ON run_gate_blocker "
+        "BEGIN SELECT RAISE(ABORT, 'run gate evidence is immutable'); END"
+    ),
+    "trg_run_gate_blocker_delete_immutable": (
+        "CREATE TRIGGER trg_run_gate_blocker_delete_immutable "
+        "BEFORE DELETE ON run_gate_blocker "
+        "BEGIN SELECT RAISE(ABORT, 'run gate evidence is immutable'); END"
+    ),
 }
 
 #: Pre-0008 forbidden downstream entities; at 0008 head the three authorized
@@ -609,18 +654,25 @@ def main(argv: list[str]) -> int:
                 )
 
             hist_trigger_sql = {
-                row[0]: row[1] or ""
+                row[0]: " ".join((row[1] or "").split())
                 for row in connection.execute(
                     "SELECT name, sql FROM sqlite_master WHERE type='trigger' "
                     "AND tbl_name NOT IN ('review_item', 'evidence_link', 'review_evaluation')"
                 )
             }
-            missing_hist = HISTORICAL_11_TRIGGERS - set(hist_trigger_sql)
-            if missing_hist:
-                problems.append(f"Historical triggers missing after 0008: {sorted(missing_hist)}")
-            for hname in sorted(HISTORICAL_11_TRIGGERS & set(hist_trigger_sql)):
-                if "RAISE(ABORT" not in hist_trigger_sql[hname]:
-                    problems.append(f"Historical trigger {hname} altered")
+            if set(hist_trigger_sql) != set(HISTORICAL_11_TRIGGER_SQL):
+                problems.append(
+                    f"Historical triggers mismatch after 0008: "
+                    f"missing={sorted(set(HISTORICAL_11_TRIGGER_SQL) - set(hist_trigger_sql))}, "
+                    f"extra={sorted(set(hist_trigger_sql) - set(HISTORICAL_11_TRIGGER_SQL))}"
+                )
+            for hname, expected_sql in sorted(HISTORICAL_11_TRIGGER_SQL.items()):
+                actual_sql = hist_trigger_sql.get(hname)
+                if actual_sql != expected_sql:
+                    problems.append(
+                        f"Historical trigger {hname} definition altered: "
+                        f"expected {expected_sql!r}, found {actual_sql!r}"
+                    )
 
             all_table_ddl = {
                 row[0]: row[1] or ""
