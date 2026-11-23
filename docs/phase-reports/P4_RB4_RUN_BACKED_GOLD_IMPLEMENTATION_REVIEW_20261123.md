@@ -86,3 +86,65 @@ Collection measured on the final tree: `pytest --collect-only` → **backend 129
 - No agent merge, auto-merge, direct main edit or self-approval. Independent review, exact-head CI and the owner's isolated Windows gate are outstanding.
 - Scripted correction is not OCR success; real `GOLD-EX-11` remains **FAIL / NOT PROVEN**. Zero candidates means only "no candidate review items under these bounded demo rules" — never clinical normality or clearance.
 - P4 remains **IN_REVIEW**; issue #14 **OPEN**; full P5 **NOT ACCEPTED**; RB4 is an **implementation candidate, not accepted**. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
+
+## 8. Round 2 — bounded evidence closure (R01–R05) and collection compatibility (2026-11-23)
+
+**Status unchanged: implementation candidate, NOT ACCEPTED; independent review and the owner-only Windows gate are outstanding. P4 IN_REVIEW · issue #14 OPEN · full P5 NOT ACCEPTED · ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.** This section is append-only; it corrects §4–§5 where Round-1 wording overstated what was proven.
+
+### 8.1 Owner-authorized collection compatibility (verified before editing)
+
+- **Authorization:** `APPROVE-P4-RB4-P3-HANDOFF-COLLECTION-ONLY` by `Muhammed-Fathi` (`author_association: OWNER`; verified repository owner), created **2026-11-23T19:28:46Z** (never updated), [PR #45 comment #7111663704](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/45#issuecomment-7111663704). Scope: implementation HEAD `baff43e08e7549d0776829cc134f6be539439dbd`; exceptional path `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md`; append literal `**1294 collected**, of which **443** are the P3 suite`; collection evidence only.
+- **Remeasured on the clean tree at that HEAD before editing:** backend **1294** collected, P3 **443** collected; the legacy guard failed only on the missing `**1294 collected**` token. Pairing equal → proceed. The authorization was recorded in `docs/roadmap/PHASE_PROGRESS.md` (section "P4-RB4 owner collection-only authorization verified") **before** `PHASE_3_WINDOWS_ACCEPTANCE.md` was touched, as the owner required.
+- **Append:** one new section "P4-RB4 PR #45 owner-authorized collection-only pairing (2026-11-23; NOT test PASS)" at the end of the handoff, containing the exact literal; `git diff` shows 6 insertions / 0 deletions. All historical P3/Windows/OCR text is byte-identical. The legacy guard test was not modified; it now passes locally (`1 passed`).
+
+### 8.2 R01 — actual immutable scalar snapshots (Round-1 defect corrected)
+
+- **Defect admitted:** Round-1 `_rows` iterated `select(model).mappings()` over an ORM entity. Those mappings held ORM *instances* keyed by the entity label, not scalar column values, and the same `Session` re-uses identity-map instances. Round-1 "full row snapshot unchanged" claims therefore did **not** prove stored column equality; `_run_review_rows` also filtered `workflow_run_id` on those entity mappings, which does not select the intended audits. The Round-1 review's "full row snapshot" wording is superseded by this section.
+- **Replacement:** `_rows` now issues a Core `select` over `table.c[…]` for every column of the model, builds `(column, scalar)` tuples from the fresh result rows and sorts them deterministically; no ORM instance or identity-map state is involved. `_snapshot_by_table` exposes the same per table; `_review_snapshot` covers **WorkflowRun (run business state), run_selected_document, run_selected_observation, run_source_omission, run_gate_evaluation, run_gate_blocker, review_evaluation, review_item, evidence_link, audit_event**. `_run_review_rows` now filters scalar audit rows by `workflow_run_id` correctly and is used in RB4-04/RB4-11.
+- **Sensitivity demonstrated, not assumed:** RB4-09 (end) takes a scalar snapshot, changes the permitted mutable business column `workflow_run.status` (`queued → running`, allowed by the existing CHECK; the F0 migration deliberately leaves the run row mutable while manifests are immutable), asserts the snapshot differs, that the *only* differing table is `workflow_run` with `status == "running"`, restores `queued`, and asserts the snapshot equals the original again. No trigger, gate, sealed row or service is touched. Database triggers were not weakened anywhere.
+- Every denial (RB4-03, 04, 07, 09, 10, 11) and every replay (A, B, C, D, RB4-10 main and window) now compares these scalar snapshots; RB4-07 additionally asserts the full snapshot around each refused invocation (foreign document/observation, unassigned doctor, patient principal, expired and revoked sessions).
+
+### 8.3 R02 — complete durable evaluation evidence
+
+`_assert_sealed_evaluation(db, receipt, *, doctor, run_id, evidence, items, links, exclusions)` reads the stored `review_evaluation`, `run_gate_evaluation`, `run_gate_blocker` and `workflow_run` rows with fresh Core queries (`_stored_row`) and asserts, per successful persistence (A, B, C, D, RB4-10 main and window): policy reference SHA (receipt == stored == `RB3_PINNED_POLICY_SHA256` == `POLICY_CANONICAL_SHA256` == literal `f3bdad3f…`); RB3 input fingerprint and output identity (stored == receipt == audit detail); gate input fingerprint (stored evaluation == gate row == receipt == independent F2 evidence); F2 bridge input fingerprint (stored == receipt == independently rebuilt F2 evidence); version pins (`f2_contract_version == "2.0.0" == CONTRACT_VERSION`, `COMPARISON_HISTORY_VERSION == "f2-history-365d-v1"`, `gate_version` consistent across evaluation/gate/receipt/F2, `rb2_policy_version == policy_version == "demo-policy-1.1.0"`); DR-006 policy (`prohibited_denied` on row, receipt and audit); exact exclusion count (`L1 + L2 == merged L3 == persisted exclusion rows == stored exclusion_count`); audit `actor_type` (== principal actor type), `actor_id`, `workflow_run_id`, `patient_id`, subject, outcome, `created_at`, nine bounded keys; exactly one run-scoped completion row; a PROCEED gate with zero blocker rows; and `workflow_run.status == "queued"`, `current_node/halt_reason/ended_at` all `None`.
+`_assert_exact_replay(first, second)` asserts identical evaluation/audit/gate identities, gate and bridge fingerprints, RB3 input/output fingerprints, version/policy pins, exclusion tuples and counts, zero per-call writes, `replayed=True` — used at all six replay sites; each is paired with an unchanged scalar snapshot.
+
+### 8.4 R03 — GOLD-C lifecycle and denial evidence
+
+- **Truthful staged lifecycle (RB4-05):** the three original facts are created **pending with no decision**; the actual `quality.sync_issues` opens `VI-001/002/003/005` (VI-002 message = frozen `3 extracted value(s) are not yet verified.`); explicit *scripted* decisions are then recorded — `corrected` for the misread `report_date` (`03/11/2026 → 2026-11-03`) and `value` (`1O5 → 105 mg/dL`, originals become `rejected`, verified replacements carry `corrected_from_fact_id` and `created_at 2026-11-05T09:00:00Z`), and the appropriate **`verified`** decision for the unchanged `Glucose` test-name fact, which stays active without replacement; the real `sync_issues` then resolves the **same** issue rows (identical IDs, no re-minting); accepted `decide_mapping` over the active facts yields the frozen mapping (`glucose`, 105, mg/dL, `2026-11-03T00:00:00Z`, `doctor_verified`); accepted preflight is clear (3 active / 3 verified); a **new** run is created only afterwards. The test asserts exact baseline identity `99210f2a…` (96 mg/dL, self-reported, 2026-10-10T07:50Z), current identity, `mixed` trust and delta 9.
+- **RB4-04:** scalar snapshots immediately before/after the denied persistence (equal; `409 E_VALIDATION "No current persisted F1 gate evidence is available."`; zero RB2 attempts), then — separately — the legitimate F1 HALT writes: exactly one new gate evaluation, six blocker rows (the same six exact records), one `workflow.gate.evaluated` audit; run state, manifests and all review tables unchanged. Denial **after** the persisted HALT is verified directly here (`409 E_VALIDATION "Current F1 gate is not eligible."`, zero attempts, snapshot equal) and is the dedicated subject of RB4-11.
+- **Spy semantics:** `_Rb2Spy` records every invocation attempt before delegating, including raising delegations (re-raised unchanged); `calls` is derived from successful attempts only. All "zero RB2" assertions use `spy.attempts == []`. RB4-11 proves the mechanism with a plain raising delegate (`attempts` length 1 holding the exception while `calls` stays empty) — no evaluator, gate or policy is patched for that proof. No F1 outcome is fabricated; no OCR success is claimed.
+
+### 8.5 R04 — full semantic equivalence for GOLD-D
+
+`_assert_rows_equal_flags` is shared by B and D: rows in `display_order` must match the captured unchanged-evaluator flag tuple position by position on `rule_id, reason_code, workflow_hint, trust_basis, message, policy_version, dedupe_key, provenance_status, demo_only`; evidence links sorted must equal the flag's observation references; `state == open`, run/patient scope, unique semantic dedupe keys per run, and per-item `stored_lineage_proved == 0` for self-reported links. D additionally asserts the frozen order `DR-001, DR-003, DR-008, DR-009, DR-005`, exactly seven links owned by D items, and identical flags under reversed current/history input ordering (B likewise). Delegation remains the real evaluator (one attempt per persistence).
+
+### 8.6 R05 — reporting fidelity (what is executed, what is only present)
+
+| Evidence class | Items | Where executed |
+|---|---|---|
+| **Executed RB4 integration tests** | RB4-01…RB4-12 (12 functions) | `backend/tests/p4/test_p4_rb4_run_backed_gold.py` — local runs below and exact-head CI |
+| **Supporting regression suites actually executed** (focused 216 = 12 RB4 + 204 supporting; also inside the full backend run) | `test_p4_rb3_review_persistence.py` 18 (incl. `test_rb3_66_99_dr006_unit_level_boundary_denies_whole_invocation`, which passes when selected), `test_p4_rb3_migration_guards.py` 7, `test_p5_run_foundation.py` 18, `test_p5_run_gate.py` 24, `test_p5_evidence_bridge.py` 17, `test_p4_run_bound_preview.py` 13, `test_p4_rb2_gold_offline.py` 7, `test_p4_rb2_offline_rules.py` 91, `test_p4_gold_abcd_offline_replay.py` 9 | focused and full-suite runs on the same tree |
+| **Source-presence checks only — NOT execution, NOT proof** | RB4-11's textual check that the RB3-66/99 test and `DR006_PERSISTENCE_NOT_AUTHORIZED` exist in the RB3 test source; RB4-12's check that the RB3 migration-guard module defines tests | inside RB4 tests; they prove nothing about behaviour, migration, portability or DR-006 reachability |
+| **RB4-12 Linux schema guard** | migrated head `0008_p4_rb3_review_persistence`; 14 tables; six RB3 immutability triggers present in `sqlite_master` | executed on Linux; trigger *behaviour* is the RB3 guard suite's subject |
+| **Windows acceptance** | PowerShell `setup.ps1` / `test_all.ps1` | **NOT RUN — owner-only**; nothing in this file or report is a Windows result |
+
+Corrections to Round-1 text: "full row snapshot" → now genuinely scalar (§8.2); RB4-11 "cited" → source presence only (§8.6); the former RB4-12 assertion that no RB4 Windows test file exists was meaningless and was removed; RB4-12 is a Linux schema guard, not portability evidence.
+
+### 8.7 Round-2 verification (Linux, Python 3.11.2 — disclosed deviation; CI Python 3.12 authoritative)
+
+| Gate | Result |
+|---|---|
+| RB4 file | **12 passed / 0 failed / 0 skipped** (collection unchanged: 12) |
+| Focused suites (RB4 + RB3 persistence/migration guards + P5 F0/F1/F2 + RB1 + RB2 + GOLD offline replay) | **216 passed** |
+| Full backend (`pytest`) | **1294 passed, 0 failed** in 276.08 s |
+| P3 suite | **443 passed** |
+| Legacy collection guard | **1 passed** after the owner-authorized append |
+| Collection (final tree) | **backend 1294 / P3 443** — equal to the authorized pairing |
+| Ruff lint / format | PASS / PASS (146 files) |
+| Alembic smoke (upgrade → downgrade base → upgrade) + `check_alembic_smoke.py` | PASS (head `0008_p4_rb3_review_persistence`) |
+| OpenAPI / scanner | PASS (17/18/43) / PASS (297 tracked files) |
+| Frontend | NOT RUN locally — verified through exact-head CI |
+| Windows | NOT RUN — owner-only |
+
+Exact-head CI results for the Round-2 commit are recorded in the PR #45 conversation (not pre-claimed here).

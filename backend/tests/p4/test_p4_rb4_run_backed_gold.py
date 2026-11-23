@@ -16,7 +16,11 @@ synthetic source bytes with matching SHA-256/size, and the pinned
 
 Nothing here is a real ingestion, OCR run or human verification. Scripted
 fixture construction is disclosed as such; it never substitutes a successful
-result. Instrumentation only spies/delegates on the real evaluator.
+result. Instrumentation only spies/delegates on the real evaluator and records
+every invocation attempt (including raising ones). Denial and replay equality
+is asserted on fresh scalar snapshots of the stored table columns (run state,
+manifests, gate evidence, completion, items, links, audits), never on ORM
+identity-map instances.
 
 Zero candidates means only "no candidate review items under these bounded demo
 rules" -- never clinical normality or clearance. Zero counts are not clinical
@@ -72,7 +76,11 @@ from app.services.p4_run_bound_preview import (
     POLICY_CANONICAL_SHA256,
     build_p4_run_bound_review_input_preview,
 )
-from app.services.p5_evidence_bridge import build_run_evaluable_review_evidence
+from app.services.p5_evidence_bridge import (
+    COMPARISON_HISTORY_VERSION,
+    CONTRACT_VERSION,
+    build_run_evaluable_review_evidence,
+)
 from app.services.p5_run_foundation import create_run_foundation
 from app.services.p5_run_gate import evaluate_run_verification_gate
 from app.services.seed import seed_demo_data
@@ -442,34 +450,59 @@ def _review_counts(db: Session) -> tuple[int, int, int, int]:
     )
 
 
+# Every table whose stored scalar state a denial or replay must leave unchanged:
+# run business state, manifests, gate evidence, completion, items, links, audits.
+_SNAPSHOT_MODELS: tuple[type, ...] = (
+    WorkflowRun,
+    RunSelectedDocument,
+    RunSelectedObservation,
+    RunSourceOmission,
+    RunGateEvaluation,
+    RunGateBlocker,
+    ReviewEvaluation,
+    ReviewItem,
+    EvidenceLink,
+    AuditEvent,
+)
+
+
 def _rows(db: Session, model: type) -> tuple:
-    """Deterministic full-row snapshot of every column of ``model``."""
-    result = []
-    for row in db.execute(select(model)).mappings():
-        result.append(tuple((key, row[key]) for key in sorted(row.keys())))
-    return tuple(sorted(result, key=repr))
+    """Deterministic snapshot of every stored scalar column of ``model``.
+
+    A Core ``select`` over the table's columns (not the ORM entity) is used on
+    purpose: every value comes from a fresh database read and never from an
+    identity-map instance, so two snapshots compare equal only when the stored
+    column values are equal. Rows are sorted by their rendered tuple so the
+    result never depends on physical row order.
+    """
+    table = model.__table__
+    columns = tuple(column.name for column in table.columns)
+    statement = select(*(table.c[name] for name in columns))
+    rendered = []
+    for row in db.execute(statement):
+        rendered.append(tuple((name, row[index]) for index, name in enumerate(columns)))
+    return tuple(sorted(rendered, key=repr))
+
+
+def _snapshot_by_table(db: Session) -> dict[str, tuple]:
+    """Per-table scalar snapshots keyed by table name (for partial comparison)."""
+    return {model.__tablename__: _rows(db, model) for model in _SNAPSHOT_MODELS}
 
 
 def _review_snapshot(db: Session) -> tuple:
-    return (
-        _rows(db, ReviewEvaluation),
-        _rows(db, ReviewItem),
-        _rows(db, EvidenceLink),
-        _rows(db, RunSelectedDocument),
-        _rows(db, RunSelectedObservation),
-        _rows(db, RunSourceOmission),
-        _rows(db, RunGateEvaluation),
-        _rows(db, RunGateBlocker),
-        _rows(db, AuditEvent),
-    )
+    """Whole stored state relevant to review persistence, as scalar values."""
+    by_table = _snapshot_by_table(db)
+    return tuple(by_table[model.__tablename__] for model in _SNAPSHOT_MODELS)
 
 
 def _run_review_rows(db: Session, run_id: str) -> tuple:
+    """Completion, items and links plus exactly this run's audit rows."""
+    audits = tuple(row for row in _rows(db, AuditEvent) if dict(row)["workflow_run_id"] == run_id)
     return (
         _rows(db, ReviewEvaluation),
         _rows(db, ReviewItem),
         _rows(db, EvidenceLink),
-        tuple(row for row in _rows(db, AuditEvent) if dict(row).get("workflow_run_id") == run_id),
+        audits,
     )
 
 
@@ -488,17 +521,6 @@ def _review_audit(db: Session, run_id: str) -> AuditEvent:
     rows = _review_audits(db, run_id)
     assert len(rows) == 1
     return rows[0]
-
-
-def _gate_audits(db: Session, run_id: str) -> list[AuditEvent]:
-    return list(
-        db.execute(
-            select(AuditEvent).where(
-                AuditEvent.event_type == "workflow.gate.evaluated",
-                AuditEvent.workflow_run_id == run_id,
-            )
-        ).scalars()
-    )
 
 
 def _audit_detail(row: AuditEvent) -> dict[str, str]:
@@ -570,16 +592,37 @@ def _items(db: Session, run_id: str) -> list[ReviewItem]:
 
 
 class _Rb2Spy:
-    """Observation-only instrumentation: delegate to the unchanged evaluator."""
+    """Observation-only instrumentation: delegate to the unchanged evaluator.
+
+    Every invocation attempt is recorded *before* it is delegated, including
+    attempts whose delegation raises. "Zero invocation attempts" therefore means
+    exactly that; it is never inferred from an empty list of successful results.
+    """
 
     def __init__(self, original) -> None:
         self._original = original
-        self.calls: list[tuple[OfflineRuleInput, OfflineRuleResult]] = []
+        self.attempts: list[tuple[OfflineRuleInput, OfflineRuleResult | BaseException]] = []
+
+    @property
+    def calls(self) -> list[tuple[OfflineRuleInput, OfflineRuleResult]]:
+        """Attempts whose delegation returned normally (input, result)."""
+        return [
+            (rule_input, result)
+            for rule_input, result in self.attempts
+            if not isinstance(result, BaseException)
+        ]
 
     def __call__(self, rule_input: OfflineRuleInput) -> OfflineRuleResult:
-        result = self._original(rule_input)
-        self.calls.append((rule_input, result))
+        try:
+            result = self._original(rule_input)
+        except BaseException as exc:  # recorded, then re-raised unchanged
+            self.attempts.append((rule_input, exc))
+            raise
+        self.attempts.append((rule_input, result))
         return result
+
+    def clear(self) -> None:
+        self.attempts.clear()
 
 
 def _spy_rb2(monkeypatch: pytest.MonkeyPatch) -> _Rb2Spy:
@@ -607,75 +650,188 @@ def _assert_bounded_audit(
     assert row.safe_detail is not None and len(row.safe_detail) <= 500
 
 
+def _stored_row(db: Session, model: type, **where) -> dict[str, object]:
+    """Fresh Core read of one stored row as ``{column: scalar}`` (no ORM instance)."""
+    table = model.__table__
+    statement = select(*(table.c[column.name] for column in table.columns))
+    for name, value in where.items():
+        statement = statement.where(table.c[name] == value)
+    row = db.execute(statement).one()
+    return {column.name: row[index] for index, column in enumerate(table.columns)}
+
+
 def _assert_sealed_evaluation(
     db: Session,
     receipt,
     *,
-    patient_id: str,
-    doctor_id: str,
+    doctor: Principal,
     run_id: str,
+    evidence,
     items: int,
     links: int,
     exclusions: int,
 ) -> None:
-    """One sealed evaluation, its parent F1 gate and its single audit event."""
-    assert receipt.run_id == run_id
-    assert receipt.patient_id == patient_id
-    assert receipt.doctor_id == doctor_id
-    assert receipt.as_of_utc == CLOCK_ISO
-    assert receipt.policy_version == "demo-policy-1.1.0"
+    """Stored completion, gate and audit values equal the receipt and F2 evidence.
+
+    Every stored value is read as a scalar column value from a fresh Core query;
+    the comparison never relies on ORM identity-map instances. ``evidence`` is
+    the independently built F2 ``EvaluableReviewEvidenceV2`` for the same run.
+    """
+    patient_id, doctor_id = evidence.patient_id, doctor.user_id
+    assert receipt.run_id == evidence.run_id == run_id
+    assert receipt.patient_id == evidence.patient_id == patient_id
+    assert receipt.doctor_id == evidence.doctor_id == doctor_id
+    assert receipt.as_of_utc == evidence.as_of_utc == CLOCK_ISO
+    assert receipt.policy_version == evidence.policy_version == "demo-policy-1.1.0"
+    # Policy reference SHA: receipt, pinned RB3 constant, RB1 canonical policy.
+    assert receipt.policy_reference_sha256 == rb3.RB3_PINNED_POLICY_SHA256
     assert receipt.policy_reference_sha256 == POLICY_CANONICAL_SHA256
+    assert POLICY_CANONICAL_SHA256 == (
+        "f3bdad3f6a958b65b50598910cc91501dcc53ca210ff90d2e09b14695cb6bd36"
+    )
     assert receipt.rb3_fingerprint_version == rb3.RB3_FINGERPRINT_VERSION
     assert receipt.lineage_label_policy == rb3.RB3_LINEAGE_LABEL_POLICY
-    assert receipt.dr006_policy == rb3.RB3_DR006_POLICY
+    assert receipt.dr006_policy == rb3.RB3_DR006_POLICY == "prohibited_denied"
     assert receipt.offline_evaluator_invoked is True
     assert receipt.evaluation_completed is True
     assert receipt.runtime_evaluable is False
     assert receipt.policy_status == "unapproved"
     assert receipt.demo_only is True and receipt.not_for_clinical_use is True
+    # Gate identity/fingerprint and bridge fingerprint against independent F2.
+    assert receipt.gate_evaluation_id == evidence.gate_evaluation_id
+    assert receipt.gate_version == evidence.gate_version
+    assert receipt.gate_input_fingerprint_sha256 == evidence.gate_input_fingerprint_sha256
+    assert receipt.bridge_input_fingerprint_sha256 == evidence.bridge_input_fingerprint_sha256
+    assert evidence.contract_version == CONTRACT_VERSION
+    assert COMPARISON_HISTORY_VERSION == "f2-history-365d-v1"
+    # Exact exclusion count: L1 + L2 == merged L3 == persisted exclusion rows.
+    assert receipt.l1_exclusion_count + receipt.l2_exclusion_count == exclusions
+    assert len(receipt.layered_exclusions.l3_merged) == exclusions
+    assert len(receipt.excluded_evidence) == exclusions
+    assert {(item.observation_id, item.reason_code) for item in receipt.excluded_evidence} == {
+        (item.observation_id, item.reason_code) for item in receipt.layered_exclusions.l3_merged
+    }
 
-    evaluations = (
-        db.execute(select(ReviewEvaluation).where(ReviewEvaluation.workflow_run_id == run_id))
-        .scalars()
-        .all()
+    # Exactly one completion row; every stored column equals the receipt.
+    evaluation = _stored_row(db, ReviewEvaluation, workflow_run_id=run_id)
+    assert (
+        db.scalar(
+            select(func.count())
+            .select_from(ReviewEvaluation.__table__)
+            .where(ReviewEvaluation.__table__.c.workflow_run_id == run_id)
+        )
+        == 1
     )
-    assert len(evaluations) == 1
-    evaluation = evaluations[0]
-    assert evaluation.id == receipt.evaluation_id
-    assert evaluation.patient_id == patient_id
-    assert evaluation.doctor_id == doctor_id
-    assert evaluation.as_of_utc == CLOCK_ISO
-    assert evaluation.policy_version == "demo-policy-1.1.0"
-    assert evaluation.fingerprint_version == rb3.RB3_FINGERPRINT_VERSION
-    assert evaluation.gate_evaluation_id == receipt.gate_evaluation_id
-    assert evaluation.gate_version == receipt.gate_version
-    assert evaluation.lineage_label_policy == rb3.RB3_LINEAGE_LABEL_POLICY
-    assert evaluation.item_count == items == receipt.review_items_total
-    assert evaluation.evidence_link_count == links == receipt.evidence_links_total
-    assert evaluation.exclusion_count == exclusions
-    assert evaluation.audit_event_id == receipt.audit_event_id
-    assert evaluation.demo_only == 1
+    assert evaluation["id"] == receipt.evaluation_id
+    assert evaluation["patient_id"] == patient_id
+    assert evaluation["doctor_id"] == doctor_id
+    assert evaluation["as_of_utc"] == CLOCK_ISO
+    assert evaluation["policy_version"] == receipt.policy_version
+    assert evaluation["policy_reference_sha256"] == receipt.policy_reference_sha256
+    assert evaluation["fingerprint_version"] == rb3.RB3_FINGERPRINT_VERSION
+    assert evaluation["input_fingerprint_sha256"] == receipt.input_fingerprint_sha256
+    assert evaluation["output_identity_sha256"] == receipt.output_identity_sha256
+    assert evaluation["gate_evaluation_id"] == receipt.gate_evaluation_id
+    assert evaluation["gate_input_fingerprint_sha256"] == receipt.gate_input_fingerprint_sha256
+    assert evaluation["bridge_input_fingerprint_sha256"] == (
+        receipt.bridge_input_fingerprint_sha256
+    )
+    # F2 and RB2 version pins as stored by RB3.
+    assert evaluation["f2_contract_version"] == CONTRACT_VERSION == "2.0.0"
+    assert evaluation["gate_version"] == receipt.gate_version == evidence.gate_version
+    assert evaluation["rb2_policy_version"] == receipt.policy_version
+    assert evaluation["lineage_label_policy"] == rb3.RB3_LINEAGE_LABEL_POLICY
+    assert evaluation["dr006_policy"] == rb3.RB3_DR006_POLICY
+    assert evaluation["item_count"] == items == receipt.review_items_total
+    assert evaluation["evidence_link_count"] == links == receipt.evidence_links_total
+    assert evaluation["exclusion_count"] == exclusions
+    assert evaluation["audit_event_id"] == receipt.audit_event_id
+    assert evaluation["demo_only"] == 1
+    assert evaluation["created_at"] == CLOCK_ISO
 
-    gate = db.get(RunGateEvaluation, receipt.gate_evaluation_id)
-    assert gate is not None
-    assert gate.workflow_run_id == run_id
-    assert gate.decision == "proceed"
-    assert gate.unavailable_reason is None
-    assert gate.blocking_fact_count == 0
-    assert gate.input_fingerprint_sha256 == receipt.gate_input_fingerprint_sha256
-    assert gate.gate_version == receipt.gate_version
+    # Parent F1 gate row: the exact persisted PROCEED evidence F2 also bound.
+    gate = _stored_row(db, RunGateEvaluation, id=receipt.gate_evaluation_id)
+    assert gate["workflow_run_id"] == run_id
+    assert gate["decision"] == "proceed"
+    assert gate["unavailable_reason"] is None
+    assert gate["blocking_fact_count"] == 0
+    assert gate["historical_excluded_vi002_ids"] == json.dumps(
+        sorted(evidence.historical_excluded_vi002_ids)
+    )
+    assert gate["input_fingerprint_sha256"] == receipt.gate_input_fingerprint_sha256
+    assert gate["gate_version"] == receipt.gate_version
+    assert gate["as_of_utc"] == CLOCK_ISO
+    # A persisted PROCEED gate carries no blocker rows.
+    assert _blocker_rows_for(db, gate["id"]) == ()
 
+    # Single bounded audit with actor class and run linkage.
     audits = _review_audits(db, run_id)
     assert len(audits) == 1
     audit = audits[0]
     assert audit.id == receipt.audit_event_id
     assert audit.event_type == rb3.RB3_AUDIT_EVENT_TYPE
+    assert audit.actor_type == doctor.actor_type.value
     assert audit.actor_id == doctor_id
     assert audit.patient_id == patient_id
+    assert audit.workflow_run_id == run_id
     assert audit.subject_type == "workflow_run"
     assert audit.subject_id == run_id
     assert audit.outcome == AuditOutcome.OK.value
+    assert audit.created_at == CLOCK_ISO
+    detail = _audit_detail(audit)
+    # RB3 input fingerprint and output identity: audit detail == receipt == row.
+    assert detail["input"] == evaluation["input_fingerprint_sha256"]
+    assert detail["output"] == evaluation["output_identity_sha256"]
+    assert detail["evaluation_id"] == evaluation["id"]
     _assert_bounded_audit(audit, receipt, items=items, links=links, exclusions=exclusions)
+
+    # Evaluation completion is not workflow completion.
+    run = _stored_row(db, WorkflowRun, id=run_id)
+    assert run["status"] == "queued"
+    assert run["current_node"] is None
+    assert run["halt_reason"] is None
+    assert run["ended_at"] is None
+    assert run["policy_version"] == receipt.policy_version
+    assert run["patient_id"] == patient_id and run["doctor_id"] == doctor_id
+
+
+def _blocker_rows_for(db: Session, gate_evaluation_id: str) -> tuple:
+    table = RunGateBlocker.__table__
+    statement = select(*(table.c[column.name] for column in table.columns)).where(
+        table.c.gate_evaluation_id == gate_evaluation_id
+    )
+    return tuple(db.execute(statement))
+
+
+def _assert_exact_replay(first, second) -> None:
+    """Identical replay: same identities/fingerprints/counts, zero per-call writes."""
+    assert second.replayed is True
+    assert second.review_items_persisted == 0
+    assert second.evidence_links_persisted == 0
+    assert second.review_items_total == first.review_items_total
+    assert second.evidence_links_total == first.evidence_links_total
+    assert second.evaluation_id == first.evaluation_id
+    assert second.audit_event_id == first.audit_event_id
+    assert second.gate_evaluation_id == first.gate_evaluation_id
+    assert second.gate_version == first.gate_version
+    assert second.gate_input_fingerprint_sha256 == first.gate_input_fingerprint_sha256
+    assert second.bridge_input_fingerprint_sha256 == first.bridge_input_fingerprint_sha256
+    assert second.rb3_fingerprint_version == first.rb3_fingerprint_version
+    assert second.input_fingerprint_sha256 == first.input_fingerprint_sha256
+    assert second.output_identity_sha256 == first.output_identity_sha256
+    assert second.excluded_evidence == first.excluded_evidence
+    assert second.layered_exclusions == first.layered_exclusions
+    assert second.l1_exclusion_count == first.l1_exclusion_count
+    assert second.l2_exclusion_count == first.l2_exclusion_count
+    assert second.as_of_utc == first.as_of_utc == CLOCK_ISO
+    assert second.patient_id == first.patient_id
+    assert second.doctor_id == first.doctor_id
+    assert second.policy_version == first.policy_version
+    assert second.policy_reference_sha256 == first.policy_reference_sha256
+    assert second.lineage_label_policy == first.lineage_label_policy
+    assert second.dr006_policy == first.dr006_policy
+    assert second.evaluation_completed is first.evaluation_completed is True
+    assert second.runtime_evaluable is first.runtime_evaluable is False
 
 
 def _assert_observation_links_only(db: Session, run_id: str, *, count: int) -> None:
@@ -848,8 +1004,8 @@ def test_rb4_01_gold_a_zero_candidates_after_genuine_run(sandbox, engine, tmp_pa
     assert first.evaluation_completed is True
     assert first.runtime_evaluable is False
     # Zero rule candidates from the actual unchanged evaluator.
-    assert len(spy.calls) == 1
-    assert spy.calls[0][1].flags == ()
+    assert len(spy.attempts) == 1
+    assert spy.attempts[0][1].flags == ()
 
     after = _review_counts(db)
     assert after == (before[0], before[1], before[2] + 1, before[3] + 1)
@@ -870,9 +1026,9 @@ def test_rb4_01_gold_a_zero_candidates_after_genuine_run(sandbox, engine, tmp_pa
         _assert_sealed_evaluation(
             check,
             first,
-            patient_id=patient.id,
-            doctor_id=doctor.user_id,
+            doctor=doctor,
             run_id=run_id,
+            evidence=evidence,
             items=0,
             links=0,
             exclusions=0,
@@ -883,13 +1039,7 @@ def test_rb4_01_gold_a_zero_candidates_after_genuine_run(sandbox, engine, tmp_pa
 
     snapshot = _review_snapshot(db)
     second = _persist(engine, doctor, run_id, tmp_path)
-    assert second.replayed is True
-    assert second.review_items_persisted == 0
-    assert second.evidence_links_persisted == 0
-    assert second.evaluation_id == first.evaluation_id
-    assert second.audit_event_id == first.audit_event_id
-    assert second.input_fingerprint_sha256 == first.input_fingerprint_sha256
-    assert second.output_identity_sha256 == first.output_identity_sha256
+    _assert_exact_replay(first, second)
     assert _review_snapshot(db) == snapshot
 
     gold_rule_ids = gold["expected_review_rule_ids"]
@@ -1008,8 +1158,8 @@ def test_rb4_02_gold_b_exact_dr005_self_reported(sandbox, engine, tmp_path, monk
     assert first.lineage_label_policy == "a2_transport_label"
     assert first.dr006_policy == "prohibited_denied"
 
-    assert len(spy.calls) == 1
-    captured_input, captured_result = spy.calls[0]
+    assert len(spy.attempts) == 1
+    captured_input, captured_result = spy.attempts[0]
     assert captured_input.patient_id == b.patient.id
     assert len(captured_input.selected_current) == 4
     assert captured_result.flags[0].rule_id == "DR-005"
@@ -1057,9 +1207,9 @@ def test_rb4_02_gold_b_exact_dr005_self_reported(sandbox, engine, tmp_path, monk
         _assert_sealed_evaluation(
             check,
             first,
-            patient_id=b.patient.id,
-            doctor_id=b.doctor.user_id,
+            doctor=b.doctor,
             run_id=b.run_id,
+            evidence=evidence,
             items=1,
             links=2,
             exclusions=0,
@@ -1068,13 +1218,7 @@ def test_rb4_02_gold_b_exact_dr005_self_reported(sandbox, engine, tmp_path, monk
 
     snapshot = _review_snapshot(db)
     second = _persist(engine, b.doctor, b.run_id, tmp_path)
-    assert second.replayed is True
-    assert second.review_items_persisted == 0
-    assert second.evidence_links_persisted == 0
-    assert second.evaluation_id == first.evaluation_id
-    assert second.audit_event_id == first.audit_event_id
-    assert second.input_fingerprint_sha256 == first.input_fingerprint_sha256
-    assert second.output_identity_sha256 == first.output_identity_sha256
+    _assert_exact_replay(first, second)
     assert _review_snapshot(db) == snapshot
 
     # The doctor-verified glucose never upgrades the unrelated systolic trust.
@@ -1260,17 +1404,30 @@ def test_rb4_04_gold_c_controlled_post_selection_deterioration_halts(
     _deteriorate_to_pending(doc, facts)
     db.commit()
 
+    # Scalar snapshots immediately before and after the denied persistence,
+    # taken separately from the legitimate F1 gate writes that follow.
+    before_denial = _snapshot_by_table(db)
     spy = _spy_rb2(monkeypatch)
     with pytest.raises(ApiError) as denied:
         _persist(engine, doctor, run_id, tmp_path)
     assert denied.value.status_code == 409
     assert denied.value.code == ErrorCode.VALIDATION
-    assert spy.calls == []
+    assert denied.value.detail == "No current persisted F1 gate evidence is available."
+    assert spy.attempts == []  # zero invocation attempts, not just zero results
+    after_denial = _snapshot_by_table(db)
+    assert after_denial == before_denial
+    assert _run_review_rows(db, run_id)[:3] == ((), (), ())  # no completion/items/links
+    assert all(
+        dict(row)["event_type"] != rb3.RB3_AUDIT_EVENT_TYPE
+        for row in after_denial["audit_event"]
+        if dict(row)["workflow_run_id"] == run_id
+    )
 
     # Genuine F1 HALT (not a fabricated decision for the initial pending state).
     halt = _gate(engine, doctor, run_id, tmp_path)
     assert halt.decision == "halt"
     assert halt.unavailable_reason is None
+    assert halt.replayed is False
     blockers = _blocker_set(halt)
     report_date_id = facts["report_date"].id
     test_name_id = facts["test_name"].id
@@ -1288,69 +1445,99 @@ def test_rb4_04_gold_c_controlled_post_selection_deterioration_halts(
         ("VI-003", "date_ambiguous", doc.id, (report_date_id,)),
         ("VI-005", "value_unreadable", doc.id, (value_id,)),
     }
+    assert len(halt.issues) == 6
     assert {issue.issue_type for issue in halt.issues} == {
         "VI-001",
         "VI-002",
         "VI-003",
         "VI-005",
     }
+    assert halt.blocking_fact_count == 3
 
-    with Session(engine) as check:
-        gate_rows = (
-            check.execute(
-                select(RunGateEvaluation).where(RunGateEvaluation.workflow_run_id == run_id)
-            )
-            .scalars()
-            .all()
+    after_gate = _snapshot_by_table(db)
+    # Legitimate F1 writes: exactly one gate evaluation, six blocker rows and
+    # one gate audit. Run state, manifests and every review table are unchanged.
+    for table in (
+        "workflow_run",
+        "run_selected_document",
+        "run_selected_observation",
+        "run_source_omission",
+        "review_evaluation",
+        "review_item",
+        "evidence_link",
+    ):
+        assert after_gate[table] == before_denial[table], table
+    assert len(after_gate["run_gate_evaluation"]) == len(before_denial["run_gate_evaluation"]) + 1
+    assert len(after_gate["run_gate_blocker"]) == len(before_denial["run_gate_blocker"]) + 6
+    assert len(after_gate["audit_event"]) == len(before_denial["audit_event"]) + 1
+    new_gate_rows = [
+        dict(row)
+        for row in after_gate["run_gate_evaluation"]
+        if row not in before_denial["run_gate_evaluation"]
+    ]
+    assert len(new_gate_rows) == 1
+    new_gate = new_gate_rows[0]
+    assert new_gate["workflow_run_id"] == run_id
+    assert new_gate["decision"] == "halt"
+    assert new_gate["unavailable_reason"] is None
+    assert new_gate["blocking_fact_count"] == 3
+    assert new_gate["as_of_utc"] == CLOCK_ISO
+    new_blocker_rows = [
+        dict(row)
+        for row in after_gate["run_gate_blocker"]
+        if row not in before_denial["run_gate_blocker"]
+    ]
+    assert len(new_blocker_rows) == 6
+    assert {
+        (
+            row["issue_type"],
+            row["reason_code"],
+            row["document_id"],
+            tuple(json.loads(row["fact_ids"])),
         )
-        assert {row.decision for row in gate_rows} == {"proceed", "halt"}
-        gate_audits = _gate_audits(check, run_id)
-        assert len(gate_audits) == 2
-        assert {row.safe_detail for row in gate_audits} >= {
-            "phase=p5-f1; decision=proceed; runtime_evaluable=false",
-            "phase=p5-f1; decision=halt; runtime_evaluable=false",
-        }
-        # Distinguish real gate audit evidence from denied review writes.
-        assert (
-            check.scalar(
-                select(func.count())
-                .select_from(AuditEvent)
-                .where(AuditEvent.event_type == rb3.RB3_AUDIT_EVENT_TYPE)
-            )
-            == 0
-        )
-        assert _count(check, ReviewEvaluation) == 0
-        assert _count(check, ReviewItem) == 0
-        assert _count(check, EvidenceLink) == 0
-        # No review-persistence audit was written for the denied invocation.
-        assert (
-            check.scalar(
-                select(func.count())
-                .select_from(AuditEvent)
-                .where(
-                    AuditEvent.event_type == rb3.RB3_AUDIT_EVENT_TYPE,
-                    AuditEvent.workflow_run_id == run_id,
-                )
-            )
-            == 0
-        )
-        # The stored blocker rows are the exact F1 evidence.
-        stored_blockers = {
-            (
-                row.issue_type,
-                row.reason_code,
-                row.document_id,
-                tuple(json.loads(row.fact_ids)),
-            )
-            for row in check.execute(
-                select(RunGateBlocker).where(
-                    RunGateBlocker.gate_evaluation_id.in_(
-                        [row.id for row in gate_rows if row.decision == "halt"]
-                    )
-                )
-            ).scalars()
-        }
-        assert stored_blockers == blockers
+        for row in new_blocker_rows
+    } == blockers
+    assert {row["gate_evaluation_id"] for row in new_blocker_rows} == {new_gate["id"]}
+    new_audit_rows = [
+        dict(row) for row in after_gate["audit_event"] if row not in before_denial["audit_event"]
+    ]
+    assert len(new_audit_rows) == 1
+    gate_audit = new_audit_rows[0]
+    assert gate_audit["event_type"] == "workflow.gate.evaluated"
+    assert gate_audit["workflow_run_id"] == run_id
+    assert gate_audit["actor_id"] == doctor.user_id
+    assert gate_audit["patient_id"] == patient.id
+    assert "decision=halt" in gate_audit["safe_detail"]
+    assert "phase=p5-f1" in gate_audit["safe_detail"]
+    assert "runtime_evaluable=false" in gate_audit["safe_detail"]
+    # Gate audit evidence is distinct from (absent) review-persistence audits.
+    assert not any(
+        dict(row)["event_type"] == rb3.RB3_AUDIT_EVENT_TYPE for row in after_gate["audit_event"]
+    )
+    assert after_gate["review_evaluation"] == ()
+    assert after_gate["review_item"] == ()
+    assert after_gate["evidence_link"] == ()
+    # Run-scoped audits: the F0 start audit plus exactly two F1 gate audits
+    # (initial PROCEED, now HALT); no review-persistence audit exists.
+    run_scoped_audits = _run_review_rows(db, run_id)[3]
+    assert sorted(dict(row)["event_type"] for row in run_scoped_audits) == [
+        "workflow.gate.evaluated",
+        "workflow.gate.evaluated",
+        "workflow.run.started",
+    ]
+    assert all(dict(row)["workflow_run_id"] == run_id for row in run_scoped_audits)
+
+    # Direct verification of denial AFTER the HALT is persisted (RB4-11 is the
+    # dedicated scenario; this is the same sealed state, asserted here too).
+    spy.clear()
+    before_second_denial = _snapshot_by_table(db)
+    with pytest.raises(ApiError) as denied_after_halt:
+        _persist(engine, doctor, run_id, tmp_path)
+    assert denied_after_halt.value.status_code == 409
+    assert denied_after_halt.value.code == ErrorCode.VALIDATION
+    assert denied_after_halt.value.detail == "Current F1 gate is not eligible."
+    assert spy.attempts == []
+    assert _snapshot_by_table(db) == before_second_denial == after_gate
 
 
 def test_rb4_11_blocked_run_has_no_rb2_call_or_review_persistence(
@@ -1359,7 +1546,8 @@ def test_rb4_11_blocked_run_has_no_rb2_call_or_review_persistence(
     """RB4-11: a HALT run never invokes RB2 nor writes review rows.
 
     DR-006 end-to-end reachability is NOT claimed. The accepted direct boundary
-    regression (RB3-66/99) is cited separately as supporting evidence only.
+    regression (RB3-66/99) executes in its own RB3 suite; this file only checks
+    its source presence, which is not an execution and not proof of behaviour.
     """
     db = sandbox
     patient = _patient(db, "DEMO-C-001")
@@ -1386,17 +1574,49 @@ def test_rb4_11_blocked_run_has_no_rb2_call_or_review_persistence(
     db.commit()
     assert _gate(engine, doctor, run_id, tmp_path).decision == "halt"
 
+    # Denial AFTER the persisted HALT (the dedicated scenario; RB4-04 verifies
+    # the same sealed state directly as well).
+    before = _snapshot_by_table(db)
+    assert before["review_evaluation"] == ()
+    assert before["review_item"] == ()
+    assert before["evidence_link"] == ()
     spy = _spy_rb2(monkeypatch)
-    before = _review_snapshot(db)
     with pytest.raises(ApiError) as exc:
         _persist(engine, doctor, run_id, tmp_path)
     assert exc.value.status_code == 409
-    assert spy.calls == []
-    assert _review_snapshot(db) == before
+    assert exc.value.code == ErrorCode.VALIDATION
+    assert exc.value.detail == "Current F1 gate is not eligible."
+    assert spy.attempts == []  # zero invocation attempts, not merely zero results
+    assert _snapshot_by_table(db) == before
+    with Session(engine) as check:
+        assert _count(check, ReviewItem) == 0
+        assert _count(check, EvidenceLink) == 0
+        assert _count(check, ReviewEvaluation) == 0
+        assert not any(
+            row.event_type == rb3.RB3_AUDIT_EVENT_TYPE
+            for row in check.execute(select(AuditEvent)).scalars()
+        )
+
+    # Harness sensitivity: the spy records an invocation attempt even when the
+    # delegated callable raises, so "zero attempts" is genuine evidence and an
+    # empty successful-result list alone is never relied upon. This exercises the
+    # spy with a plain raising function only; no evaluator, gate or policy is
+    # patched here.
+    def _raising_delegate(_rule_input):
+        raise RuntimeError("rb4 synthetic delegate failure")
+
+    raising_spy = _Rb2Spy(_raising_delegate)
+    with pytest.raises(RuntimeError, match="rb4 synthetic delegate failure"):
+        raising_spy(None)
+    assert len(raising_spy.attempts) == 1
+    assert isinstance(raising_spy.attempts[0][1], RuntimeError)
+    assert raising_spy.calls == []  # successful results alone would hide it
 
     # Separately attributed existing DR-006 boundary regression evidence.
-    # Cited, not re-executed here: RB4 does not duplicate the RB3 matrix and
-    # does not claim genuine DR-006 reachability.
+    # The checks below are SOURCE-PRESENCE checks only: they are not an
+    # execution of that regression and not proof of DR-006 reachability. The
+    # regression itself runs in its own RB3 suite (focused/full runs), and RB4
+    # neither duplicates it nor claims genuine DR-006 reachability.
     rb3_service_tests = (
         REPO_ROOT / "backend" / "tests" / "p4" / "test_p4_rb3_review_persistence.py"
     ).read_text(encoding="utf-8")
@@ -1409,9 +1629,6 @@ def test_rb4_11_blocked_run_has_no_rb2_call_or_review_persistence(
     )
     # This file asserts the blocked-run half only; it does not assert that a
     # genuine F1-PROCEED source reaches DR-006, and it never persists DR-006.
-    with Session(engine) as check:
-        assert _count(check, ReviewItem) == 0
-        assert _count(check, EvidenceLink) == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -1419,39 +1636,80 @@ def test_rb4_11_blocked_run_has_no_rb2_call_or_review_persistence(
 # --------------------------------------------------------------------------- #
 
 
-def _setup_gold_c_corrected(db: Session, engine, tmp_path: Path, monkeypatch):
+CORRECTED_AT = "2026-11-05T09:00:00Z"
+"""Scripted synthetic decision time: after the 2026-11-03 report, before the clock."""
+
+
+def _record_decision(
+    db: Session,
+    fact: ExtractedFact,
+    *,
+    decision: str,
+    by_user_id: str,
+    previous_value: str | None = None,
+    new_value: str | None = None,
+    new_unit: str | None = None,
+) -> None:
+    """Store one scripted synthetic doctor decision row (NOT a human decision)."""
+    db.add(
+        FactVerification(
+            fact_id=fact.id,
+            decision=decision,
+            previous_value=previous_value,
+            new_value=new_value,
+            new_unit=new_unit,
+            verified_by_user_id=by_user_id,
+            decided_at=CORRECTED_AT,
+        )
+    )
+    db.flush()
+
+
+@dataclass(frozen=True, slots=True)
+class _GoldCCorrected:
+    patient: Patient
+    doctor: Principal
+    document: Document
+    originals: dict[str, ExtractedFact]
+    replacements: dict[str, ExtractedFact]
+    issue_ids: dict[str, str]
+    glucose_observation: Observation
+    mapping: object
+    run_id: str
+
+
+def _setup_gold_c_corrected(db: Session, engine, tmp_path: Path) -> _GoldCCorrected:
+    """Truthful staged GOLD-C lifecycle: pending -> issues -> correction -> new run.
+
+    Every stored row is scripted synthetic fixture construction, disclosed as
+    such. The accepted services (issue synchronization, closed mapping, F0) are
+    real; the decisions are not human verification and the correction is not
+    an OCR success.
+    """
     patient = _patient(db, "DEMO-C-001")
     doctor = _doctor(db, suffix="000000000006")
+    gold = _gold("C")
+    pre = gold["pre_verification"]
 
-    # Rejected originals (preserved) + explicitly scripted correction lineage.
-    original_specs = [
+    # 1. The three original facts are PENDING: no decision exists yet.
+    pending_specs = [
         _Fact(
             "report_date",
             "03/11/2026",
             None,
-            status="rejected",
+            status="pending",
             flags='["ambiguous_date"]',
-            decision="corrected",
-            new_value="2026-11-03",
+            decision=None,
         ),
-        _Fact(
-            "test_name",
-            "Glucose",
-            "Glucose",
-            status="rejected",
-            decision="corrected",
-            new_value="Glucose",
-        ),
+        _Fact("test_name", "Glucose", "Glucose", status="pending", decision=None),
         _Fact(
             "value",
             "1O5",
             None,
             unit=None,
-            status="rejected",
+            status="pending",
             flags='["low_confidence","ambiguous_unit"]',
-            decision="corrected",
-            new_value="105",
-            new_unit="mg/dL",
+            decision=None,
         ),
     ]
     doc, originals = _add_document(
@@ -1459,95 +1717,112 @@ def _setup_gold_c_corrected(db: Session, engine, tmp_path: Path, monkeypatch):
         patient_id=patient.id,
         root=tmp_path,
         label="gold-c-corrected",
-        facts=original_specs,
+        facts=pending_specs,
         status="needs_verification",
     )
-    original_by_field = {fact.field_name: fact for fact in originals}
+    original = {fact.field_name: fact for fact in originals}
+    assert len(original) == 3
+    assert all(fact.verification_status == "pending" for fact in originals)
+    assert not any(
+        row.fact_id in {fact.id for fact in originals}
+        for row in db.execute(select(FactVerification))
+    )
 
-    # Exercise actual P3 issue synchronization on the pending originals first,
-    # so the later correction resolves real issue rows through accepted logic.
-    pre_issues = quality.sync_issues(db, document=doc, conflict_tolerance=0.0)
-    assert {issue.issue_type for issue in pre_issues} == {
+    # 2. Actual initial P3 issue synchronization on the pending document.
+    initial_issues = quality.sync_issues(db, document=doc, conflict_tolerance=0.0)
+    assert {issue.issue_type for issue in initial_issues} == set(
+        pre["expected_open_verification_issue_ids"]
+    )
+    assert {issue.issue_type for issue in initial_issues} == {
         "VI-001",
         "VI-002",
         "VI-003",
         "VI-005",
     }
+    vi002 = next(issue for issue in initial_issues if issue.issue_type == "VI-002")
+    assert vi002.message == pre["expected_unverified_message"]
+    assert vi002.message == "3 extracted value(s) are not yet verified."
+    issue_ids = {issue.issue_type: issue.id for issue in initial_issues}
 
-    # Explicitly scripted synthetic verification: corrected replacements.
-    corrected_specs = [
-        _Fact(
-            "report_date",
-            "03/11/2026",
-            "2026-11-03",
-            corrected_from=original_by_field["report_date"].id,
-            decision=None,
-        ),
-        _Fact(
-            "test_name",
-            "Glucose",
-            "Glucose",
-            corrected_from=original_by_field["test_name"].id,
-            decision=None,
-        ),
-        _Fact(
-            "value",
-            "1O5",
-            "105",
-            unit="mg/dL",
-            corrected_from=original_by_field["value"].id,
-            decision=None,
-        ),
-    ]
-    corrected: list[ExtractedFact] = []
-    for spec in corrected_specs:
+    # 3. Explicit scripted synthetic decisions and replacements.
+    #    report_date and value were misread: corrected -> originals rejected,
+    #    verified replacements carry the correction lineage.
+    _record_decision(
+        db,
+        original["report_date"],
+        decision="corrected",
+        by_user_id=doctor.user_id,
+        previous_value="03/11/2026",
+        new_value="2026-11-03",
+    )
+    original["report_date"].verification_status = "rejected"
+    _record_decision(
+        db,
+        original["value"],
+        decision="corrected",
+        by_user_id=doctor.user_id,
+        previous_value="1O5",
+        new_value="105",
+        new_unit="mg/dL",
+    )
+    original["value"].verification_status = "rejected"
+    #    The Glucose test name did not change: the unchanged fact stays active
+    #    through the appropriate `verified` decision (no replacement needed).
+    _record_decision(db, original["test_name"], decision="verified", by_user_id=doctor.user_id)
+    original["test_name"].verification_status = "verified"
+    db.flush()
+    replacements: dict[str, ExtractedFact] = {}
+    for field, raw, normalized, unit in (
+        ("report_date", "03/11/2026", "2026-11-03", None),
+        ("value", "1O5", "105", "mg/dL"),
+    ):
         fact = ExtractedFact(
             document_id=doc.id,
             patient_id=patient.id,
-            field_name=spec.field,
-            raw_text=spec.raw,
-            normalized_value=spec.normalized,
-            unit=spec.unit,
+            field_name=field,
+            raw_text=raw,
+            normalized_value=normalized,
+            unit=unit,
             page_index=0,
             char_start=0,
-            char_end=max(len(spec.raw), 1),
+            char_end=max(len(raw), 1),
             verification_status="verified",
             quality_flags="[]",
-            corrected_from_fact_id=spec.corrected_from,
-            created_at=AT_ISO,
+            corrected_from_fact_id=original[field].id,
+            created_at=CORRECTED_AT,
         )
         db.add(fact)
         db.flush()
-        corrected.append(fact)
+        replacements[field] = fact
     doc.extraction_status = "verified"
     doc.failure_code = None
     db.commit()
 
-    # Resolve issues through accepted logic (sync moves them to resolved).
-    open_issues = quality.sync_issues(db, document=doc, conflict_tolerance=0.0)
-    assert open_issues == ()
+    # 4. The actual issue rows resolve through accepted synchronization and
+    #    keep their identities (no re-minted rows).
+    assert quality.sync_issues(db, document=doc, conflict_tolerance=0.0) == ()
     all_issues = (
         db.execute(select(VerificationIssue).where(VerificationIssue.document_id == doc.id))
         .scalars()
         .all()
     )
+    assert {issue.issue_type: issue.id for issue in all_issues} == issue_ids
     assert all(issue.state == "resolved" for issue in all_issues)
-    assert {issue.issue_type for issue in all_issues} == {"VI-001", "VI-002", "VI-003", "VI-005"}
+    assert gold["post_fixture_correction"]["expected_open_verification_issue_ids"] == []
 
-    corrected_by_field = {fact.field_name: fact for fact in corrected}
+    # 5. Accepted closed mapping over the active facts (replacement report date,
+    #    unchanged verified test name, replacement value) -> ONE mapped tuple.
+    active = [replacements["report_date"], original["test_name"], replacements["value"]]
     glucose_observation, mapping = _mapped_observation_from_mapping(
         db,
         observation_id="c0000000-0000-4000-8000-000000000001",
         patient_id=patient.id,
         document=doc,
-        facts=corrected,
+        facts=active,
         doctor_user_id=doctor.user_id,
     )
-    assert mapping.mapped is not None
-    assert mapping.mapped.value == 105
-    assert mapping.mapped.measured_at == "2026-11-03T00:00:00Z"
 
-    # NEW genuine run after correction (not a resume of a never-created run).
+    # 6. NEW genuine run only after the correction (never a resume).
     run_id = _start(
         engine,
         doctor,
@@ -1556,98 +1831,138 @@ def _setup_gold_c_corrected(db: Session, engine, tmp_path: Path, monkeypatch):
         observation_ids=(glucose_observation.id,),
         request_id="rb4-05-start",
     )
-    return patient, doctor, doc, corrected_by_field, originals, glucose_observation, run_id
+    return _GoldCCorrected(
+        patient=patient,
+        doctor=doctor,
+        document=doc,
+        originals=original,
+        replacements=replacements,
+        issue_ids=issue_ids,
+        glucose_observation=glucose_observation,
+        mapping=mapping,
+        run_id=run_id,
+    )
 
 
 def test_rb4_05_gold_c_corrected_new_run_proceeds_zero_candidates(
     sandbox, engine, tmp_path, monkeypatch
 ):
-    """RB4-05: corrected lineage -> new run, fresh PROCEED, mixed delta 9."""
+    """RB4-05: truthful correction lifecycle -> new run, PROCEED, mixed delta 9."""
     db = sandbox
-    (
-        patient,
-        doctor,
-        _doc,
-        corrected,
-        originals,
-        glucose_observation,
-        run_id,
-    ) = _setup_gold_c_corrected(db, engine, tmp_path, monkeypatch)
-    gold = _gold("C")["post_fixture_correction"]
+    c = _setup_gold_c_corrected(db, engine, tmp_path)
+    gold = _gold("C")
+    post = gold["post_fixture_correction"]
+    mapping_gold = post["document_mapping"]
 
-    # Rejected originals preserved with correction lineage.
+    # Rejected changed originals, valid correction lineage, verified replacements.
     with Session(engine) as check:
-        for original in originals:
-            stored = check.get(ExtractedFact, original.id)
+        for field in ("report_date", "value"):
+            stored = check.get(ExtractedFact, c.originals[field].id)
             assert stored is not None and stored.verification_status == "rejected"
-        for fact in corrected.values():
-            stored = check.get(ExtractedFact, fact.id)
-            assert stored is not None and stored.verification_status == "verified"
-            decision = check.execute(
-                select(FactVerification).where(
-                    FactVerification.fact_id == stored.corrected_from_fact_id
-                )
-            ).scalar_one()
-            assert decision.decision == "corrected"
-            assert decision.new_value == stored.normalized_value
+            decisions = (
+                check.execute(select(FactVerification).where(FactVerification.fact_id == stored.id))
+                .scalars()
+                .all()
+            )
+            assert len(decisions) == 1 and decisions[0].decision == "corrected"
+            assert decisions[0].verified_by_user_id == c.doctor.user_id
+            replacement = check.get(ExtractedFact, c.replacements[field].id)
+            assert replacement is not None and replacement.verification_status == "verified"
+            assert replacement.corrected_from_fact_id == stored.id
+            assert replacement.created_at == CORRECTED_AT
+            assert decisions[0].new_value == replacement.normalized_value
+        unchanged = check.get(ExtractedFact, c.originals["test_name"].id)
+        assert unchanged is not None and unchanged.verification_status == "verified"
+        assert unchanged.corrected_from_fact_id is None
+        decisions = (
+            check.execute(select(FactVerification).where(FactVerification.fact_id == unchanged.id))
+            .scalars()
+            .all()
+        )
+        assert len(decisions) == 1 and decisions[0].decision == "verified"
+        # Frozen post-correction mapping fields.
+        assert c.mapping.mapped is not None
+        assert mapping_gold["mapped_observations"] == 1
+        assert c.mapping.mapped.measure_type.value == mapping_gold["measure_type"] == "glucose"
+        assert c.mapping.mapped.value == mapping_gold["value"] == 105
+        assert c.mapping.mapped.unit == mapping_gold["unit"] == "mg/dL"
+        assert c.mapping.mapped.measured_at == mapping_gold["measured_at"] == "2026-11-03T00:00:00Z"
+        stored_observation = check.get(Observation, c.glucose_observation.id)
+        assert stored_observation is not None
+        assert stored_observation.trust_level == mapping_gold["trust_level"] == "doctor_verified"
+        assert stored_observation.source_fact_id == c.replacements["value"].id
+        assert stored_observation.measured_at == "2026-11-03T00:00:00Z"
+        # Accepted preflight accepts the correction lineage.
+        preflight = inspect_selected_document_verification(
+            check,
+            principal=c.doctor,
+            patient_id=c.patient.id,
+            document_ids=(c.document.id,),
+        )
+        assert preflight.candidate_documents_clear is True
+        assert preflight.blockers == ()
+        assert preflight.active_fact_count == 3
+        assert preflight.verified_fact_count == 3
+        # Exactly the seeded self-reported baseline exists for GOLD-C.
+        baseline = check.get(Observation, "99210f2a-b719-51a0-9d7b-134b764ca0f4")
+        assert baseline is not None
+        assert baseline.patient_id == c.patient.id
+        assert baseline.value == 96 and baseline.unit == "mg/dL"
+        assert baseline.trust_level == "self_reported_validated"
+        assert baseline.measured_at == "2026-10-10T07:50:00Z"
 
-    gate = _gate(engine, doctor, run_id, tmp_path)
+    gate = _gate(engine, c.doctor, c.run_id, tmp_path)
     assert gate.decision == "proceed"
     assert gate.issues == ()
     assert gate.blocking_fact_count == 0
 
-    evidence = _evidence(engine, doctor, run_id, tmp_path)
-    assert set(evidence.selected_observation_ids) == {glucose_observation.id}
+    evidence = _evidence(engine, c.doctor, c.run_id, tmp_path)
+    assert evidence.selected_observation_ids == (c.glucose_observation.id,)
+    assert evidence.selected_document_ids == (c.document.id,)
+    assert len(evidence.comparisons) == 1
     comparison = evidence.comparisons[0]
     assert comparison.measure_type == "glucose"
-    assert comparison.trust_basis == "mixed"
-    assert comparison.delta == 9
+    assert comparison.current_observation_id == c.glucose_observation.id
+    assert comparison.baseline_observation_id == "99210f2a-b719-51a0-9d7b-134b764ca0f4"
+    assert comparison.unit == "mg/dL"
+    assert comparison.trust_basis == post["trust_basis"] == "mixed"
+    assert comparison.delta == post["expected_delta"] == 9
     assert comparison.comparable is True
 
-    preview = _preview(engine, doctor, run_id, tmp_path)
+    preview = _preview(engine, c.doctor, c.run_id, tmp_path)
     assert _comparison_fields(preview.policy_comparisons) == _comparison_fields(
         evidence.comparisons
     )
 
     spy = _spy_rb2(monkeypatch)
-    first = _persist(engine, doctor, run_id, tmp_path)
+    first = _persist(engine, c.doctor, c.run_id, tmp_path)
     assert first.replayed is False
     assert first.review_items_persisted == first.review_items_total == 0
     assert first.evidence_links_persisted == first.evidence_links_total == 0
-    assert len(spy.calls) == 1 and spy.calls[0][1].flags == ()
-    assert gold["expected_review_rule_ids"] == []
-    assert gold["expected_delta"] == 9
-    assert gold["trust_basis"] == "mixed"
+    assert len(spy.attempts) == 1 and spy.attempts[0][1].flags == ()
+    assert post["expected_review_rule_ids"] == []
 
     with Session(engine) as check:
-        assert _items(check, run_id) == []
-        evaluation = check.execute(
-            select(ReviewEvaluation).where(ReviewEvaluation.workflow_run_id == run_id)
-        ).scalar_one()
-        assert evaluation.item_count == 0
+        assert _items(check, c.run_id) == []
         _assert_sealed_evaluation(
             check,
             first,
-            patient_id=patient.id,
-            doctor_id=doctor.user_id,
-            run_id=run_id,
+            doctor=c.doctor,
+            run_id=c.run_id,
+            evidence=evidence,
             items=0,
             links=0,
             exclusions=0,
         )
-        _assert_observation_links_only(check, run_id, count=0)
+        _assert_observation_links_only(check, c.run_id, count=0)
 
     snapshot = _review_snapshot(db)
-    second = _persist(engine, doctor, run_id, tmp_path)
-    assert second.replayed is True
-    assert second.review_items_persisted == 0
-    assert second.evidence_links_persisted == 0
-    assert second.evaluation_id == first.evaluation_id
-    assert second.audit_event_id == first.audit_event_id
+    second = _persist(engine, c.doctor, c.run_id, tmp_path)
+    _assert_exact_replay(first, second)
     assert _review_snapshot(db) == snapshot
 
     # Scripted correction is not real OCR success.
-    assert _gold("C")["real_ocr_result"].startswith("GOLD-EX-11 FAIL / NOT PROVEN")
+    assert gold["real_ocr_result"].startswith("GOLD-EX-11 FAIL / NOT PROVEN")
 
 
 # --------------------------------------------------------------------------- #
@@ -1807,7 +2122,7 @@ def test_rb4_06_gold_d_exact_ordered_outputs_and_replay(sandbox, engine, tmp_pat
     assert first.replayed is False
     assert first.review_items_persisted == first.review_items_total == 5
     assert first.evidence_links_persisted == first.evidence_links_total == 7
-    assert len(spy.calls) == 1
+    assert len(spy.attempts) == 1
 
     with Session(engine) as check:
         links = _item_links(check, d.run_id)
@@ -1859,9 +2174,9 @@ def test_rb4_06_gold_d_exact_ordered_outputs_and_replay(sandbox, engine, tmp_pat
         _assert_sealed_evaluation(
             check,
             first,
-            patient_id=d.patient.id,
-            doctor_id=d.doctor.user_id,
+            doctor=d.doctor,
             run_id=d.run_id,
+            evidence=evidence,
             items=5,
             links=7,
             exclusions=0,
@@ -1869,7 +2184,7 @@ def test_rb4_06_gold_d_exact_ordered_outputs_and_replay(sandbox, engine, tmp_pat
         _assert_observation_links_only(check, d.run_id, count=7)
 
     # Deterministic output under reordered inputs with unchanged identities.
-    captured_input, captured_result = spy.calls[0]
+    captured_input, captured_result = spy.attempts[0]
     reordered = OfflineRuleInput(
         patient_id=captured_input.patient_id,
         selected_current=tuple(reversed(captured_input.selected_current)),
@@ -1883,11 +2198,7 @@ def test_rb4_06_gold_d_exact_ordered_outputs_and_replay(sandbox, engine, tmp_pat
 
     snapshot = _review_snapshot(db)
     second = _persist(engine, d.doctor, d.run_id, tmp_path)
-    assert second.replayed is True
-    assert second.review_items_persisted == 0
-    assert second.evidence_links_persisted == 0
-    assert second.evaluation_id == first.evaluation_id
-    assert second.audit_event_id == first.audit_event_id
+    _assert_exact_replay(first, second)
     assert _review_snapshot(db) == snapshot
 
     # Distinct duplicate identity and delta, per frozen JSON.
@@ -1901,6 +2212,56 @@ def test_rb4_06_gold_d_exact_ordered_outputs_and_replay(sandbox, engine, tmp_pat
 # --------------------------------------------------------------------------- #
 
 
+def _assert_rows_equal_flags(db: Session, run_id: str, flags, *, patient_id: str) -> None:
+    """Every persisted item equals its captured RB2 flag, field by field.
+
+    Rows are read in ``display_order``; that order must be the unchanged
+    evaluator's own flag order. Links must be exactly the flag's observation
+    evidence references. Item identity is the semantic dedupe key, unique per
+    run, and per-item stored lineage proof is asserted for every row.
+    """
+    rows = _items(db, run_id)
+    assert len(rows) == len(flags)
+    assert [row.display_order for row in rows] == list(range(len(flags)))
+    for row in rows:
+        assert row.patient_id == patient_id
+        assert row.workflow_run_id == run_id
+        assert row.state == "open"
+        assert row.demo_only == 1
+    assert len({row.dedupe_key for row in rows}) == len(rows)
+    for row, flag in zip(rows, flags, strict=True):
+        assert row.rule_id == flag.rule_id
+        assert row.reason_code == flag.reason_code
+        assert row.workflow_hint == flag.workflow_hint
+        assert row.trust_basis == flag.trust_basis
+        assert row.message == flag.message
+        assert row.policy_version == flag.policy_version
+        assert row.dedupe_key == flag.dedupe_key
+        assert row.provenance_status == flag.provenance_status == "fixture_asserted"
+        assert flag.demo_only is True and row.demo_only == 1
+        assert sorted(
+            link.observation_id
+            for link in db.execute(
+                select(EvidenceLink).where(EvidenceLink.owner_id == row.id)
+            ).scalars()
+        ) == sorted(ref.removeprefix("observation:") for ref in flag.evidence)
+        # Self-reported links never prove verified-document lineage per item.
+        assert row.trust_basis == "self_reported"
+        assert row.stored_lineage_proved == 0
+
+
+def _reordered(rule_input: OfflineRuleInput) -> OfflineRuleInput:
+    """Same identities and policy; reversed current and history ordering."""
+    return OfflineRuleInput(
+        patient_id=rule_input.patient_id,
+        selected_current=tuple(reversed(rule_input.selected_current)),
+        history=tuple(reversed(rule_input.history)),
+        as_of_utc=rule_input.as_of_utc,
+        policy=rule_input.policy,
+        active_fact_verification_statuses=rule_input.active_fact_verification_statuses,
+    )
+
+
 def test_rb4_08_semantic_bridge_equivalence_for_b_and_d(sandbox, engine, tmp_path, monkeypatch):
     """RB4-08: persisted semantics equal the actual unchanged RB2 execution."""
     db = sandbox
@@ -1908,53 +2269,40 @@ def test_rb4_08_semantic_bridge_equivalence_for_b_and_d(sandbox, engine, tmp_pat
     assert _gate(engine, b.doctor, b.run_id, tmp_path).decision == "proceed"
     spy = _spy_rb2(monkeypatch)
     _persist(engine, b.doctor, b.run_id, tmp_path)
-    assert len(spy.calls) == 1
-    _b_input, b_result = spy.calls[0]
+    assert len(spy.attempts) == 1
+    b_input, b_result = spy.attempts[0]
     with Session(engine) as check:
-        rows = _items(check, b.run_id)
-        assert len(rows) == len(b_result.flags)
-        for row, flag in zip(rows, b_result.flags, strict=True):
-            assert row.rule_id == flag.rule_id
-            assert row.reason_code == flag.reason_code
-            assert row.workflow_hint == flag.workflow_hint
-            assert row.trust_basis == flag.trust_basis
-            assert row.message == flag.message
-            assert row.policy_version == flag.policy_version
-            assert row.dedupe_key == flag.dedupe_key
-            assert row.provenance_status == flag.provenance_status
-            assert sorted(
-                link.observation_id
-                for link in check.execute(
-                    select(EvidenceLink).where(EvidenceLink.owner_id == row.id)
-                ).scalars()
-            ) == sorted(ref.removeprefix("observation:") for ref in flag.evidence)
-        # A2 transport label and per-item lineage proof are correctly separated.
-        assert all(row.provenance_status == "fixture_asserted" for row in rows)
-        assert all(row.stored_lineage_proved == 0 for row in rows)
+        _assert_rows_equal_flags(check, b.run_id, b_result.flags, patient_id=b.patient.id)
+    assert evaluate_p4_rb2_offline_fixture(_reordered(b_input)).flags == b_result.flags
 
     d = _setup_gold_d(db, engine, tmp_path, monkeypatch)
     assert _gate(engine, d.doctor, d.run_id, tmp_path).decision == "proceed"
-    spy.calls.clear()
+    spy.clear()
     _persist(engine, d.doctor, d.run_id, tmp_path)
-    assert len(spy.calls) == 1
-    d_input, d_result = spy.calls[0]
+    assert len(spy.attempts) == 1
+    d_input, d_result = spy.attempts[0]
+    assert len(d_result.flags) == 5
     with Session(engine) as check:
-        rows = _items(check, d.run_id)
-        assert len(rows) == len(d_result.flags)
-        for row, flag in zip(rows, d_result.flags, strict=True):
-            assert row.rule_id == flag.rule_id
-            assert row.message == flag.message
-            assert row.dedupe_key == flag.dedupe_key
+        _assert_rows_equal_flags(check, d.run_id, d_result.flags, patient_id=d.patient.id)
+        # Frozen five-rule / seven-link output, as the unchanged evaluator.
+        assert [row.rule_id for row in _items(check, d.run_id)] == [
+            "DR-001",
+            "DR-003",
+            "DR-008",
+            "DR-009",
+            "DR-005",
+        ]
+        d_item_ids = {row.id for row in _items(check, d.run_id)}
+        assert (
+            check.scalar(
+                select(func.count())
+                .select_from(EvidenceLink.__table__)
+                .where(EvidenceLink.__table__.c.owner_id.in_(d_item_ids))
+            )
+            == 7
+        )
     # Unchanged evaluator semantics under reordered observation inputs.
-    reordered = OfflineRuleInput(
-        patient_id=d_input.patient_id,
-        selected_current=tuple(reversed(d_input.selected_current)),
-        history=tuple(reversed(d_input.history)),
-        as_of_utc=d_input.as_of_utc,
-        policy=d_input.policy,
-        active_fact_verification_statuses=d_input.active_fact_verification_statuses,
-    )
-    assert evaluate_p4_rb2_offline_fixture(reordered).flags == d_result.flags
+    assert evaluate_p4_rb2_offline_fixture(_reordered(d_input)).flags == d_result.flags
 
 
 # --------------------------------------------------------------------------- #
@@ -2022,7 +2370,9 @@ def test_rb4_07_identity_scope_and_session_boundaries(sandbox, engine, tmp_path)
         assert _count(check, RunSelectedObservation) == before_obs == 1
         assert _count(check, AuditEvent) == before_audits
 
-    # Foreign selected source (another patient's document) is refused.
+    # Every denial below is compared as a full scalar snapshot (run state,
+    # manifests, gate evidence, completion, items, links and all audits) taken
+    # immediately before and after the refused invocation.
     other = _patient(db, "DEMO-B-001")
     foreign_doc, _ = _verified_doc(
         db,
@@ -2034,8 +2384,9 @@ def test_rb4_07_identity_scope_and_session_boundaries(sandbox, engine, tmp_path)
         unit="g/dL",
         report_date="2026-10-21",
     )
-    with Session(engine) as check:
-        runs_before = _count(check, WorkflowRun)
+
+    # Foreign selected source (another patient's document) is refused.
+    before_foreign = _review_snapshot(db)
     with pytest.raises(ApiError) as foreign_exc:
         _start(
             engine,
@@ -2049,14 +2400,10 @@ def test_rb4_07_identity_scope_and_session_boundaries(sandbox, engine, tmp_path)
     assert foreign_exc.value.code == ErrorCode.NOT_FOUND
     assert other.display_name not in str(foreign_exc.value)
     assert other.id not in str(foreign_exc.value)
-    with Session(engine) as check:
-        assert _count(check, WorkflowRun) == runs_before
-        assert _count(check, RunSelectedDocument) == before_docs == 1
+    assert foreign_doc.original_filename not in str(foreign_exc.value)
+    assert _review_snapshot(db) == before_foreign
 
     # A foreign observation (another patient's ID) is refused as unavailable.
-    with Session(engine) as check:
-        runs_before = _count(check, WorkflowRun)
-        obs_before = _count(check, RunSelectedObservation)
     with pytest.raises(ApiError) as foreign_obs_exc:
         _start(
             engine,
@@ -2068,14 +2415,10 @@ def test_rb4_07_identity_scope_and_session_boundaries(sandbox, engine, tmp_path)
         )
     assert foreign_obs_exc.value.status_code == 404
     assert foreign_obs_exc.value.code == ErrorCode.NOT_FOUND
-    with Session(engine) as check:
-        assert _count(check, WorkflowRun) == runs_before
-        assert _count(check, RunSelectedObservation) == obs_before
+    assert _review_snapshot(db) == before_foreign
 
     # A different (unassigned) doctor is refused without writes.
     unassigned = _doctor(db, username="demo_doctor_unassigned", suffix="000000000009")
-    with Session(engine) as check:
-        runs_before = _count(check, WorkflowRun)
     with pytest.raises(ApiError) as unassigned_exc:
         _start(
             engine,
@@ -2086,8 +2429,8 @@ def test_rb4_07_identity_scope_and_session_boundaries(sandbox, engine, tmp_path)
             request_id="rb4-07-unassigned",
         )
     assert unassigned_exc.value.status_code == 403
-    with Session(engine) as check:
-        assert _count(check, WorkflowRun) == runs_before
+    assert unassigned_exc.value.code == ErrorCode.SCOPE_VIOLATION
+    assert _review_snapshot(db) == before_foreign
 
     # A patient principal (even the right patient) cannot author a doctor run.
     patient_user = db.execute(select(User).where(User.username == "demo_patient_a")).scalar_one()
@@ -2109,9 +2452,7 @@ def test_rb4_07_identity_scope_and_session_boundaries(sandbox, engine, tmp_path)
         )
     )
     db.commit()
-    with Session(engine) as check:
-        runs_before = _count(check, WorkflowRun)
-        audits_before = _count(check, AuditEvent)
+    before_patient = _review_snapshot(db)
     with pytest.raises(ApiError) as patient_exc:
         _start(
             engine,
@@ -2122,9 +2463,7 @@ def test_rb4_07_identity_scope_and_session_boundaries(sandbox, engine, tmp_path)
             request_id="rb4-07-patient-principal",
         )
     assert patient_exc.value.status_code == 403
-    with Session(engine) as check:
-        assert _count(check, WorkflowRun) == runs_before
-        assert _count(check, AuditEvent) == audits_before
+    assert _review_snapshot(db) == before_patient
 
     # Expired stored session is refused before any write.
     expired = _doctor(db, suffix="00000000000a")
@@ -2133,8 +2472,7 @@ def test_rb4_07_identity_scope_and_session_boundaries(sandbox, engine, tmp_path)
         assert session_row is not None
         session_row.expires_at = "2026-11-02T00:00:00Z"
         check.commit()
-        runs_before = _count(check, WorkflowRun)
-        audits_before = _count(check, AuditEvent)
+    before_expired = _review_snapshot(db)
     with pytest.raises(ApiError) as expired_exc:
         _start(
             engine,
@@ -2145,11 +2483,9 @@ def test_rb4_07_identity_scope_and_session_boundaries(sandbox, engine, tmp_path)
             request_id="rb4-07-expired",
         )
     assert expired_exc.value.status_code == 403
-    with Session(engine) as check:
-        assert _count(check, WorkflowRun) == runs_before
-        assert _count(check, AuditEvent) == audits_before
+    assert _review_snapshot(db) == before_expired
 
-    # Revoked session is refused by F1 without any gate rows.
+    # Revoked session is refused by F1 and by RB3 without any gate/review write.
     revoking = _doctor(db, suffix="00000000000b")
     revoke_doc, _ = _verified_doc(
         db,
@@ -2174,7 +2510,10 @@ def test_rb4_07_identity_scope_and_session_boundaries(sandbox, engine, tmp_path)
         assert session_row is not None
         session_row.revoked_at = "2026-11-14T12:00:00Z"
         check.commit()
-        audits_before = _count(check, AuditEvent)
+    before_revoked = _snapshot_by_table(db)
+    assert not any(
+        dict(row)["workflow_run_id"] == revoke_run for row in before_revoked["run_gate_evaluation"]
+    )
     with pytest.raises(ApiError) as revoked_exc:
         _gate(engine, revoking, revoke_run, tmp_path)
     assert revoked_exc.value.status_code == 403
@@ -2182,6 +2521,7 @@ def test_rb4_07_identity_scope_and_session_boundaries(sandbox, engine, tmp_path)
     with pytest.raises(ApiError) as revoked_persist:
         _persist(engine, revoking, revoke_run, tmp_path)
     assert revoked_persist.value.status_code == 403
+    assert _snapshot_by_table(db) == before_revoked
     with Session(engine) as check:
         assert (
             check.scalar(
@@ -2191,7 +2531,6 @@ def test_rb4_07_identity_scope_and_session_boundaries(sandbox, engine, tmp_path)
             )
             == 0
         )
-        assert _count(check, AuditEvent) == audits_before
         assert _count(check, ReviewItem) == 0
         assert _count(check, EvidenceLink) == 0
 
@@ -2253,7 +2592,7 @@ def test_rb4_09_selected_and_history_drift_denied_without_writes(
     assert exc_a.value.status_code == 409
     assert exc_a.value.code == ErrorCode.VALIDATION
     assert exc_a.value.detail == "Current F1 gate is not eligible."
-    assert spy.calls == []
+    assert spy.attempts == []
     assert _review_snapshot(db) == snapshot_a
     # Restore the exact bytes for the remaining independent subcases.
     raw = b"RB4 synthetic-only source: rb4-09-bytes"
@@ -2295,14 +2634,14 @@ def test_rb4_09_selected_and_history_drift_denied_without_writes(
     db.commit()
     drifted_gate = _gate(engine, doctor, run_b, tmp_path)
     assert drifted_gate.decision == "halt"
-    spy.calls.clear()
+    spy.clear()
     snapshot_b = _review_snapshot(db)
     with pytest.raises(ApiError) as exc_b:
         _persist(engine, doctor, run_b, tmp_path)
     assert exc_b.value.status_code == 409
     assert exc_b.value.code == ErrorCode.VALIDATION
     assert exc_b.value.detail == "Current F1 gate is not eligible."
-    assert spy.calls == []
+    assert spy.attempts == []
     assert _review_snapshot(db) == snapshot_b
 
     # (c) Eligible history change after a successful persistence is sealed.
@@ -2349,7 +2688,7 @@ def test_rb4_09_selected_and_history_drift_denied_without_writes(
     )
     # Refresh F1 so a current persisted PROCEED exists; sealed completion stays.
     assert _gate(engine, doctor, run_c, tmp_path).decision == "proceed"
-    spy.calls.clear()
+    spy.clear()
     snapshot_c = _review_snapshot(db)
     with pytest.raises(ApiError) as exc_c:
         _persist(engine, doctor, run_c, tmp_path)
@@ -2357,7 +2696,7 @@ def test_rb4_09_selected_and_history_drift_denied_without_writes(
     assert exc_c.value.code == ErrorCode.IDEMPOTENCY_CONFLICT
     assert exc_c.value.detail == "input_identity_changed"
     # The unchanged evaluator may run, but no sealed review row may be written.
-    assert len(spy.calls) == 1
+    assert len(spy.attempts) == 1
     assert _review_snapshot(db) == snapshot_c
     # The sealed first completion is exactly what remains.
     with Session(engine) as check:
@@ -2372,6 +2711,33 @@ def test_rb4_09_selected_and_history_drift_denied_without_writes(
             )
             == 1
         )
+
+    # Harness sensitivity: the scalar snapshot itself must detect a genuinely
+    # changed stored value. ``workflow_run.status`` is a permitted mutable
+    # business column (the F0 migration keeps the run row mutable while the
+    # manifests stay immutable); no trigger, gate, sealed row or service is
+    # touched, and the value is restored afterwards.
+    probe_before = _snapshot_by_table(db)
+    with Session(engine) as check:
+        probe_run = check.get(WorkflowRun, run_c)
+        assert probe_run is not None and probe_run.status == "queued"
+        probe_run.status = "running"  # synthetic probe value allowed by the CHECK
+        check.commit()
+    probe_changed = _snapshot_by_table(db)
+    assert probe_changed != probe_before
+    assert [name for name in probe_changed if probe_changed[name] != probe_before[name]] == [
+        "workflow_run"
+    ]
+    changed_row = next(
+        dict(row) for row in probe_changed["workflow_run"] if dict(row)["id"] == run_c
+    )
+    assert changed_row["status"] == "running"
+    with Session(engine) as check:
+        probe_run = check.get(WorkflowRun, run_c)
+        assert probe_run is not None
+        probe_run.status = "queued"
+        check.commit()
+    assert _snapshot_by_table(db) == probe_before
 
 
 # --------------------------------------------------------------------------- #
@@ -2480,7 +2846,7 @@ def test_rb4_10_zero_selected_current_history_admissibility_and_exclusions(
     assert first.replayed is False
     assert first.review_items_persisted == first.review_items_total == 0
     assert first.evidence_links_persisted == first.evidence_links_total == 0
-    assert len(spy.calls) == 1 and spy.calls[0][1].flags == ()
+    assert len(spy.attempts) == 1 and spy.attempts[0][1].flags == ()
     assert first.l1_exclusion_count == 3
     assert first.l2_exclusion_count == 0  # inadmissible rows never reach RB2
     assert {item.reason_code for item in first.layered_exclusions.l3_merged} == {
@@ -2500,9 +2866,9 @@ def test_rb4_10_zero_selected_current_history_admissibility_and_exclusions(
         _assert_sealed_evaluation(
             check,
             first,
-            patient_id=patient.id,
-            doctor_id=doctor.user_id,
+            doctor=doctor,
             run_id=run_id,
+            evidence=evidence,
             items=0,
             links=0,
             exclusions=3,
@@ -2511,11 +2877,7 @@ def test_rb4_10_zero_selected_current_history_admissibility_and_exclusions(
 
     snapshot = _review_snapshot(db)
     second = _persist(engine, doctor, run_id, tmp_path)
-    assert second.replayed is True
-    assert second.review_items_persisted == 0
-    assert second.evidence_links_persisted == 0
-    assert second.evaluation_id == first.evaluation_id
-    assert second.audit_event_id == first.audit_event_id
+    _assert_exact_replay(first, second)
     assert _review_snapshot(db) == snapshot
 
     # An inadmissible selected source cannot be smuggled into a current set.
@@ -2587,26 +2949,31 @@ def test_rb4_10_zero_selected_current_history_admissibility_and_exclusions(
     assert rb1_hr.baseline_observation_id is None
     assert rb1_hr.comparable is False
     assert rb1_hr.incomparable_reason == "no_baseline"
-    spy.calls.clear()
+    spy.clear()
     window_receipt = _persist(engine, doctor, window_run, tmp_path)
     assert window_receipt.review_items_total == 1
     assert window_receipt.evidence_links_total == 1
     assert window_receipt.l1_exclusion_count == 3
     assert window_receipt.l2_exclusion_count == 0
-    assert [flag.rule_id for flag in spy.calls[0][1].flags] == ["DR-001"]
+    assert [flag.rule_id for flag in spy.attempts[0][1].flags] == ["DR-001"]
     with Session(engine) as check:
         _assert_sealed_evaluation(
             check,
             window_receipt,
-            patient_id=patient.id,
-            doctor_id=doctor.user_id,
+            doctor=doctor,
             run_id=window_run,
+            evidence=window_evidence,
             items=1,
             links=1,
             exclusions=3,
         )
         _assert_observation_links_only(check, window_run, count=1)
         assert _item_links(check, window_run) == [("DR-001", [current_hr.id])]
+
+    window_snapshot = _review_snapshot(db)
+    window_replay = _persist(engine, doctor, window_run, tmp_path)
+    _assert_exact_replay(window_receipt, window_replay)
+    assert _review_snapshot(db) == window_snapshot
 
 
 # --------------------------------------------------------------------------- #
@@ -2615,21 +2982,53 @@ def test_rb4_10_zero_selected_current_history_admissibility_and_exclusions(
 
 
 def test_rb4_12_migrated_head_and_r3_guards_present(sandbox, engine):
-    """RB4-12 (partial): migrated head is 0008 with RB3 tables and guard test.
+    """RB4-12 (Linux schema guard only): migrated head 0008 with RB3 objects.
 
-    This is a Linux-side schema/portability guard. It does NOT claim Windows
-    execution; the owner's isolated PowerShell verification remains outstanding.
+    This is the Linux-side half of RB4-12. It asserts the actual migrated schema
+    state this suite ran against and the *presence* of the RB3 migration-guard
+    module. Source presence is NOT an execution of those guards, NOT proof of
+    migration behaviour, portability or DR-006 reachability; the guards execute
+    in their own RB3 suite. Windows acceptance (PowerShell ``setup.ps1`` /
+    ``test_all.ps1``) is owner-only and is NOT executed or claimed here.
     """
     db = sandbox
     head = db.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
     assert head == "0008_p4_rb3_review_persistence"
-    tables = set(db.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).scalars())
-    assert {"review_item", "evidence_link", "review_evaluation"} <= tables
-    assert {"workflow_run", "run_gate_evaluation", "run_gate_blocker"} <= tables
+    objects = {
+        row.name: row.type for row in db.execute(text("SELECT name, type FROM sqlite_master")).all()
+    }
+    tables = {name for name, kind in objects.items() if kind == "table"}
+    triggers = {name for name, kind in objects.items() if kind == "trigger"}
+    # Every table this suite wrote through the accepted services exists at head.
+    assert {
+        "review_item",
+        "evidence_link",
+        "review_evaluation",
+        "workflow_run",
+        "run_gate_evaluation",
+        "run_gate_blocker",
+        "run_selected_document",
+        "run_selected_observation",
+        "run_source_omission",
+        "extracted_fact",
+        "fact_verification",
+        "verification_issue",
+        "observation",
+        "audit_event",
+    } <= tables
+    # RB3 sealed-table immutability triggers exist in the migrated schema.
+    # Presence only: their behaviour is exercised by the RB3 guard suite.
+    assert {
+        "trg_review_item_update_immutable",
+        "trg_review_item_delete_immutable",
+        "trg_evidence_link_update_immutable",
+        "trg_evidence_link_delete_immutable",
+        "trg_review_evaluation_update_immutable",
+        "trg_review_evaluation_delete_immutable",
+    } <= triggers
 
     guards = (REPO_ROOT / "backend" / "tests" / "p4" / "test_p4_rb3_migration_guards.py").read_text(
         encoding="utf-8"
     )
+    # SOURCE PRESENCE ONLY (not execution, not proof of behaviour).
     assert re.search(r"^def test_", guards, re.MULTILINE) is not None
-    # Windows acceptance is owner-only and is not executed here.
-    assert not (REPO_ROOT / "backend" / "tests" / "p4" / "test_p4_rb4_windows.py").exists()
