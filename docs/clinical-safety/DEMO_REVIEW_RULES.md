@@ -314,3 +314,11 @@ None of these are executed in P0.
 | `OQ-R03` | Should dismissals require a reason? | Optional in the MVP |
 | `OQ-R04` | Should the demo include a deliberately noisy rule to show suppression? | Covered by internal fixture `GOLD-D`; not shown in the three demo stories |
 | `OQ-R05` | Is the ` (self-reported)` suffix acceptable in doctor-facing messages? | Yes — honesty over brevity |
+
+## 14. P4-RB3 conservative durable persistence disclosure (2026-11-23)
+
+Owner-ratified Design PR #42 (`0008_p4_rb3_review_persistence`, `backend/app/services/p4_rb3_review_persistence.py`) persists run-bound outputs of the unchanged RB2 six-rule evaluator under the following conservative boundaries:
+
+- **DR-006 whole-invocation denial (`dr006_policy = "prohibited_denied"`):** All six rules (`DR-001`, `DR-003`, `DR-005`, `DR-006`, `DR-008`, `DR-009`) remain implemented in the RB2 evaluator, and `DR-006` persistence is **not authorized** in this slice. Whenever the evaluator emits `DR-006`, RB3 T12 denies the **entire** persistence invocation (`409 E_VALIDATION`, `dr006_persistence_not_authorized`) with zero DB writes — never a silently dropped item or partial run subset. A run with a verified-source conflict therefore persists no `review_item` rows in this conservative slice; `document_span` / `checkin_note` links remain deferred and blocked (`0..24` observation links only).
+- **A2 transport label vs. stored-lineage proof (`lineage_label_policy = "a2_transport_label"`):** When RB3 translates F2/RB1-verified observations into RB2 `OfflineObservation` inputs, `self_reported_validated` is passed as `trust_level="self_reported"` and every item stores `provenance_status="fixture_asserted"` as the boundary transport label. Independent per-item verified-source lineage truth is persisted separately in `review_item.stored_lineage_proved` (`0` or `1`), derived strictly inside RB3's SQLite lock from stored document/fact/decision provenance.
+
