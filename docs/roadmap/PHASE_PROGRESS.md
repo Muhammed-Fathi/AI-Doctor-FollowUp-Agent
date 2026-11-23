@@ -1616,3 +1616,11 @@ After owner-merged [PR #27](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp
 
 
 
+
+## P4-RB3 owner merge and post-merge main CI (2026-11-23)
+
+Independently checked [PR #43](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/43) MERGED by owner at 2026-11-23T16:14:22Z, merge `0738a32acfd3b9512f85d82062108d9adf14d9c9`; [owner acceptance #7105580779](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/43#issuecomment-7105580779) applies to implementation `c929dee4dbc72028fe18d047766553e5909faa35`, followed by docs-only recording `bc0ae73907cfa6d8f1515881c15bcd05cb83644e`. Owner-reported Windows: 12 mandatory PASS, 0 FAIL, 1 optional Playwright SKIP. Post-merge [main CI #45214231214](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45214231214) COMPLETED/SUCCESS at the merge SHA, Backend Python 3.12 and Frontend Node 22, all 25 job steps successful. Historical pre-merge statuses above are superseded, not rewritten.
+
+## P4-RB4 design-only checkpoint (2026-11-23)
+
+New [GOLD run-backed acceptance design](../phase-reports/P4_RB4_RUN_BACKED_GOLD_ACCEPTANCE_DESIGN_20261123.md) is a proposal only. C's blocked initial document cannot enter an F0 manifest; request the owner's explicit decision on the disclosed F0 refusal / post-selection F1 HALT / corrected new-run reconciliation. A/B/D expectations and test-only future allowlist are not execution or ratification. Proposed marker `RATIFY-P4-RB4-RUN-BACKED-GOLD-ACCEPTANCE-DESIGN-SCOPE` grants no permission unless posted by the owner with the stated C decision. P4 IN_REVIEW; issue #14 OPEN; full P5 NOT ACCEPTED; real GOLD-EX-11 FAIL / NOT PROVEN; RB3-75..77 deferred; DR-006 persistence prohibited. ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.
