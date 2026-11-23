@@ -278,14 +278,26 @@ def _counts(db: Session) -> tuple[int, int, int, int]:
     )
 
 
-def test_rb3_01_23_44_happy_path_replay_and_honesty_receipt(scoped, engine, tmp_path: Path):
-    """RB3-01/23/44: happy path commits items/links/audit/eval; replay does 0 writes."""
+def test_rb3_01_23_44_happy_path_replay_and_honesty_receipt(
+    scoped, engine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """RB3-01/23/44: happy path commits items/links/audit/eval; replay does 0 writes; RB2==RB3 output."""
     db, patient_id, doctor = scoped
     doc, _ = _verified_doc(db, patient_id, tmp_path, "happy")
     obs = _obs(db, patient_id, value=120, measured_at="2026-11-14T10:00:00Z")
     run_id = _start_and_gate(
         engine, db, patient_id, doctor, (doc.id,), (obs.id,), tmp_path, req_id="rb3-01"
     )
+
+    captured_rb2: list[OfflineRuleResult] = []
+    orig_eval = rb3.evaluate_p4_rb2_offline_fixture
+
+    def _spy_eval(inp: OfflineRuleInput) -> OfflineRuleResult:
+        res = orig_eval(inp)
+        captured_rb2.append(res)
+        return res
+
+    monkeypatch.setattr(rb3, "evaluate_p4_rb2_offline_fixture", _spy_eval)
 
     before = _counts(db)
     first = _persist(engine, doctor, run_id, tmp_path)
@@ -324,6 +336,36 @@ def test_rb3_01_23_44_happy_path_replay_and_honesty_receipt(scoped, engine, tmp_
     assert second.input_fingerprint_sha256 == first.input_fingerprint_sha256
     assert second.output_identity_sha256 == first.output_identity_sha256
     assert _counts(db) == after_first
+
+    # RB3-44: explicit RB2-to-RB3 semantic output equivalence (no semantic drift across persistence)
+    rb2_direct = captured_rb2[0]
+    persisted_rows = (
+        db.execute(
+            select(ReviewItem)
+            .where(ReviewItem.workflow_run_id == run_id)
+            .order_by(ReviewItem.display_order)
+        )
+        .scalars()
+        .all()
+    )
+    assert len(persisted_rows) == len(rb2_direct.flags)
+    for idx, (row, flag) in enumerate(zip(persisted_rows, rb2_direct.flags, strict=True)):
+        assert row.display_order == idx
+        assert row.rule_id == flag.rule_id
+        assert row.reason_code == flag.reason_code
+        assert row.workflow_hint == flag.workflow_hint
+        assert row.trust_basis == flag.trust_basis
+        assert row.message == flag.message
+        assert row.policy_version == flag.policy_version
+        assert row.dedupe_key == flag.dedupe_key
+        assert row.provenance_status == flag.provenance_status
+        row_links = sorted(
+            lnk.observation_id
+            for lnk in db.execute(select(EvidenceLink).where(EvidenceLink.owner_id == row.id))
+            .scalars()
+            .all()
+        )
+        assert row_links == sorted(ref.removeprefix("observation:") for ref in flag.evidence)
 
 
 def test_rb3_02_to_06_gate_and_lock_failures_write_nothing(
@@ -1203,7 +1245,7 @@ def test_rb3_66_99_dr006_unit_level_boundary_denies_whole_invocation(
 
 
 def test_rb3_79_97_98_provenance_stored_lineage_proved_superseded_facts_and_exclusion_bounds(
-    scoped, engine, tmp_path: Path
+    scoped, engine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """RB3-79/97/98: stored_lineage_proved=1 for verified_document, 0 for checkin; superseded facts."""
     db, patient_id, doctor = scoped
@@ -1286,6 +1328,78 @@ def test_rb3_79_97_98_provenance_stored_lineage_proved_superseded_facts_and_excl
             assert item.stored_lineage_proved == 1
         elif obs_self.id in obs_ids:
             assert item.stored_lineage_proved == 0
+
+    # RB3-97 (unsuperseded rejected active fact): create run on verified doc, then mark active fact rejected -> genuine F1 HALT without fabricating PROCEED
+    unsup_doc, unsup_facts = _verified_doc(db, patient_id, tmp_path, "unsup-rej")
+    db.commit()
+    with Session(engine) as gdb:
+        rec_unsup = create_run_foundation(
+            gdb,
+            principal=doctor,
+            patient_id=patient_id,
+            document_ids=(unsup_doc.id,),
+            observation_ids=(obs_self.id,),
+            omissions=(),
+            client_request_id="rb3-97-unsup",
+            as_of_utc=CLOCK,
+        )
+        gdb.commit()
+        uf = gdb.get(ExtractedFact, unsup_facts["unit"].id)
+        assert uf is not None
+        uf.verification_status = "rejected"
+        gdb.commit()
+        gate_unsup = evaluate_run_verification_gate(
+            gdb,
+            principal=doctor,
+            run_id=rec_unsup.run_id,
+            validation_clock=CLOCK,
+            upload_root=str(tmp_path),
+        )
+        assert gate_unsup.decision == "halt"
+    before_unsup = _counts(db)
+    with pytest.raises(ApiError) as unsup_exc:
+        _persist(engine, doctor, rec_unsup.run_id, tmp_path)
+    assert unsup_exc.value.status_code == 409
+    assert _counts(db) == before_unsup
+
+    # RB3-98: bounded valid exclusions + no truncation + service cap boundary (>200)
+    excl_ids: list[str] = []
+    for idx in range(5):
+        bad_o = _obs(
+            db,
+            patient_id,
+            measure_type="glucose",
+            value=100 + idx,
+            unit="mg/dL",
+            measured_at=f"2026-11-0{idx + 1}T10:00:00Z",
+            validation="rejected",
+        )
+        excl_ids.append(bad_o.id)
+    run_excl = _start_and_gate(
+        engine, db, patient_id, doctor, (doc.id,), (obs_self.id,), tmp_path, req_id="rb3-98"
+    )
+    # Boundary check: exceeding MAX_EXCLUSIONS fails closed with zero writes
+    assert rb3.MAX_EXCLUSIONS == 200
+    before_cap = _counts(db)
+    monkeypatch.setattr(rb3, "MAX_EXCLUSIONS", 4)
+    with pytest.raises(ApiError) as cap_exc:
+        _persist(engine, doctor, run_excl, tmp_path)
+    assert cap_exc.value.status_code == 409
+    assert _counts(db) == before_cap
+    monkeypatch.undo()
+
+    rec_98 = _persist(engine, doctor, run_excl, tmp_path)
+    eval_98 = db.execute(
+        select(ReviewEvaluation).where(ReviewEvaluation.workflow_run_id == run_excl)
+    ).scalar_one()
+    audit_98 = db.execute(
+        select(AuditEvent).where(AuditEvent.id == eval_98.audit_event_id)
+    ).scalar_one()
+    assert set(excl_ids).issubset({e.observation_id for e in rec_98.excluded_evidence})
+    assert len(rec_98.excluded_evidence) == len(rec_98.layered_exclusions.l3_merged)
+    assert eval_98.exclusion_count == len(rec_98.excluded_evidence)
+    assert len(audit_98.safe_detail) <= SAFE_DETAIL_MAX
+    assert f"exclusions={eval_98.exclusion_count}" in audit_98.safe_detail
 
 
 def _snapshot_all(db: Session) -> dict[str, object]:
@@ -1724,6 +1838,61 @@ def test_rb3_i02_atomic_rollback_flush_stages_commit_failure_t17_and_genuine_ret
         assert _snapshot_all(db) == baseline_snap
     monkeypatch.undo()
 
+    # RB3-26 (ux_review_dedupe): duplicate dedupe_key across two items triggers UNIQUE index IntegrityError -> 409
+    with Session(engine, autoflush=False, expire_on_commit=True) as s:
+        dup_dedupe = "d" * 64
+        dup_dedupe_res = OfflineRuleResult(
+            policy_version=rb3.RB3_POLICY_VERSION,
+            demo_only=True,
+            offline_candidate_rules_evaluated=True,
+            runtime_evaluable=False,
+            rules_executed=False,
+            review_items_persisted=False,
+            policy_status="unapproved",
+            flags=(
+                OfflineRuleFlag(
+                    rule_id="DR-009",
+                    reason_code="implausible_value",
+                    workflow_hint="data_quality",
+                    trust_basis="self_reported",
+                    message="Synthetic first item",
+                    evidence=(f"observation:{obs_sys.id}",),
+                    policy_version=rb3.RB3_POLICY_VERSION,
+                    demo_only=True,
+                    dedupe_key=dup_dedupe,
+                    provenance_status="fixture_asserted",
+                ),
+                OfflineRuleFlag(
+                    rule_id="DR-001",
+                    reason_code="missing_baseline",
+                    workflow_hint="data_quality",
+                    trust_basis="self_reported",
+                    message="Synthetic second item colliding on ux_review_dedupe",
+                    evidence=(f"observation:{obs_hr.id}",),
+                    policy_version=rb3.RB3_POLICY_VERSION,
+                    demo_only=True,
+                    dedupe_key=dup_dedupe,
+                    provenance_status="fixture_asserted",
+                ),
+            ),
+            excluded=(),
+        )
+        monkeypatch.setattr(rb3, "evaluate_p4_rb2_offline_fixture", lambda _i: dup_dedupe_res)
+        with pytest.raises(ApiError) as dd_exc:
+            rb3.persist_run_review_items(
+                s,
+                principal=doctor,
+                run_id=run_id,
+                validation_clock=CLOCK,
+                upload_root=str(tmp_path),
+            )
+        assert dd_exc.value.status_code == 409
+        assert dd_exc.value.code == ErrorCode.IDEMPOTENCY_CONFLICT
+        assert RB3DenialReason.INTEGRITY_CONFLICT.value in str(dd_exc.value)
+        assert s.in_transaction() is False
+        assert _snapshot_all(db) == baseline_snap
+    monkeypatch.undo()
+
     # RB3-27: unresolvable observation reference -> 409 E_VALIDATION, zero writes
     with Session(engine, autoflush=False, expire_on_commit=True) as s:
         bad_flag_res = OfflineRuleResult(
@@ -1779,6 +1948,50 @@ def test_rb3_i02_atomic_rollback_flush_stages_commit_failure_t17_and_genuine_ret
         db.commit()
     obs_b = _obs(db, patient_b.id, value=99, measured_at="2026-11-14T10:00:00Z")
     baseline_with_b = _snapshot_all(db)
+
+    # RB3-28 service-level T13: foreign-patient observation ref -> 403 E_SCOPE_VIOLATION, zero writes, no foreign disclosure
+    with Session(engine, autoflush=False, expire_on_commit=True) as s:
+        foreign_flag_res = OfflineRuleResult(
+            policy_version=rb3.RB3_POLICY_VERSION,
+            demo_only=True,
+            offline_candidate_rules_evaluated=True,
+            runtime_evaluable=False,
+            rules_executed=False,
+            review_items_persisted=False,
+            policy_status="unapproved",
+            flags=(
+                OfflineRuleFlag(
+                    rule_id="DR-009",
+                    reason_code="implausible_value",
+                    workflow_hint="data_quality",
+                    trust_basis="self_reported",
+                    message="Synthetic foreign ref",
+                    evidence=(f"observation:{obs_b.id}",),
+                    policy_version=rb3.RB3_POLICY_VERSION,
+                    demo_only=True,
+                    dedupe_key="e" * 64,
+                    provenance_status="fixture_asserted",
+                ),
+            ),
+            excluded=(),
+        )
+        monkeypatch.setattr(rb3, "evaluate_p4_rb2_offline_fixture", lambda _i: foreign_flag_res)
+        with pytest.raises(ApiError) as scope_exc:
+            rb3.persist_run_review_items(
+                s,
+                principal=doctor,
+                run_id=run_id,
+                validation_clock=CLOCK,
+                upload_root=str(tmp_path),
+            )
+        assert scope_exc.value.status_code == 403
+        assert scope_exc.value.code == ErrorCode.SCOPE_VIOLATION
+        assert obs_b.id not in str(scope_exc.value)
+        assert patient_b.id not in str(scope_exc.value)
+        assert s.in_transaction() is False
+        assert _snapshot_all(db) == baseline_with_b
+    monkeypatch.undo()
+
     # Direct SQLite G10 trigger test: insert item for patient_a, attempt EvidenceLink to patient_b obs
     try:
         db.execute(
@@ -1824,6 +2037,60 @@ def test_rb3_i02_atomic_rollback_flush_stages_commit_failure_t17_and_genuine_ret
         assert replay_rec.replayed is True
         assert replay_rec.review_items_persisted == 0
         assert replay_rec.output_identity_sha256 == retry_rec.output_identity_sha256
+
+    # Same-patient but inadmissible (excluded/rejected) observation ref stays 409 E_VALIDATION (T13)
+    same_pat_rejected = _obs(
+        db,
+        patient_id,
+        measure_type="glucose",
+        value=91,
+        unit="mg/dL",
+        measured_at="2026-11-13T10:00:00Z",
+        validation="rejected",
+    )
+    run_inadm = _start_and_gate(
+        engine, db, patient_id, doctor, (doc.id,), (obs_sys.id,), tmp_path, req_id="rb3-i02-inadm"
+    )
+    baseline_with_inadm = _snapshot_all(db)
+    with Session(engine, autoflush=False, expire_on_commit=True) as s:
+        inadm_flag_res = OfflineRuleResult(
+            policy_version=rb3.RB3_POLICY_VERSION,
+            demo_only=True,
+            offline_candidate_rules_evaluated=True,
+            runtime_evaluable=False,
+            rules_executed=False,
+            review_items_persisted=False,
+            policy_status="unapproved",
+            flags=(
+                OfflineRuleFlag(
+                    rule_id="DR-009",
+                    reason_code="implausible_value",
+                    workflow_hint="data_quality",
+                    trust_basis="self_reported",
+                    message="Synthetic inadmissible same-patient ref",
+                    evidence=(f"observation:{same_pat_rejected.id}",),
+                    policy_version=rb3.RB3_POLICY_VERSION,
+                    demo_only=True,
+                    dedupe_key="f" * 64,
+                    provenance_status="fixture_asserted",
+                ),
+            ),
+            excluded=(),
+        )
+        monkeypatch.setattr(rb3, "evaluate_p4_rb2_offline_fixture", lambda _i: inadm_flag_res)
+        with pytest.raises(ApiError) as inadm_exc:
+            rb3.persist_run_review_items(
+                s,
+                principal=doctor,
+                run_id=run_inadm,
+                validation_clock=CLOCK,
+                upload_root=str(tmp_path),
+            )
+        assert inadm_exc.value.status_code == 409
+        assert inadm_exc.value.code == ErrorCode.VALIDATION
+        assert s.in_transaction() is False
+        assert _snapshot_all(db) == baseline_with_inadm
+    monkeypatch.undo()
 
 
 def test_rb3_i03_precision_dependent_decimal_context_phase1_and_phase2(
@@ -2269,6 +2536,32 @@ def test_rb3_i04_remaining_matrix_items_12_22_32_47_49_74(scoped, engine, tmp_pa
         _persist(engine, doctor, run_id, tmp_path)
     assert ca_exc.value.status_code == 409
     hist_obs.created_at = "2026-10-20T09:00:00Z"
+    db.commit()
+
+    # RB3-49: historical eligibility change (validation -> rejected) changes eligibility/rule output:
+    # before gate refresh it fails closed at T3/F1 staleness (409 E_VALIDATION); after F1 refresh on
+    # the same run it reaches T15 and fails closed with 409 input_identity_changed, zero writes.
+    hist_obs.validation = "rejected"
+    db.commit()
+    with pytest.raises(ApiError) as elig_stale_exc:
+        _persist(engine, doctor, run_id, tmp_path)
+    assert elig_stale_exc.value.status_code == 409
+    assert elig_stale_exc.value.code == ErrorCode.VALIDATION
+    with Session(engine) as gdb:
+        g49 = evaluate_run_verification_gate(
+            gdb,
+            principal=doctor,
+            run_id=run_id,
+            validation_clock=CLOCK,
+            upload_root=str(tmp_path),
+        )
+        assert g49.decision == "proceed"
+    with pytest.raises(ApiError) as elig_drift_exc:
+        _persist(engine, doctor, run_id, tmp_path)
+    assert elig_drift_exc.value.status_code == 409
+    assert elig_drift_exc.value.code == ErrorCode.IDEMPOTENCY_CONFLICT
+    assert RB3DenialReason.INPUT_IDENTITY_CHANGED.value in str(elig_drift_exc.value)
+    hist_obs.validation = "ok"
     db.commit()
 
     # RB3-12: DB CHECK enforces synthetic_fixture; verify service-level 403 guard too

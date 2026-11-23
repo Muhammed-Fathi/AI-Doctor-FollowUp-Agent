@@ -13,9 +13,15 @@ Usage::
 ``--state`` (default ``head``):
 
 ``head``
-    revision ``0007_p5_run_gate``; exact P1/P2/P3 and F0 objects PLUS
-    exactly two F1 gate-evidence tables. All historic P3/F0 protections
-    remain, with F1 FKs, indexes, unique keys and immutability guards.
+    revision ``0008_p4_rb3_review_persistence``; exact P1/P2/P3/F0/F1 objects
+    PLUS the three WITHOUT ROWID P4-RB3 tables (``review_item``,
+    ``evidence_link``, ``review_evaluation``), nine named indexes including
+    both partial unique predicates, 25 RB3 triggers scoped to those three
+    tables, all 11 preserved historical triggers, and explicit ``WITHOUT ROWID``
+    assertions from ``sqlite_master.sql``.
+``p5_f1``
+    revision ``0007_p5_run_gate``; exact F0+F1 tables and all earlier
+    assertions, excluding the 0008 P4-RB3 tables.
 ``p5_f0``
     revision ``0006_p5_run_foundation``; exact F0 tables and all earlier
     assertions, excluding the 0007 F1 gate-evidence tables.
@@ -67,7 +73,8 @@ DOCTOR_TRIGGER_NAME = "trg_fact_verification_doctor_only"
 #: Recovery objects owned by ``0004`` (``DATA_DICTIONARY.md`` §2.4, R21 §4.10).
 RECOVERY_COLUMN = "recovered_from_document_id"
 RECOVERY_INDEX = "ix_document_recovered_from"
-HEAD_REVISION = "0007_p5_run_gate"
+HEAD_REVISION = "0008_p4_rb3_review_persistence"
+P5_F1_REVISION = "0007_p5_run_gate"
 P5_F0_REVISION = "0006_p5_run_foundation"
 P3_STAGE1_REVISION = "0005_p3_ocr_provenance"
 P4_REVISION = "0004_p3_rejection_recovery"
@@ -127,17 +134,74 @@ P5_F1_UNIQUE_KEYS = {
 }
 P5_F1_IMMUTABLE_TABLES = {"run_gate_evaluation", "run_gate_blocker"}
 
-#: Still-forbidden downstream P4/P5/P6 entities (never waived by CH-01).
+#: P4-RB3 WITHOUT ROWID durable run-bound review persistence (0008).
+P4_RB3_TABLES = {"review_item", "evidence_link", "review_evaluation"}
+P4_RB3_INDEXES = {
+    "ux_review_dedupe",
+    "ux_review_order",
+    "ix_review_patient_state",
+    "ix_review_run",
+    "ix_evidence_owner",
+    "ux_evidence_link_observation",
+    "ux_evidence_link_span",
+    "ux_review_evaluation_run",
+    "ix_review_evaluation_patient",
+}
+P4_RB3_TRIGGERS = {
+    "trg_review_item_update_immutable",
+    "trg_review_item_delete_immutable",
+    "trg_review_item_insert_open_only",
+    "trg_review_item_run_scope_consistent",
+    "trg_evidence_link_update_immutable",
+    "trg_evidence_link_delete_immutable",
+    "trg_evidence_link_owner_review_item_only",
+    "trg_evidence_link_kind_observation_only",
+    "trg_evidence_link_owner_exists",
+    "trg_evidence_link_reference_same_patient",
+    "trg_evidence_link_duplicate_identity",
+    "trg_review_evaluation_update_immutable",
+    "trg_review_evaluation_delete_immutable",
+    "trg_review_evaluation_run_scope_consistent",
+    "trg_review_item_insert_sealed",
+    "trg_evidence_link_insert_sealed",
+    "trg_review_evaluation_insert_sealed",
+    "trg_review_item_insert_id_conflict",
+    "trg_review_item_insert_dedupe_conflict",
+    "trg_review_item_insert_order_conflict",
+    "trg_evidence_link_insert_id_conflict",
+    "trg_evidence_link_insert_observation_identity_conflict",
+    "trg_evidence_link_insert_span_identity_conflict",
+    "trg_review_evaluation_insert_id_conflict",
+    "trg_review_evaluation_insert_run_conflict",
+}
+HISTORICAL_11_TRIGGERS = {
+    DOCTOR_TRIGGER_NAME,
+    "trg_run_selected_document_update_immutable",
+    "trg_run_selected_document_delete_immutable",
+    "trg_run_selected_observation_update_immutable",
+    "trg_run_selected_observation_delete_immutable",
+    "trg_run_source_omission_update_immutable",
+    "trg_run_source_omission_delete_immutable",
+    "trg_run_gate_evaluation_update_immutable",
+    "trg_run_gate_evaluation_delete_immutable",
+    "trg_run_gate_blocker_update_immutable",
+    "trg_run_gate_blocker_delete_immutable",
+}
+
+#: Pre-0008 forbidden downstream entities; at 0008 head the three authorized
+#: RB3 tables are permitted while all remaining future tables stay forbidden.
 P4_PLUS_TABLES = {
     "review_item",
+    "evidence_link",
+    "review_evaluation",
     "summary_draft",
     "approval_decision",
     "follow_up_task",
     "in_app_notification",
-    "evidence_link",
     "node_event",
     "summary_claim",
 }
+POST_RB3_FUTURE_TABLES = P4_PLUS_TABLES - P4_RB3_TABLES
 
 #: F0 tables own these named non-unique lookup indexes.
 P5_F0_INDEXES = {
@@ -177,7 +241,7 @@ P5_F0_UNIQUE_KEYS = {
     ("run_source_omission", ("workflow_run_id", "document_id")),
 }
 
-VALID_STATES = {"head", "p5_f0", "p3_stage1", "p3_recovery", "p3", "p2", "p1", "base"}
+VALID_STATES = {"head", "p5_f1", "p5_f0", "p3_stage1", "p3_recovery", "p3", "p2", "p1", "base"}
 
 
 def _parse_args(argv: list[str]) -> tuple[Path, str] | None:
@@ -198,6 +262,16 @@ def _parse_args(argv: list[str]) -> tuple[Path, str] | None:
 
 def _expected_tables(state: str) -> set[str]:
     if state == "head":
+        return (
+            P1_TABLES
+            | P2_TABLES
+            | P3_TABLES
+            | {PAGE_TEXT_TABLE}
+            | P5_F0_TABLES
+            | P5_F1_TABLES
+            | P4_RB3_TABLES
+        )
+    if state == "p5_f1":
         return P1_TABLES | P2_TABLES | P3_TABLES | {PAGE_TEXT_TABLE} | P5_F0_TABLES | P5_F1_TABLES
     if state == "p5_f0":
         return P1_TABLES | P2_TABLES | P3_TABLES | {PAGE_TEXT_TABLE} | P5_F0_TABLES
@@ -215,6 +289,8 @@ def _expected_tables(state: str) -> set[str]:
 def _expected_revisions(state: str) -> list[str]:
     if state == "head":
         return [HEAD_REVISION]
+    if state == "p5_f1":
+        return [P5_F1_REVISION]
     if state == "p5_f0":
         return [P5_F0_REVISION]
     if state == "p3_stage1":
@@ -236,7 +312,7 @@ def main(argv: list[str]) -> int:
     if parsed is None:
         print(
             "usage: check_alembic_smoke.py <path-to-sqlite-db> "
-            "[--state head|p5_f0|p3_stage1|p3_recovery|p3|p2|p1|base]",
+            "[--state head|p5_f1|p5_f0|p3_stage1|p3_recovery|p3|p2|p1|base]",
             file=sys.stderr,
         )
         return 1
@@ -333,7 +409,7 @@ def main(argv: list[str]) -> int:
     if unexpected:
         problems.append(f"unexpected tables for state {state!r}: {sorted(unexpected)}")
 
-    early = P4_PLUS_TABLES & tables
+    early = (POST_RB3_FUTURE_TABLES if state == "head" else P4_PLUS_TABLES) & tables
     if early:
         problems.append(f"later-phase tables must not exist: {sorted(early)}")
 
@@ -341,7 +417,7 @@ def main(argv: list[str]) -> int:
     # At ``head``/``p3``: the deferred P2 column, its unique index and the
     # doctor-only trigger must all exist. A "later-phase" table check alone
     # would not catch a P3 revision that forgot one of them.
-    if state in {"head", "p5_f0", "p3_stage1", "p3_recovery", "p3"}:
+    if state in {"head", "p5_f1", "p5_f0", "p3_stage1", "p3_recovery", "p3"}:
         if "source_fact_id" not in observation_columns:
             problems.append("observation.source_fact_id must exist after 0003")
         if "ux_obs_source_fact" not in observation_indexes:
@@ -357,7 +433,7 @@ def main(argv: list[str]) -> int:
         for row in document_foreign_keys
         if row[3] == RECOVERY_COLUMN and row[2] == "document" and row[6] == "RESTRICT"
     ]
-    if state in {"head", "p5_f0", "p3_stage1", "p3_recovery"}:
+    if state in {"head", "p5_f1", "p5_f0", "p3_stage1", "p3_recovery"}:
         if RECOVERY_COLUMN not in document_columns:
             problems.append(f"document.{RECOVERY_COLUMN} must exist after 0004")
         if RECOVERY_INDEX not in document_indexes:
@@ -375,7 +451,7 @@ def main(argv: list[str]) -> int:
             problems.append(f"the {RECOVERY_COLUMN} self-FK must not exist below 0004")
 
     # --- 0005 Stage 1 OCR provenance ----------------------------------------
-    if state in {"head", "p5_f0", "p3_stage1"}:
+    if state in {"head", "p5_f1", "p5_f0", "p3_stage1"}:
         missing_fv_cols = FACT_VERIFICATION_STAGE1_COLUMNS - fact_verification_columns
         if missing_fv_cols:
             problems.append(f"fact_verification missing Stage 1 columns: {sorted(missing_fv_cols)}")
@@ -392,7 +468,7 @@ def main(argv: list[str]) -> int:
     # --- 0006 CH-01 P5-F0 durable identity/manifest (owner scoped) ---------
     # This *adds* to, never replaces, the original strict P3 assertions.
     # Old states reject F0 tables through the exact _expected_tables comparison.
-    if state in {"head", "p5_f0"}:
+    if state in {"head", "p5_f1", "p5_f0"}:
         with sqlite3.connect(database) as connection:
             all_indexes = {
                 row[0]
@@ -432,7 +508,7 @@ def main(argv: list[str]) -> int:
                         problems.append(f"P5-F0 missing immutable trigger {name}")
 
     # --- 0007 P5-F1 immutable run-gate evidence (no graph execution) ------
-    if state == "head":
+    if state in {"head", "p5_f1"}:
         with sqlite3.connect(database) as connection:
             all_indexes = {
                 row[0]
@@ -492,6 +568,73 @@ def main(argv: list[str]) -> int:
             if "issue_type_allowed" not in table_ddl.get("run_gate_blocker", ""):
                 problems.append("P5-F1 missing closed run_gate_blocker issue_type CHECK")
 
+    # --- 0008 P4-RB3 WITHOUT ROWID durable review persistence -------------
+    if state == "head":
+        with sqlite3.connect(database) as connection:
+            rb3_indexes = {
+                row[0]: row[1] or ""
+                for row in connection.execute(
+                    "SELECT name, sql FROM sqlite_master "
+                    "WHERE type='index' AND tbl_name IN ('review_item', 'evidence_link', 'review_evaluation') "
+                    "AND name NOT LIKE 'sqlite_autoindex_%'"
+                )
+            }
+            if set(rb3_indexes) != P4_RB3_INDEXES:
+                problems.append(
+                    f"P4-RB3 index mismatch: expected {sorted(P4_RB3_INDEXES)}, "
+                    f"found {sorted(rb3_indexes)}"
+                )
+            if "WHERE kind = 'observation'" not in rb3_indexes.get(
+                "ux_evidence_link_observation", ""
+            ):
+                problems.append(
+                    "P4-RB3 ux_evidence_link_observation missing WHERE kind = 'observation' predicate"
+                )
+            if "WHERE kind = 'document_span'" not in rb3_indexes.get("ux_evidence_link_span", ""):
+                problems.append(
+                    "P4-RB3 ux_evidence_link_span missing WHERE kind = 'document_span' predicate"
+                )
+
+            rb3_triggers = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='trigger' "
+                    "AND tbl_name IN ('review_item', 'evidence_link', 'review_evaluation')"
+                )
+            }
+            if rb3_triggers != P4_RB3_TRIGGERS:
+                problems.append(
+                    f"P4-RB3 triggers mismatch: missing={sorted(P4_RB3_TRIGGERS - rb3_triggers)}, "
+                    f"extra={sorted(rb3_triggers - P4_RB3_TRIGGERS)}"
+                )
+
+            hist_trigger_sql = {
+                row[0]: row[1] or ""
+                for row in connection.execute(
+                    "SELECT name, sql FROM sqlite_master WHERE type='trigger' "
+                    "AND tbl_name NOT IN ('review_item', 'evidence_link', 'review_evaluation')"
+                )
+            }
+            missing_hist = HISTORICAL_11_TRIGGERS - set(hist_trigger_sql)
+            if missing_hist:
+                problems.append(f"Historical triggers missing after 0008: {sorted(missing_hist)}")
+            for hname in sorted(HISTORICAL_11_TRIGGERS & set(hist_trigger_sql)):
+                if "RAISE(ABORT" not in hist_trigger_sql[hname]:
+                    problems.append(f"Historical trigger {hname} altered")
+
+            all_table_ddl = {
+                row[0]: row[1] or ""
+                for row in connection.execute(
+                    "SELECT name, sql FROM sqlite_master WHERE type='table'"
+                )
+            }
+            for rb3_tbl in sorted(P4_RB3_TABLES):
+                if "WITHOUT ROWID" not in all_table_ddl.get(rb3_tbl, "").upper():
+                    problems.append(f"P4-RB3 table {rb3_tbl} must be declared WITHOUT ROWID")
+            for other_tbl, ddl in sorted(all_table_ddl.items()):
+                if other_tbl not in P4_RB3_TABLES and "WITHOUT ROWID" in ddl.upper():
+                    problems.append(f"Pre-existing table {other_tbl} must not carry WITHOUT ROWID")
+
     # At ``p2`` the exact P2 schema must be intact: the P3 column and trigger
     # must be gone, which is what ``0003 -> 0002`` has to leave behind.
     if state in {"p2", "p1", "base"}:
@@ -504,7 +647,7 @@ def main(argv: list[str]) -> int:
     if revisions != expected_revisions:
         problems.append(f"expected alembic_version {expected_revisions}, found {revisions}")
 
-    if state in {"head", "p5_f0", "p3_stage1"}:
+    if state in {"head", "p5_f1", "p5_f0", "p3_stage1"}:
         references_patient = any(row[2] == "patient" for row in user_foreign_keys)
         if not references_patient:
             problems.append("user.patient_id foreign key to patient is missing")

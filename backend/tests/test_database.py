@@ -19,7 +19,7 @@ from app.db.models import SchemaMeta
 from app.db.session import create_db_engine, ensure_sqlite_directory
 
 BASELINE_REVISION = "0001_p1_baseline"
-HEAD_REVISION = "0007_p5_run_gate"
+HEAD_REVISION = "0008_p4_rb3_review_persistence"
 
 #: The seven tables the P2 revision owns. Equality is asserted below, so a P4+
 #: table created early fails just as loudly as a missing one.
@@ -55,9 +55,11 @@ P5_F0_TABLES = {
 #: F1 adds exactly two evidence-only tables, not a graph or review runtime.
 P5_F1_TABLES = {"run_gate_evaluation", "run_gate_blocker"}
 
-#: Tables that remain forbidden after F1 (CH-01/F1 do not authorize them).
+#: P4-RB3 adds three WITHOUT ROWID durable run-bound review persistence tables at 0008.
+P4_RB3_TABLES = {"review_item", "evidence_link", "review_evaluation"}
+
+#: Tables that remain forbidden after RB3 0008.
 FUTURE_TABLES = {
-    "review_item",
     "summary_draft",
     "approval_decision",
     "follow_up_task",
@@ -86,15 +88,20 @@ def test_migration_creates_baseline_table(engine: Engine) -> None:
 
 
 def test_migrated_schema_is_exactly_p1_plus_p2_plus_p3(engine: Engine) -> None:
-    """Enforce exact P1/P2/P3, owner-approved F0 and F1 head schema.
+    """Enforce exact P1/P2/P3, owner-approved F0/F1, and P4-RB3 head schema.
 
     The historical 0005 exact P3 allowlist still has its own pinned migration
-    test. Future P4 review/task/agent tables stay forbidden under CH-01.
+    test. Remaining future P4/P5 summary/approval/task tables stay forbidden.
     """
     tables = set(inspect(engine).get_table_names())
 
     assert tables == (
-        {"schema_meta", "alembic_version"} | P2_TABLES | P3_TABLES | P5_F0_TABLES | P5_F1_TABLES
+        {"schema_meta", "alembic_version"}
+        | P2_TABLES
+        | P3_TABLES
+        | P5_F0_TABLES
+        | P5_F1_TABLES
+        | P4_RB3_TABLES
     )
     assert tables.isdisjoint(FUTURE_TABLES)
     assert any(

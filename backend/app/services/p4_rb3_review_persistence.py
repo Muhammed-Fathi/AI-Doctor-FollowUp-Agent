@@ -1401,6 +1401,21 @@ def _persist_run_review_items_pinned(
                     ref_obs_id = ref.removeprefix("observation:")
                     obs_row = obs_rows_by_id.get(ref_obs_id)
                     if obs_row is None:
+                        # T13 minimal stored scope check: distinguish unknown ref (409)
+                        # from a foreign-patient observation ref (403 E_SCOPE_VIOLATION)
+                        # without admitting foreign rows into the authoritative snapshot.
+                        obs_owner_patient_id = db.execute(
+                            select(Observation.patient_id).where(Observation.id == ref_obs_id)
+                        ).scalar_one_or_none()
+                        if (
+                            obs_owner_patient_id is not None
+                            and obs_owner_patient_id != run.patient_id
+                        ):
+                            raise ApiError(
+                                403,
+                                ErrorCode.SCOPE_VIOLATION,
+                                "Evidence belongs to another patient.",
+                            )
                         raise _deny("Evidence is not resolvable to stored sources.")
                     if obs_row.patient_id != run.patient_id:
                         raise ApiError(

@@ -12,12 +12,17 @@ import or table, and a reviewer should not have to grep for it by hand.
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import inspect
 
 from app.core.paths import REPO_ROOT, SYNTHETIC_DATA_DIR
 from app.db.base import Base
+from app.db.session import create_db_engine
 from app.schemas.auth import UserRead
 from app.schemas.observation import ObservationRead
 
@@ -57,11 +62,15 @@ P5_F0_TABLES = {
 #: Exactly the two F1 tables authorized by owner-ratified PR #32.
 P5_F1_TABLES = {"run_gate_evaluation", "run_gate_blocker"}
 
-#: Still-forbidden later-phase tables, including P4 review persistence and
-#: non-foundation P5 entities. Whitelisting F0 must not open this set.
+#: Exactly the three WITHOUT ROWID P4-RB3 tables authorized at 0008 (PR #42 / PR #43).
+P4_RB3_TABLES = {"review_item", "evidence_link", "review_evaluation"}
+
+#: Pre-0008 forbidden later-phase tables (RB3 tables remain forbidden at 0001..0007;
+#: all remaining summary/approval/graph/task tables stay forbidden at 0008 too).
 P4_PLUS_TABLES = {
     "review_item",
     "evidence_link",
+    "review_evaluation",
     "summary_draft",
     "summary_claim",
     "approval_decision",
@@ -69,6 +78,7 @@ P4_PLUS_TABLES = {
     "in_app_notification",
     "node_event",
 }
+POST_RB3_FUTURE_TABLES = P4_PLUS_TABLES - P4_RB3_TABLES
 
 #: Imports that would indicate agents, a model or network egress. These stay
 #: forbidden in **every** module, in every phase.
@@ -111,17 +121,31 @@ def app_sources() -> list[Path]:
 
 
 def test_p2_tables_still_exist_and_no_later_phase_table_appears() -> None:
-    """Preserve P2/P3 exactly and admit only the owner-authorized F0/F1 tables.
+    """Preserve P2/P3 exactly, permit RB3 only at 0008, and forbid all other future tables.
 
-    All post-F0 review, approval, graph and task tables remain forbidden, and
-    no unrelated metadata table may silently join the schema.
+    All three RB3 tables remain forbidden at pre-0008 revisions (verified at
+    ``0007_p5_run_gate``), and all remaining summary/approval/graph/task tables
+    stay forbidden at ``0008``.
     """
     tables = set(Base.metadata.tables)
 
     assert tables >= P2_TABLES
     assert tables >= P3_TABLES
-    assert tables.isdisjoint(P4_PLUS_TABLES)
-    assert tables == P2_TABLES | P3_TABLES | P5_F0_TABLES | P5_F1_TABLES
+    assert tables.isdisjoint(POST_RB3_FUTURE_TABLES)
+    assert tables == P2_TABLES | P3_TABLES | P5_F0_TABLES | P5_F1_TABLES | P4_RB3_TABLES
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_url = f"sqlite:///{(Path(tmpdir) / 'scope_0007.db').as_posix()}"
+        cfg = Config(str(REPO_ROOT / "backend" / "migrations" / "alembic.ini"))
+        cfg.set_main_option("sqlalchemy.url", db_url)
+        cfg.attributes["configure_logger"] = False
+        command.upgrade(cfg, "0007_p5_run_gate")
+        eng = create_db_engine(db_url)
+        try:
+            tables_0007 = set(inspect(eng).get_table_names())
+        finally:
+            eng.dispose()
+    assert tables_0007.isdisjoint(P4_PLUS_TABLES)
 
 
 def test_no_later_phase_module_exists() -> None:
