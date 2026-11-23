@@ -248,7 +248,23 @@ It asserts that `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md` quotes the cu
 - The guard was **not weakened**.
 - **Owner decision D-09**: authorize the append-only collection note (`**1420 collected**, of which **443** are the P3 suite`) as a separate documentation-only step.
 
-### 5.2 Explicitly NOT executed
+### 5.2 Exact-head GitHub Actions
+
+At head `e70d2ea9b5cc6446e06f336b40e83bdc3df73052` (push [#45277330559](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45277330559), pull_request [#45277408623](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45277408623)): both COMPLETED / **FAILURE**.
+
+| Job | Result |
+|---|---|
+| Frontend (Node 22) | **SUCCESS** |
+| Backend (Python 3.12) — Ruff lint | **SUCCESS** |
+| Backend (Python 3.12) — Ruff format check | **SUCCESS** |
+| Backend (Python 3.12) — Backend tests | **FAILURE** |
+| Backend — Alembic smoke, OpenAPI, repository scanner | **SKIPPED — not reached**, so no CI claim is made for them |
+
+**Attribution honesty:** the CI job log could not be downloaded in this sandbox (the logs endpoint redirects to a blob host outside the permitted egress allowlist). The failing-test identity was therefore **not read from CI**; it is **inferred** from the byte-identical local run at the same clean tree, where exactly `test_no_later_phase_module_exists` and `test_handoff_test_count_matches_the_suite_it_describes` fail and nothing else does (re-verified at the committed HEAD with a clean `git status`: 2 failed in 3.90 s).
+
+**This is not a green run and is not presented as one.** The two failures are the guard collisions in §5.1 (D-14, D-09), neither of which was weakened.
+
+### 5.3 Explicitly NOT executed
 
 - Windows PowerShell / `test_all.ps1` — **NOT RUN**, owner laptop only. No Windows claim is made anywhere in this document.
 - Any LangGraph, Ollama, LLM, GPU or browser check — not applicable to this slice and not run.
