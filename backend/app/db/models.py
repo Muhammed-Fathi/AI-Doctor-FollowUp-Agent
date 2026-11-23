@@ -969,17 +969,278 @@ class RunGateBlocker(Base):
     fact_ids: Mapped[str] = mapped_column(String(600), nullable=False, server_default="[]")
 
 
+# =============================================================================
+# P4-RB3 — immutable, WITHOUT ROWID durable run-bound review persistence.
+# =============================================================================
+
+
+class ReviewItem(Base):
+    """Immutable run-bound synthetic review prompt persisted by P4-RB3."""
+
+    __tablename__ = "review_item"
+    __table_args__ = (
+        CheckConstraint("length(id) = 36", name="review_item_id_len"),
+        CheckConstraint("length(patient_id) = 36", name="review_item_patient_id_len"),
+        CheckConstraint("length(workflow_run_id) = 36", name="review_item_run_id_len"),
+        CheckConstraint(
+            "rule_id IN ('DR-001','DR-003','DR-005','DR-006','DR-008','DR-009')",
+            name="review_item_rule_allowed",
+        ),
+        CheckConstraint("length(rule_id) = 6", name="review_item_rule_len"),
+        CheckConstraint(
+            "reason_code IN ('missing_baseline','measurement_stale',"
+            "'change_exceeds_demo_parameter','verified_source_conflict',"
+            "'duplicate_or_out_of_order','implausible_value')",
+            name="review_item_reason_allowed",
+        ),
+        CheckConstraint("length(reason_code) BETWEEN 1 AND 64", name="review_item_reason_len"),
+        CheckConstraint(
+            "workflow_hint IN ('data_quality','verification_needed','change_to_review')",
+            name="review_item_hint_allowed",
+        ),
+        CheckConstraint(
+            "trust_basis IN ('self_reported','doctor_verified','mixed')",
+            name="review_item_trust_allowed",
+        ),
+        CheckConstraint("length(message) BETWEEN 1 AND 240", name="review_item_message_len"),
+        CheckConstraint("policy_version = 'demo-policy-1.1.0'", name="review_item_policy_pinned"),
+        CheckConstraint("length(policy_version) <= 24", name="review_item_policy_len"),
+        CheckConstraint("demo_only = 1", name="review_item_demo_only"),
+        CheckConstraint("length(dedupe_key) = 64", name="review_item_dedupe_len"),
+        CheckConstraint(
+            "state IN ('open','decided','superseded')",
+            name="review_item_state_allowed",
+        ),
+        CheckConstraint(
+            "provenance_status = 'fixture_asserted'",
+            name="review_item_provenance_pinned",
+        ),
+        CheckConstraint(
+            "stored_lineage_proved IN (0, 1)",
+            name="review_item_lineage_proved_bool",
+        ),
+        CheckConstraint("display_order >= 0", name="review_item_display_order_nonneg"),
+        CheckConstraint("length(created_at) = 20", name="review_item_created_at_len"),
+        Index("ux_review_dedupe", "workflow_run_id", "dedupe_key", unique=True),
+        Index("ux_review_order", "workflow_run_id", "display_order", unique=True),
+        Index("ix_review_patient_state", "patient_id", "state"),
+        Index("ix_review_run", "workflow_run_id"),
+        {"sqlite_with_rowid": False},
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, nullable=False, default=new_uuid)
+    patient_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("patient.id", ondelete="RESTRICT"), nullable=False
+    )
+    workflow_run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("workflow_run.id", ondelete="RESTRICT"), nullable=False
+    )
+    rule_id: Mapped[str] = mapped_column(String(8), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    workflow_hint: Mapped[str] = mapped_column(String(24), nullable=False)
+    trust_basis: Mapped[str] = mapped_column(String(16), nullable=False)
+    message: Mapped[str] = mapped_column(String(240), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(24), nullable=False)
+    demo_only: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    dedupe_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="open", server_default="open"
+    )
+    provenance_status: Mapped[str] = mapped_column(String(24), nullable=False)
+    stored_lineage_proved: Mapped[int] = mapped_column(Integer, nullable=False)
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
+class EvidenceLink(Base):
+    """Immutable WITHOUT ROWID typed evidence link attached to a ReviewItem."""
+
+    __tablename__ = "evidence_link"
+    __table_args__ = (
+        CheckConstraint("length(id) = 36", name="evidence_link_id_len"),
+        CheckConstraint(
+            "owner_type IN ('review_item','verification_issue','summary_claim')",
+            name="evidence_link_owner_type_allowed",
+        ),
+        CheckConstraint("length(owner_id) = 36", name="evidence_link_owner_id_len"),
+        CheckConstraint(
+            "kind IN ('document_span','observation','checkin_note')",
+            name="evidence_link_kind_allowed",
+        ),
+        CheckConstraint(
+            "page_index IS NULL OR page_index >= 0",
+            name="evidence_link_page_nonneg",
+        ),
+        CheckConstraint(
+            "(char_start IS NULL AND char_end IS NULL) OR "
+            "(char_start IS NOT NULL AND char_end IS NOT NULL "
+            "AND char_start >= 0 AND char_end > char_start)",
+            name="evidence_link_span_ordered",
+        ),
+        CheckConstraint(
+            "(kind = 'document_span' AND document_id IS NOT NULL AND observation_id IS NULL "
+            "AND page_index IS NOT NULL AND char_start IS NOT NULL AND char_end IS NOT NULL) "
+            "OR (kind = 'observation' AND observation_id IS NOT NULL AND document_id IS NULL "
+            "AND page_index IS NULL AND char_start IS NULL AND char_end IS NULL) "
+            "OR (kind = 'checkin_note' AND document_id IS NULL AND observation_id IS NULL)",
+            name="evidence_link_kind_fields",
+        ),
+        CheckConstraint("length(created_at) = 20", name="evidence_link_created_at_len"),
+        Index("ix_evidence_owner", "owner_type", "owner_id"),
+        Index(
+            "ux_evidence_link_observation",
+            "owner_id",
+            "observation_id",
+            unique=True,
+            sqlite_where=text("kind = 'observation'"),
+        ),
+        Index(
+            "ux_evidence_link_span",
+            "owner_id",
+            "document_id",
+            "page_index",
+            "char_start",
+            "char_end",
+            unique=True,
+            sqlite_where=text("kind = 'document_span'"),
+        ),
+        {"sqlite_with_rowid": False},
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, nullable=False, default=new_uuid)
+    owner_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    document_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("document.id", ondelete="RESTRICT"), nullable=True
+    )
+    observation_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("observation.id", ondelete="RESTRICT"), nullable=True
+    )
+    page_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    char_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    char_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
+class ReviewEvaluation(Base):
+    """Immutable, sealed WITHOUT ROWID completion record for one run evaluation."""
+
+    __tablename__ = "review_evaluation"
+    __table_args__ = (
+        CheckConstraint("length(id) = 36", name="review_eval_id_len"),
+        CheckConstraint("length(workflow_run_id) = 36", name="review_eval_run_id_len"),
+        CheckConstraint("length(patient_id) = 36", name="review_eval_patient_id_len"),
+        CheckConstraint("length(doctor_id) = 36", name="review_eval_doctor_id_len"),
+        CheckConstraint("as_of_utc = '2026-11-14T12:00:00Z'", name="review_eval_clock_pinned"),
+        CheckConstraint("length(as_of_utc) = 20", name="review_eval_clock_len"),
+        CheckConstraint("policy_version = 'demo-policy-1.1.0'", name="review_eval_policy_pinned"),
+        CheckConstraint("length(policy_reference_sha256) = 64", name="review_eval_policy_sha_len"),
+        CheckConstraint(
+            "policy_reference_sha256 = "
+            "'f3bdad3f6a958b65b50598910cc91501dcc53ca210ff90d2e09b14695cb6bd36'",
+            name="review_eval_policy_sha_pinned",
+        ),
+        CheckConstraint(
+            "fingerprint_version = 'rb3-full-input-1.0.0'",
+            name="review_eval_fp_version_pinned",
+        ),
+        CheckConstraint("length(input_fingerprint_sha256) = 64", name="review_eval_input_sha_len"),
+        CheckConstraint("length(output_identity_sha256) = 64", name="review_eval_output_sha_len"),
+        CheckConstraint("length(gate_evaluation_id) = 36", name="review_eval_gate_id_len"),
+        CheckConstraint(
+            "length(gate_input_fingerprint_sha256) = 64",
+            name="review_eval_gate_sha_len",
+        ),
+        CheckConstraint(
+            "length(bridge_input_fingerprint_sha256) = 64",
+            name="review_eval_bridge_sha_len",
+        ),
+        CheckConstraint("f2_contract_version = '2.0.0'", name="review_eval_f2_ver_pinned"),
+        CheckConstraint("gate_version = '1.0.0'", name="review_eval_gate_ver_pinned"),
+        CheckConstraint(
+            "rb2_policy_version = 'demo-policy-1.1.0'",
+            name="review_eval_rb2_policy_pinned",
+        ),
+        CheckConstraint(
+            "lineage_label_policy = 'a2_transport_label'",
+            name="review_eval_lineage_policy_pinned",
+        ),
+        CheckConstraint(
+            "dr006_policy = 'prohibited_denied'",
+            name="review_eval_dr006_policy_pinned",
+        ),
+        CheckConstraint("item_count BETWEEN 0 AND 12", name="review_eval_item_count_range"),
+        CheckConstraint(
+            "evidence_link_count BETWEEN 0 AND 24",
+            name="review_eval_link_count_range",
+        ),
+        CheckConstraint(
+            "evidence_link_count >= item_count",
+            name="review_eval_link_ge_item",
+        ),
+        CheckConstraint(
+            "exclusion_count BETWEEN 0 AND 200",
+            name="review_eval_excl_count_range",
+        ),
+        CheckConstraint("length(audit_event_id) = 36", name="review_eval_audit_id_len"),
+        CheckConstraint("demo_only = 1", name="review_eval_demo_only"),
+        CheckConstraint("length(created_at) = 20", name="review_eval_created_at_len"),
+        Index("ux_review_evaluation_run", "workflow_run_id", unique=True),
+        Index("ix_review_evaluation_patient", "patient_id", "created_at"),
+        {"sqlite_with_rowid": False},
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, nullable=False, default=new_uuid)
+    workflow_run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("workflow_run.id", ondelete="RESTRICT"), nullable=False
+    )
+    patient_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("patient.id", ondelete="RESTRICT"), nullable=False
+    )
+    doctor_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("user.id", ondelete="RESTRICT"), nullable=False
+    )
+    as_of_utc: Mapped[str] = mapped_column(String(20), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(24), nullable=False)
+    policy_reference_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    fingerprint_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    input_fingerprint_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_identity_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    gate_evaluation_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("run_gate_evaluation.id", ondelete="RESTRICT"), nullable=False
+    )
+    gate_input_fingerprint_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    bridge_input_fingerprint_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    f2_contract_version: Mapped[str] = mapped_column(String(8), nullable=False)
+    gate_version: Mapped[str] = mapped_column(String(8), nullable=False)
+    rb2_policy_version: Mapped[str] = mapped_column(String(24), nullable=False)
+    lineage_label_policy: Mapped[str] = mapped_column(String(32), nullable=False)
+    dr006_policy: Mapped[str] = mapped_column(String(24), nullable=False)
+    item_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    evidence_link_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    exclusion_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    audit_event_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("audit_event.id", ondelete="RESTRICT"), nullable=False
+    )
+    demo_only: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    created_at: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
 __all__ = [
     "AuditEvent",
     "CheckinIdempotency",
     "Document",
     "DocumentPageText",
     "Encounter",
+    "EvidenceLink",
     "ExtractedFact",
     "ExtractionAttempt",
     "FactVerification",
     "Observation",
     "Patient",
+    "ReviewEvaluation",
+    "ReviewItem",
     "RunGateBlocker",
     "RunGateEvaluation",
     "RunSelectedDocument",
