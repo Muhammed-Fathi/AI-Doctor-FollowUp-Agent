@@ -148,6 +148,31 @@ def test_p2_tables_still_exist_and_no_later_phase_table_appears() -> None:
     assert tables_0007.isdisjoint(P4_PLUS_TABLES)
 
 
+#: Owner decision D-14 (PR #47 comment 7122838674): the *only* authorized P5-S0
+#: application modules, as paths relative to ``backend/app/agents``. Every other
+#: path under ``agents`` - and the whole ``llm`` package - stays forbidden. This
+#: is an exact-path allowlist, never a directory-wide exemption.
+AUTHORIZED_AGENT_MODULE_PATHS = ("__init__.py", "state.py")
+
+
+def _stray_agent_modules(app_root: Path) -> list[str]:
+    """Every file under ``app_root/agents`` that the D-14 allowlist does not name.
+
+    Relative paths are compared, so a nested package (``agents/graph/nodes.py``)
+    is rejected exactly like a stray top-level module.
+    """
+    agents_root = app_root / "agents"
+    if not agents_root.exists():
+        return []
+    return sorted(
+        str(path.relative_to(app_root))
+        for path in agents_root.rglob("*")
+        if path.is_file()
+        and "__pycache__" not in path.parts
+        and path.relative_to(agents_root).as_posix() not in AUTHORIZED_AGENT_MODULE_PATHS
+    )
+
+
 def test_no_later_phase_module_exists() -> None:
     """No P4+ review/workflow/task/agent module is created.
 
@@ -168,8 +193,36 @@ def test_no_later_phase_module_exists() -> None:
     present = {path.name for path in app_sources()}
     assert forbidden.isdisjoint(present)
 
-    assert not (BACKEND_APP / "agents").exists()
+    # D-14: the ``agents`` package may hold only the two authorized S0 modules.
+    stray = _stray_agent_modules(BACKEND_APP)
+    assert stray == [], f"unauthorized module(s) under agents: {stray}"
     assert not (BACKEND_APP / "llm").exists()
+
+
+def test_d14_allowlist_rejects_every_other_agents_module(tmp_path: Path) -> None:
+    """Rejection proof for the D-14 allowlist (owner decision, PR #47).
+
+    The allowlist admits exactly ``__init__.py`` and ``state.py``; a graph, an
+    orchestrator, a tool adapter, a checkpoint module, an LLM module and any
+    nested sub-package are all reported as violations.
+    """
+    app_root = tmp_path / "app"
+    (app_root / "agents").mkdir(parents=True)
+    assert _stray_agent_modules(app_root) == []
+    (app_root / "agents" / "__init__.py").write_text("", encoding="utf-8")
+    (app_root / "agents" / "state.py").write_text("", encoding="utf-8")
+    assert _stray_agent_modules(app_root) == []
+
+    for name in ("orchestrator.py", "tool_adapter.py", "checkpoint.py", "llm.py"):
+        stray_path = app_root / "agents" / name
+        stray_path.write_text("", encoding="utf-8")
+        assert _stray_agent_modules(app_root) == [f"agents/{name}"], name
+        stray_path.unlink()
+
+    nested = app_root / "agents" / "graph" / "nodes.py"
+    nested.parent.mkdir()
+    nested.write_text("", encoding="utf-8")
+    assert _stray_agent_modules(app_root) == ["agents/graph/nodes.py"]
 
     # ``extraction.py`` may exist only as the P3 service module, never as a
     # top-level router or an agent-side module.

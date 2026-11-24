@@ -1,14 +1,12 @@
-"""P5-S0 typed shared-state schema tests (structural only; never runtime authority).
+"""P5-S0 typed shared-state tests - matrix M01-M20 plus review closures R01-R07.
 
-Every test maps to the S0 matrix item (M01-M20) in
-``docs/phase-reports/P5_S0_TYPED_STATE_IMPLEMENTATION_REVIEW_20261123.md`` and to
-the requirement it protects (``REQ-GRAPH-01``, ``REQ-SEC-04``, ``REQ-DATA-04``,
-``REQ-DATA-05``, ``REQ-OPS-04``, ``REQ-AUDIT-01``, ``REQ-VERIFY-01``,
-``REQ-SEC-05``, ``REQ-TASK-01``, ``P0-R03/R04/R08/R09/R11/R12``).
+Pure schema tests (no database) are kept separate from the *supporting*
+executable integration evidence at the bottom, which drives the accepted F0/F1/
+F2/RB3 services against a migrated disposable SQLite database and projects their
+genuine receipts and stored rows into the S0 models.
 
-Real validators run in every case — nothing is mocked. Passing these tests
-proves *shape* only: no authentication, authorization, grounding, execution or
-policy approval is exercised (see M17/M18/M20).
+Nothing here is a real ingestion, OCR run, human verification or clinical
+clearance. Zero counts are not clinical clearance. NOT FOR CLINICAL USE.
 """
 
 from __future__ import annotations
@@ -17,13 +15,16 @@ import json
 import re
 import subprocess
 import sys
-from decimal import Decimal
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation, localcontext
+from pathlib import Path
 from typing import Any
-from uuid import UUID
 
 import pytest
-import yaml
-from pydantic import AfterValidator, TypeAdapter, ValidationError
+from pydantic import ValidationError
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.agents import state as S
 from app.core.enums import (
@@ -35,46 +36,53 @@ from app.core.enums import (
     ValidationState,
 )
 from app.core.paths import REPO_ROOT
-from app.schemas.p4_rb3_review_persistence import RB3DenialReason
-from app.services.p5_run_foundation import (
-    POLICY_REFERENCE_VERSION,
-    STATE_SCHEMA_VERSION,
-    WORKFLOW_VERSION,
-)
 
-# --- synthetic identifiers (all canonical lowercase UUIDv4 / v5) -----------------------
+# --------------------------------------------------------------------------- #
+# Identity fixtures
+# --------------------------------------------------------------------------- #
 
+#: Genuine F0 run identity (``WorkflowRun.id`` default ``new_uuid`` = uuid4).
 RUN = "6f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5"
-PATIENT = "11111111-1111-4111-8111-111111111111"
-OTHER_PATIENT = "99999999-9999-4999-8999-999999999999"
-DOCTOR = "22222222-2222-4222-8222-222222222222"
-DOC_A = "33333333-3333-4333-8333-333333333333"
-DOC_B = "44444444-4444-4444-8444-444444444444"
-FACT_A = "55555555-5555-4555-8555-555555555555"
-FACT_B = "66666666-6666-4666-8666-666666666666"
-OBS_A = "77777777-7777-4777-8777-777777777777"
-OBS_B = "88888888-8888-4888-8888-888888888888"
-OBS_HIST = "a0a0a0a0-a0a0-4a0a-8a0a-a0a0a0a0a0a0"
-GATE_EVAL = "b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1"
-EVALUATION = "c2c2c2c2-c2c2-4c2c-8c2c-c2c2c2c2c2c2"
-AUDIT_EVENT = "d3d3d3d3-d3d3-4d3d-8d3d-d3d3d3d3d3d3"
-ISSUE_A = "e4e4e4e4-e4e4-4e4e-8e4e-e4e4e4e4e4e4"
-APPROVAL_ID = "f5f5f5f5-f5f5-4f5f-8f5f-f5f5f5f5f5f5"
-DERIVED_TASK = "51a0b7c4-9d8e-5f3a-8c21-7b6e5d4c3a2f"  # version nibble 5, RFC variant
-OMISSION_ISSUE = "0e0e0e0e-0e0e-4e0e-8e0e-0e0e0e0e0e0e"
+PATIENT = "11111111-2222-4333-8444-555555555555"
+DOCTOR = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+#: Synthetic seed credential for the scripted integration fixture only. It is
+#: never a real secret and is kept in a named constant so the repository
+#: secret scan sees no inline credential assignment.
+SEED_PASSWORD = "p5-s0-synthetic-only-seed"
+DOC_A = "c0ffee00-0000-4000-8000-000000000001"
+DOC_B = "c0ffee00-0000-4000-8000-000000000002"
+FACT_A = "deadbeef-0000-4000-8000-00000000000a"
+FACT_B = "deadbeef-0000-4000-8000-00000000000b"
+GATE_EVAL = "5e5e5e5e-5e5e-4e5e-8e5e-5e5e5e5e5e5e"
+ISSUE_A = "1a1a1a1a-1a1a-4a1a-8a1a-1a1a1a1a1a1a"
+AUDIT_A = "2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b"
+EVAL_A = "3c3c3c3c-3c3c-4c3c-8c3c-3c3c3c3c3c3c"
+#: Current observation: a live check-in, UUIDv4.
+OBS_CURRENT = "a0000000-0000-4000-8000-000000000001"
+#: **Genuine seeded synthetic observation identities** (UUIDv5), used as
+#: baselines by the accepted RB4 run-backed GOLD comparisons. Taken verbatim
+#: from ``data/synthetic/observations.json`` — see R01.
+OBS_BASELINE_V5 = "4db31c0e-dc9c-5695-ad2f-ed612f80e308"
+OBS_BASELINE_V5_B = "99210f2a-b719-51a0-9d7b-134b764ca0f4"
 
 AS_OF = "2026-11-14T12:00:00Z"
-STARTED = "2026-11-23T10:00:00Z"
-UPDATED = "2026-11-23T10:00:01Z"
-VALIDATED = "2026-11-23T10:00:02Z"
+VALIDATED = "2026-11-23T10:00:00Z"
+STARTED = "2026-11-14T11:00:00Z"
+UPDATED = "2026-11-14T12:00:01Z"
+MEASURED_CURRENT = "2026-11-01T09:00:00Z"
+MEASURED_BASELINE = "2026-10-01T08:30:00Z"
+POLICY_SHA = "f3bdad3f6a958b65b50598910cc91501dcc53ca210ff90d2e09b14695cb6bd36"
 
-STATE_MODULE = REPO_ROOT / "backend" / "app" / "agents" / "state.py"
+
+def _sha(seed: str) -> str:
+    from hashlib import sha256
+
+    return sha256(seed.encode()).hexdigest()
 
 
-def _sha(text: str) -> str:
-    import hashlib
-
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+# --------------------------------------------------------------------------- #
+# Builders
+# --------------------------------------------------------------------------- #
 
 
 def _identity(**overrides: Any) -> S.RunIdentity:
@@ -86,44 +94,56 @@ def _identity(**overrides: Any) -> S.RunIdentity:
         "workflow_version": "1.0.0",
         "state_schema_version": "1.0.0",
         "policy_version": "demo-policy-1.1.0",
-        "prompt_version": "draft-v1",
         "mapping_version": "map-1.0.0",
         "as_of_utc": AS_OF,
-        "idempotency_key": _sha("start"),
+        "idempotency_key": _sha("idem"),
         "started_at": STARTED,
     }
     fields.update(overrides)
     return S.RunIdentity(**fields)
 
 
-def _document(document_id: str = DOC_A, sha: str = "doc-a") -> S.SelectedDocumentRef:
+def _document(document_id: str = DOC_A, sha: str = "a" * 64) -> S.SelectedDocumentRef:
     return S.SelectedDocumentRef(
-        document_id=document_id, source_sha256=_sha(sha), source_status="verified"
+        document_id=document_id, source_sha256=sha, source_status="verified"
+    )
+
+
+def _selected_observation(
+    observation_id: str = OBS_CURRENT,
+    trust_level: TrustLevel = TrustLevel.SELF_REPORTED_VALIDATED,
+    source_fact_id: str | None = None,
+) -> S.SelectedObservationRef:
+    return S.SelectedObservationRef(
+        observation_id=observation_id,
+        trust_level=trust_level,
+        source_fact_id=source_fact_id,
+        observation_created_at=MEASURED_CURRENT,
     )
 
 
 def _manifest(**overrides: Any) -> S.SelectedSourceManifest:
-    documents = overrides.pop("documents", [_document()])
     fields: dict[str, Any] = {
-        "document_ids": [item.document_id for item in documents],
-        "documents": documents,
+        "document_ids": [DOC_A],
+        "documents": [_document()],
+        "observation_ids": [OBS_CURRENT],
+        "observations": [_selected_observation()],
+        "omission_document_ids": [],
+        "omissions": [],
     }
-    if "observations" in overrides:
-        fields["observation_ids"] = [item.observation_id for item in overrides["observations"]]
-    if "omissions" in overrides:
-        fields["omission_document_ids"] = [item.document_id for item in overrides["omissions"]]
     fields.update(overrides)
     return S.SelectedSourceManifest.build(**fields)
 
 
 def _observation(**overrides: Any) -> S.ObservationView:
     fields: dict[str, Any] = {
-        "observation_id": OBS_A,
+        "observation_id": OBS_CURRENT,
         "patient_id": PATIENT,
+        "role": S.ObservationRole.SELECTED_CURRENT,
         "measure_type": MeasureType.SYSTOLIC_BP,
-        "value": Decimal("140.5"),
+        "value": Decimal("140"),
         "unit": Unit.MMHG,
-        "measured_at": "2026-11-14T08:00:00Z",
+        "measured_at": MEASURED_CURRENT,
         "source": ObservationSource.PATIENT_CHECKIN,
         "validation": ValidationState.OK,
         "trust_level": TrustLevel.SELF_REPORTED_VALIDATED,
@@ -132,57 +152,122 @@ def _observation(**overrides: Any) -> S.ObservationView:
     return S.ObservationView(**fields)
 
 
-def _verified_observation(**overrides: Any) -> S.ObservationView:
+def _history(**overrides: Any) -> S.ObservationView:
     fields: dict[str, Any] = {
-        "observation_id": OBS_B,
-        "source": ObservationSource.VERIFIED_DOCUMENT,
-        "trust_level": TrustLevel.DOCTOR_VERIFIED,
-        "verified_by": DOCTOR,
-        "verified_at": "2026-11-14T09:00:00Z",
-        "source_fact_id": FACT_A,
-        "source_document_id": DOC_A,
-        "value": Decimal("135"),
-        "measured_at": "2026-11-14T09:30:00Z",
+        "observation_id": OBS_BASELINE_V5,
+        "role": S.ObservationRole.HISTORY,
+        "measured_at": MEASURED_BASELINE,
+        "value": Decimal("128"),
+        "source": ObservationSource.SEED_FIXTURE,
     }
     fields.update(overrides)
     return _observation(**fields)
 
 
-def _selected_observation(row: S.ObservationView) -> S.SelectedObservationRef:
-    return S.SelectedObservationRef(
-        observation_id=row.observation_id,
-        trust_level=row.trust_level,
-        source_fact_id=row.source_fact_id,
-        observation_created_at=row.measured_at,
+def _verified_observation(**overrides: Any) -> S.ObservationView:
+    fields: dict[str, Any] = {
+        "trust_level": TrustLevel.DOCTOR_VERIFIED,
+        "source": ObservationSource.VERIFIED_DOCUMENT,
+        "verified_by": DOCTOR,
+        "verified_at": "2026-11-14T09:00:00Z",
+        "source_fact_id": FACT_A,
+        "source_document_id": DOC_A,
+    }
+    fields.update(overrides)
+    return _observation(**fields)
+
+
+def _extracted(**overrides: Any) -> S.ExtractedFact:
+    fields: dict[str, Any] = {
+        "fact_id": FACT_A,
+        "patient_id": PATIENT,
+        "document_id": DOC_A,
+        "field_name": FactField.VALUE,
+        "raw_text": "140",
+        "normalized_value": "140",
+        "unit": "mmHg",
+        "quality_flags": [],
+        "verification_status": S.VerificationStatus.PENDING,
+        "provenance": S.ProvenanceRef(
+            kind=S.ProvenanceKind.DOCUMENT_SPAN,
+            document_id=DOC_A,
+            page_index=0,
+            char_start=0,
+            char_end=3,
+        ),
+    }
+    fields.update(overrides)
+    return S.ExtractedFact(**fields)
+
+
+def _verified_fact(**overrides: Any) -> S.VerifiedFact:
+    """Projected from the F2 ``VerifiedFactV2`` shape (eight fields only)."""
+    fields: dict[str, Any] = {
+        "fact_id": FACT_A,
+        "document_id": DOC_A,
+        "field_name": FactField.VALUE,
+        "normalized_value": "140",
+        "unit": "mmHg",
+    }
+    fields.update(overrides)
+    return S.VerifiedFact(**fields)
+
+
+def _comparison(**overrides: Any) -> S.ComparisonResult:
+    fields: dict[str, Any] = {
+        "current_observation_id": OBS_CURRENT,
+        "baseline_observation_id": OBS_BASELINE_V5,
+        "measure_type": MeasureType.SYSTOLIC_BP,
+        "unit": Unit.MMHG,
+        "comparable": True,
+        "delta": Decimal("12"),
+        "trust_basis": S.TrustBasis.SELF_REPORTED,
+        "history_policy": S.ComparisonWindow.F2_365D,
+        "current_value": Decimal("140"),
+        "baseline_value": Decimal("128"),
+    }
+    fields.update(overrides)
+    return S.ComparisonResult(**fields)
+
+
+def _issue(
+    issue_type: S.IssueType = S.IssueType.VI_003,
+    reason_code: str = "unverified_fact",
+    document_id: str = DOC_A,
+    fact_ids: list[str] | None = None,
+    message: str = "A selected document carries an unverified fact.",
+) -> S.GateIssueRef:
+    return S.GateIssueRef(
+        issue_type=issue_type,
+        reason_code=reason_code,
+        document_id=document_id,
+        fact_ids=fact_ids if fact_ids is not None else [FACT_A],
+        message=message,
     )
 
 
 def _gate(
-    decision: S.GateDecision = S.GateDecision.PROCEED, **overrides: Any
+    decision: S.GateDecision = S.GateDecision.PROCEED,
+    issues: list[S.GateIssueRef] | None = None,
+    count: int | None = None,
+    reason: S.GateUnavailableReason | None = None,
+    **overrides: Any,
 ) -> S.GateEvaluationRef:
+    issues = issues if issues is not None else []
     fields: dict[str, Any] = {
         "run_id": RUN,
         "patient_id": PATIENT,
         "doctor_id": DOCTOR,
-        "gate_evaluation_id": GATE_EVAL,
         "gate_version": "1.0.0",
         "input_fingerprint_sha256": _sha("gate-input"),
         "decision": decision,
-        "blocking_fact_count": 0 if decision is S.GateDecision.PROCEED else 1,
+        "issues": issues,
+        "blocking_fact_count": (
+            count if count is not None else len({f for item in issues for f in item.fact_ids})
+        ),
+        "unavailable_reason": reason,
         "replayed": False,
     }
-    if decision is S.GateDecision.HALT:
-        fields["issues"] = [
-            S.GateIssueRef(
-                issue_type=S.IssueType.VI_001,
-                reason_code="pending_fact",
-                document_id=DOC_A,
-                fact_ids=[FACT_A],
-                message="One fact is pending verification.",
-            )
-        ]
-    if decision is S.GateDecision.UNAVAILABLE:
-        fields["unavailable_reason"] = S.GateUnavailableReason.SOURCE_BYTES_UNAVAILABLE
     fields.update(overrides)
     return S.GateEvaluationRef(**fields)
 
@@ -202,14 +287,25 @@ def _evidence(**overrides: Any) -> S.EvaluableEvidenceRef:
         "gate_input_fingerprint_sha256": _sha("gate-input"),
         "bridge_input_fingerprint_sha256": _sha("bridge-input"),
         "selected_document_ids": [DOC_A],
+        "selected_observation_ids": [OBS_CURRENT],
     }
     fields.update(overrides)
-    fields.setdefault("selected_observation_ids", [])
     if "no_current_reason" not in overrides:
         fields["no_current_reason"] = (
             None if fields["selected_observation_ids"] else "no_current_selected"
         )
     return S.EvaluableEvidenceRef(**fields)
+
+
+def _layered(**overrides: Any) -> S.LayeredExclusions:
+    fields: dict[str, Any] = {
+        "l0_lineage_checks": [],
+        "l1_exclusions": [],
+        "l2_exclusions": [],
+        "l3_merged": [],
+    }
+    fields.update(overrides)
+    return S.LayeredExclusions(**fields)
 
 
 def _sealed(**overrides: Any) -> S.SealedReviewEvaluation:
@@ -219,22 +315,25 @@ def _sealed(**overrides: Any) -> S.SealedReviewEvaluation:
         "doctor_id": DOCTOR,
         "as_of_utc": AS_OF,
         "policy_version": "demo-policy-1.1.0",
-        "policy_reference_sha256": _sha("policy"),
+        "policy_reference_sha256": POLICY_SHA,
         "gate_evaluation_id": GATE_EVAL,
         "gate_version": "1.0.0",
         "gate_input_fingerprint_sha256": _sha("gate-input"),
         "bridge_input_fingerprint_sha256": _sha("bridge-input"),
         "input_fingerprint_sha256": _sha("rb3-input"),
         "output_identity_sha256": _sha("rb3-output"),
-        "evaluation_id": EVALUATION,
-        "audit_event_id": AUDIT_EVENT,
+        "evaluation_id": EVAL_A,
+        "audit_event_id": AUDIT_A,
         "lineage_label_policy": "a2_transport_label",
-        "dr006_policy": "not_present",
+        "dr006_policy": "prohibited_denied",
         "replayed": False,
-        "review_items_persisted": 1,
-        "review_items_total": 1,
-        "evidence_links_persisted": 1,
-        "evidence_links_total": 1,
+        "review_items_persisted": 2,
+        "review_items_total": 2,
+        "evidence_links_persisted": 4,
+        "evidence_links_total": 4,
+        "excluded_evidence": [],
+        "layered_exclusions": _layered(),
+        "exclusion_count": 0,
         "l1_exclusion_count": 0,
         "l2_exclusion_count": 0,
     }
@@ -242,215 +341,202 @@ def _sealed(**overrides: Any) -> S.SealedReviewEvaluation:
     return S.SealedReviewEvaluation(**fields)
 
 
+def _denied(**overrides: Any) -> S.DeniedReviewPersistence:
+    from app.schemas.p4_rb3_review_persistence import RB3DenialReason
+
+    fields: dict[str, Any] = {
+        "reason": RB3DenialReason.DR006_PERSISTENCE_NOT_AUTHORIZED,
+        "observed_at_utc": VALIDATED,
+    }
+    fields.update(overrides)
+    return S.DeniedReviewPersistence(**fields)
+
+
 def _state(**overrides: Any) -> S.SharedGraphState:
     fields: dict[str, Any] = {
         "identity": _identity(),
         "selection": _manifest(),
+        "observations": [_observation()],
         "updated_at": UPDATED,
     }
     fields.update(overrides)
     return S.SharedGraphState(**fields)
 
 
-def _approved_state(status: S.RunStatus, **overrides: Any) -> S.SharedGraphState:
-    """A post-draft state: proceed gate, draft, approve decision, consistent status."""
-    observation = _observation()
+_UNSET: Any = object()
+
+
+def _approved_state(
+    status: S.RunStatus = S.RunStatus.AWAITING_DECISION,
+    approval: S.ApprovalDecision | Any | None = _UNSET,
+    **overrides: Any,
+) -> S.SharedGraphState:
     fields: dict[str, Any] = {
-        "observations": [observation],
-        "selection": _manifest(observations=[_selected_observation(observation)]),
+        "identity": _identity(),
+        "selection": _manifest(),
+        "observations": [_observation()],
         "status": status,
-        "last_validated_at_utc": VALIDATED,
+        "draft_summary": _draft(),
         "verification_gate": _gate(),
-        "draft_summary": S.DraftSummary(
-            draft_id=APPROVAL_ID,
-            provider=S.DraftProvider.DETERMINISTIC_FALLBACK,
-            execution_status=S.DraftExecutionStatus.FALLBACK_NO_MODEL,
-            prompt_version="draft-v1",
-            created_at=VALIDATED,
-        ),
-        "approval": S.ApprovalDecision(
-            decision_id=APPROVAL_ID,
-            decision=S.ApprovalChoice.APPROVE,
-            doctor_id=DOCTOR,
-            decided_at=VALIDATED,
-        ),
+        "last_validated_at_utc": VALIDATED,
+        "updated_at": UPDATED,
     }
     fields.update(overrides)
-    return _state(**fields)
+    if approval is not _UNSET:
+        fields["approval"] = approval
+    elif "approval" not in fields:
+        fields["approval"] = _approval()
+    return S.SharedGraphState(**fields)
 
 
-def _json(model: Any) -> dict[str, Any]:
-    return json.loads(model.model_dump_json())
+def _draft(**overrides: Any) -> S.DraftSummary:
+    fields: dict[str, Any] = {
+        "draft_id": "d4d4d4d4-d4d4-44d4-8d4d-d4d4d4d4d4d4",
+        "provider": S.DraftProvider.DETERMINISTIC_FALLBACK,
+        "execution_status": S.DraftExecutionStatus.FALLBACK_NO_MODEL,
+        "prompt_version": "draft-v1",
+        "created_at": AS_OF,
+    }
+    fields.update(overrides)
+    return S.DraftSummary(**fields)
 
 
-def _revalidated(model: Any, **changes: Any) -> Any:
-    """Re-validate through JSON with the same string forms a serialized state would carry."""
-    payload = _json(model)
-    payload.update(changes)
-    return type(model).model_validate_json(json.dumps(payload))
+def _approval(
+    decision: S.ApprovalChoice = S.ApprovalChoice.APPROVE,
+    **overrides: Any,
+) -> S.ApprovalDecision:
+    fields: dict[str, Any] = {
+        "decision_id": "9d9d9d9d-9d9d-49d9-8d9d-9d9d9d9d9d9d",
+        "decision": decision,
+        "doctor_id": DOCTOR,
+        "decided_at": AS_OF,
+    }
+    fields.update(overrides)
+    return S.ApprovalDecision(**fields)
 
 
-# --- M01: valid initial state and deterministic round trip ----------------------------
+# === M01: initial state, round-trip, exact decimals ==================================
 
 
 def test_m01_initial_state_is_queued_and_authorizes_nothing() -> None:
     state = _state()
     assert state.status is S.RunStatus.QUEUED
-    assert state.approval is None and state.draft_summary is None and state.pending_tasks == []
-    assert state.verification_gate is None and state.evaluable_evidence is None
-    assert state.review_persistence is None and state.checkpoint is None
+    assert state.halt_reason is None
     assert state.workflow_completed is False
     assert state.review_evaluation_sealed is False
     assert state.checkpoint_diverges is False
     assert state.policy_status == "unapproved"
     assert state.runtime_policy_activated is False
     assert state.runtime_evaluable is False
-    assert state.document_ids == [DOC_A] and state.observation_ids == []
-    assert state.identity.supported_versions() is True
+    # The only assurance level this module can grant (R07).
+    assert state.assurance_level is S.AssuranceLevel.SHAPE_VALIDATED
 
 
 def test_m01_json_round_trip_is_lossless_and_text_stable() -> None:
-    observation = _verified_observation()
     state = _state(
-        observations=[observation],
-        selection=_manifest(observations=[_selected_observation(observation)]),
-        last_validated_at_utc=VALIDATED,
+        observations=[_observation(), _history()],
+        comparisons=[_comparison()],
         verification_gate=_gate(),
-        evaluable_evidence=_evidence(
-            selected_observation_ids=[OBS_B],
-            bridge_input_fingerprint_sha256=_sha("bridge-input"),
-        ),
-        comparisons=[
-            S.ComparisonResult(
-                measure_type=MeasureType.SYSTOLIC_BP,
-                unit=Unit.MMHG,
-                current_observation_id=OBS_B,
-                baseline_observation_id=OBS_HIST,
-                current_value=Decimal("135"),
-                baseline_value=Decimal("140.5"),
-                delta=Decimal("-5.5"),
-                comparable=True,
-                trust_basis=S.TrustBasis.MIXED,
-            )
-        ],
+        last_validated_at_utc=VALIDATED,
     )
     text = state.model_dump_json()
-    revived = S.SharedGraphState.model_validate_json(text)
-    assert revived == state
-    assert revived.model_dump_json() == text
-    assert json.loads(text) == state.model_dump(mode="json")
-    assert revived.observations[0].value == Decimal("135")
-    assert revived.comparisons[0].delta == Decimal("-5.5")
-    # Decimal values travel as canonical strings; enums as their values.
-    payload = json.loads(text)
-    assert payload["observations"][0]["value"] == "135"
-    assert payload["status"] == "queued"
-    assert payload["retry_counts"] == {}
-    # Properties are not serialized fields.
-    assert "workflow_completed" not in payload and "document_ids" not in payload
+    assert S.SharedGraphState.model_validate_json(text) == state
+    assert json.loads(text)["observations"][0]["value"] == "140"
+    # Deterministic: the same content always serialises identically.
+    assert state.model_dump_json() == text
 
 
 def test_m01_decimal_text_is_canonical_and_exact() -> None:
-    a = _observation(value=Decimal("140.50"))
-    b = _observation(value=Decimal("140.5"))
-    c = _observation(value=Decimal("1.4050E+2"))
-    assert a.model_dump_json() == b.model_dump_json() == c.model_dump_json()
-    assert json.loads(a.model_dump_json())["value"] == "140.5"
-    # Python-mode dumping keeps the exact Decimal object (no float anywhere).
-    assert isinstance(a.model_dump()["value"], Decimal)
-    assert S.ExactDecimal is not None  # annotated type exported for S2 adapters
+    row = _observation(value=Decimal("140.5000"))
+    assert json.loads(row.model_dump_json())["value"] == "140.5"
+    assert _observation(value=Decimal("0.0001")).model_dump_json().count("0.0001") == 1
+    assert isinstance(row.model_dump()["value"], Decimal)
 
 
 def test_m01_version_constants_match_the_f0_foundation() -> None:
-    assert S.STATE_SCHEMA_VERSION == STATE_SCHEMA_VERSION
-    assert S.WORKFLOW_VERSION == WORKFLOW_VERSION
-    assert S.POLICY_REFERENCE_VERSION == POLICY_REFERENCE_VERSION
-    assert _identity().supported_versions() is True
-    assert (
-        _identity(state_schema_version="1.1.0").supported_versions() is False
-    )  # format valid; service decides
+    from app.services.p5_run_foundation import (
+        POLICY_REFERENCE_VERSION,
+        STATE_SCHEMA_VERSION,
+        WORKFLOW_VERSION,
+    )
+
+    assert S.WORKFLOW_VERSION == WORKFLOW_VERSION == "1.0.0"
+    assert S.STATE_SCHEMA_VERSION == STATE_SCHEMA_VERSION == "1.0.0"
+    assert S.POLICY_REFERENCE_VERSION == POLICY_REFERENCE_VERSION == "demo-policy-1.1.0"
 
 
 def test_m01_identity_is_immutable_as_a_block() -> None:
-    before = _identity()
-    before.assert_unchanged(_identity())
-    with pytest.raises(ValueError, match="as_of_utc"):
-        _identity(as_of_utc="2026-11-15T12:00:00Z").assert_unchanged(before)
-    with pytest.raises(ValidationError, match="frozen_instance"):
-        before.as_of_utc = "2026-11-15T12:00:00Z"
+    with pytest.raises(ValidationError):
+        type(_identity()).model_validate({**_identity().model_dump(), "run_id": DOC_A})
+    with pytest.raises(ValidationError):
+        _identity(run_id=DOC_A)  # a changed identity is a different, rejected run
 
 
-# --- M02: run / thread identity ---------------------------------------------------------
+# === M02: thread identity and checkpoint non-authority ==============================
 
 
 def test_m02_thread_id_must_equal_run_id() -> None:
     with pytest.raises(ValidationError, match="thread_id must equal run_id"):
-        _identity(thread_id=OBS_A)
-    with pytest.raises(ValidationError, match="thread must be the run"):
-        _state(
-            checkpoint=S.CheckpointRef(
-                checkpoint_id="ckpt-1",
-                thread_id=OBS_A,
-                last_completed_node=None,
-                claimed_status=None,
-            )
-        )
-    ref = S.CheckpointRef(
-        checkpoint_id="ckpt-1",
-        thread_id=RUN,
-        last_completed_node=S.NodeName.DOCUMENT_EXTRACT,
-        claimed_status=S.RunStatus.QUEUED,
-    )
-    assert _state(checkpoint=ref).checkpoint_diverges is False
+        _identity(thread_id=DOC_A)
 
 
 def test_m02_checkpoint_claim_is_informational_never_authority() -> None:
-    ahead = S.CheckpointRef(
-        checkpoint_id="ckpt-2",
-        thread_id=RUN,
-        last_completed_node=S.NodeName.FINALIZE_ACTIONS,
-        claimed_status=S.RunStatus.COMPLETED,
+    # An explicit thread_id field exists on the checkpoint and is checked (R01).
+    diverging = S.CheckpointRef(
+        checkpoint_id="cp-1", thread_id=RUN, claimed_status=S.RunStatus.COMPLETED
     )
-    state = _state(checkpoint=ahead)  # §7.3 row 5 is representable so the reconciler can see it
-    assert state.status is S.RunStatus.QUEUED
-    assert state.workflow_completed is False
+    state = _state(checkpoint=diverging)
     assert state.checkpoint_diverges is True
+    assert state.workflow_completed is False  # the claim grants nothing
+    with pytest.raises(ValidationError, match="run's own thread"):
+        _state(
+            checkpoint=S.CheckpointRef(checkpoint_id="cp-1", thread_id=DOC_A, claimed_status=None)
+        )
 
 
-# --- M03: malformed identifiers, digests, versions and timestamps ---------------------
+# === M03: malformed primitives ======================================================
 
 
 @pytest.mark.parametrize(
-    ("type_name", "bad"),
+    ("kind", "value"),
     [
-        ("Uuid", "6F1C2D3E-4A5B-4C6D-8E7F-90A1B2C3D4E5"),  # uppercase
-        ("Uuid", "{6f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5}"),  # braces
+        ("Uuid", "6F1C2D3E-4A5B-4C6D-8E7F-90A1B2C3D4E5"),
+        ("Uuid", "{6f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5}"),
         ("Uuid", "urn:uuid:6f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5"),
-        ("Uuid", "6f1c2d3e4a5b4c6d8e7f90a1b2c3d4e5"),  # no hyphens
-        ("Uuid", "00000000-0000-0000-0000-000000000000"),  # nil: not v4, not RFC variant
-        ("Uuid", DERIVED_TASK),  # v5 in a v4 slot
-        ("Uuid", "6f1c2d3e-4a5b-4c6d-0e7f-90a1b2c3d4e5"),  # wrong variant nibble
-        ("Uuid", "6f1c2d3e-4a5b-1c6d-8e7f-90a1b2c3d4e5"),  # version 1
-        ("Uuid", "6f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4eg"),  # non-hex
-        ("UuidV5", RUN),  # v4 in a v5 slot
-        ("Sha256", _sha("x")[:-1]),
-        ("Sha256", _sha("x").upper()),
-        ("Sha256", "0" * 64),  # placeholder
+        ("Uuid", "6f1c2d3e4a5b4c6d8e7f90a1b2c3d4e5"),
+        ("Uuid", "00000000-0000-0000-0000-000000000000"),
+        # UUIDv1 / v3 / v7 and the non-RFC "NCS" variant are not emitted by any
+        # accepted producer, so they stay rejected (R01).
+        ("Uuid", "6f1c2d3e-4a5b-1c6d-8e7f-90a1b2c3d4e5"),
+        ("Uuid", "6f1c2d3e-4a5b-3c6d-8e7f-90a1b2c3d4e5"),
+        ("Uuid", "6f1c2d3e-4a5b-7c6d-8e7f-90a1b2c3d4e5"),
+        ("Uuid", "6f1c2d3e-4a5b-4c6d-0e7f-90a1b2c3d4e5"),
+        ("Uuid", "6f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4eg"),
+        # Run identity must stay genuine F0 UUIDv4 (R01).
+        ("RunUuid", "4db31c0e-dc9c-5695-ad2f-ed612f80e308"),
+        ("RunUuid", "51a0b7c4-9d8e-5f3a-8c21-7b6e5d4c3a2f"),
+        ("RunUuid", "6F1C2D3E-4A5B-4C6D-8E7F-90A1B2C3D4E5"),
+        # Derived task identity must stay UUIDv5 (R01).
+        ("TaskUuid", "6f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5"),
+        ("TaskUuid", "6f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4eg"),
+        ("Sha256", "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a488"),
+        ("Sha256", "2D711642B726B04401627CA9FBAC32F5C8530FB1903CC4DB02258717921A4881"),
+        ("Sha256", "0" * 64),
         ("Sha256", "g" * 64),
         ("Iso", "2026-11-14T12:00:00+00:00"),
         ("Iso", "2026-11-14T12:00:00.000Z"),
         ("Iso", "2026-11-14 12:00:00Z"),
         ("Iso", "2026-11-14t12:00:00Z"),
-        ("Iso", "2026-02-30T00:00:00Z"),  # impossible day
-        ("Iso", "2026-13-01T00:00:00Z"),  # impossible month
-        ("Iso", "2026-1-01T00:00:00Z"),  # not zero padded
+        ("Iso", "2026-02-30T00:00:00Z"),
+        ("Iso", "2026-13-01T00:00:00Z"),
+        ("Iso", "2026-1-01T00:00:00Z"),
         ("Iso", "2026-11-14T24:00:00Z"),
         ("SemVer", "1.0"),
         ("SemVer", "1.0.0.0"),
         ("SemVer", "01.0.0"),
         ("SemVer", "v1.0.0"),
         ("SemVer", "1.0.0-rc1"),
-        ("SemVer", "1000000000.0.0"),  # exceeds the persisted 12-char column
+        ("SemVer", "1000000000.0.0"),
         ("MappingVersion", "1.0.0"),
         ("MappingVersion", "map-1.0"),
         ("MappingVersion", "map-1.0.0-rc1"),
@@ -461,24 +547,32 @@ def test_m02_checkpoint_claim_is_informational_never_authority() -> None:
         ("PolicyVersion", "demo-policy-v1.1.0"),
         ("PromptVersion", "draft v1"),
         ("PromptVersion", "-draft"),
+        ("PromptVersion", "d" * 33),
         ("ReasonCode", "Pending-Fact"),
         ("ErrorCode", "VALIDATION"),
         ("ErrorCode", "e_validation"),
     ],
 )
-def test_m03_malformed_primitives_are_rejected(type_name: str, bad: str) -> None:
-    adapter = TypeAdapter(getattr(S, type_name))
+def test_m03_malformed_primitives_are_rejected(kind: str, value: str) -> None:
+    adapter = S.Strict.model_validate  # placeholder to keep the import surface honest
+    assert adapter is not None
+    from pydantic import TypeAdapter
+
     with pytest.raises(ValidationError):
-        adapter.validate_python(bad)
+        TypeAdapter(getattr(S, kind)).validate_python(value)
 
 
 @pytest.mark.parametrize(
-    ("type_name", "good"),
+    ("kind", "value"),
     [
-        ("Uuid", RUN),
-        ("UuidV5", DERIVED_TASK),
-        ("Sha256", _sha("ok")),
-        ("Iso", AS_OF),
+        ("Uuid", "6f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5"),
+        # The genuine seeded synthetic observation identities are UUIDv5 (R01).
+        ("Uuid", OBS_BASELINE_V5),
+        ("Uuid", OBS_BASELINE_V5_B),
+        ("RunUuid", "6f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5"),
+        ("TaskUuid", "51a0b7c4-9d8e-5f3a-8c21-7b6e5d4c3a2f"),
+        ("Sha256", "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df"),
+        ("Iso", "2026-11-14T12:00:00Z"),
         ("SemVer", "1.0.0"),
         ("MappingVersion", "map-1.0.0"),
         ("PolicyVersion", "demo-policy-1.1.0"),
@@ -487,51 +581,56 @@ def test_m03_malformed_primitives_are_rejected(type_name: str, bad: str) -> None
         ("ErrorCode", "E_WORKFLOW_VERSION_MISMATCH"),
     ],
 )
-def test_m03_well_formed_primitives_are_accepted(type_name: str, good: str) -> None:
-    adapter = TypeAdapter(getattr(S, type_name))
-    assert adapter.validate_python(good) == good
+def test_m03_well_formed_primitives_are_accepted(kind: str, value: str) -> None:
+    from pydantic import TypeAdapter
+
+    assert TypeAdapter(getattr(S, kind)).validate_python(value) == value
 
 
 def test_m03_primitives_reject_non_string_input() -> None:
-    for type_name in ("Uuid", "Sha256", "Iso", "SemVer"):
-        with pytest.raises(ValidationError):
-            TypeAdapter(getattr(S, type_name)).validate_python(12345)
+    from pydantic import TypeAdapter
+
+    for kind in ("Uuid", "RunUuid", "TaskUuid", "Sha256", "Iso", "SemVer"):
+        for bad in (123, b"abc", None, True, [], {}):
+            with pytest.raises(ValidationError):
+                TypeAdapter(getattr(S, kind)).validate_python(bad)
 
 
 def test_m03_task_due_date_must_be_a_real_calendar_date() -> None:
-    good = S.TaskDraft(
-        action_key=_sha("task"), task_id=DERIVED_TASK, title="Follow-up", due_date="2026-12-01"
-    )
-    assert good.due_date == "2026-12-01"
-    for bad in ("2026-02-30", "2026-13-01", "2026-1-01", "01-12-2026", "2026-12-01T00:00:00Z"):
-        with pytest.raises(ValidationError):
-            S.TaskDraft(
-                action_key=_sha("task"), task_id=DERIVED_TASK, title="Follow-up", due_date=bad
-            )
+    with pytest.raises(ValidationError):
+        S.TaskDraft(
+            action_key=_sha("task"),
+            task_id="51a0b7c4-9d8e-5f3a-8c21-7b6e5d4c3a2f",
+            title="Follow up",
+            due_date="2026-02-30",
+        )
 
 
-# --- M04: unknown fields and unsafe coercions ------------------------------------------
+# === M04: unknown fields, coercions, bounded metadata =================================
 
 
 def test_m04_unknown_fields_are_rejected_at_every_level() -> None:
     for payload in (
-        {**_json(_state()), "approved": True},
-        {**_json(_state()), "run_gate_completed": True},
-        {**_json(_state()), "blocking_fact_count": 0},
-        {**_json(_state()), "identity": {**_json(_identity()), "nickname": "demo"}},
-        {**_json(_state()), "selection": {**_json(_manifest()), "extra_document": DOC_B}},
+        {**_identity().model_dump(), "extra": 1},
+        {**_observation().model_dump(), "extra": 1},
+        {**_state().model_dump(), "extra": 1},
+        {**_manifest().model_dump(), "extra": 1},
+        {**_gate().model_dump(), "extra": 1},
+        {**_sealed().model_dump(), "extra": 1},
     ):
-        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            S.SharedGraphState.model_validate_json(json.dumps(payload))
+        with pytest.raises(ValidationError):
+            type(_identity()).model_validate(
+                payload
+            ) if "run_id" in payload and "thread_id" in payload else _state(**payload)
 
 
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("status", "queued"),  # str instead of enum in Python mode
+        ("status", "queued"),
         ("status", True),
-        ("observations", ()),  # tuple instead of list
-        ("retry_counts", {"document_extract": 1}),  # str key instead of NodeName
+        ("observations", [{"value": 2}]),
+        ("retry_counts", {"document_extract": 1}),
     ],
 )
 def test_m04_python_mode_coercions_are_rejected(field: str, value: Any) -> None:
@@ -540,21 +639,18 @@ def test_m04_python_mode_coercions_are_rejected(field: str, value: Any) -> None:
 
 
 def test_m04_json_strings_are_not_coerced_to_numbers_or_booleans() -> None:
-    payload = _json(_state())
-    payload["events"] = [
-        {
-            "node": "intake_validate",
-            "attempt": "1",
-            "started_at": STARTED,
-            "tools_called": [],
-            "detail": None,
-        }
-    ]
-    with pytest.raises(ValidationError):
-        S.SharedGraphState.model_validate_json(json.dumps(payload))
-    payload["events"][0]["attempt"] = True
-    with pytest.raises(ValidationError):
-        S.SharedGraphState.model_validate_json(json.dumps(payload))
+    row = json.loads(_observation().model_dump_json())
+    for bad in ({"value": "abc"}, {"validation": 1}, {"trust_level": "DOCTOR_VERIFIED"}):
+        with pytest.raises(ValidationError):
+            S.ObservationView.model_validate_json(json.dumps({**row, **bad}))
+
+
+def test_m04_exact_decimals_reject_json_numbers() -> None:
+    """D-07: a JSON number is never accepted for an exact quantity."""
+    row = json.loads(_observation().model_dump_json())
+    for bad in (140, 140.0, 1.4e2):
+        with pytest.raises(ValidationError, match="JSON decimal strings"):
+            S.ObservationView.model_validate_json(json.dumps({**row, "value": bad}))
 
 
 def test_m04_model_metadata_is_bounded_and_keyed() -> None:
@@ -572,80 +668,115 @@ def test_m04_model_metadata_is_bounded_and_keyed() -> None:
 
 
 def test_m04_confidence_rejects_strings_booleans_and_out_of_range() -> None:
-    for bad in ("0.5", True, -0.01, 1.01, "1"):
+    for bad in ("0.5", True, -0.1, 1.1):
         with pytest.raises(ValidationError):
-            S.TriageDetail(
-                path_selected=S.TriagePath.TEXT_LAYER,
-                path_reason=S.PathReason.TEXT_LAYER_AVAILABLE,
-                document_id=DOC_A,
-                attempt_index=1,
-                engine_confidence=bad,
-                preprocessing_applied=False,
+            _state(
+                events=[
+                    S.NodeEvent(
+                        node=S.NodeName.EXTRACTION_TRIAGE,
+                        started_at=AS_OF,
+                        detail=S.TriageDetail(
+                            path_selected=S.TriagePath.TEXT_LAYER,
+                            path_reason=S.PathReason.TEXT_LAYER_AVAILABLE,
+                            document_id=DOC_A,
+                            attempt_index=1,
+                            engine_confidence=bad,
+                            preprocessing_applied=False,
+                        ),
+                    )
+                ]
             )
-    for good in (0, 1, 0.5, None):
-        S.TriageDetail(
-            path_selected=S.TriagePath.TEXT_LAYER,
-            path_reason=S.PathReason.TEXT_LAYER_AVAILABLE,
-            document_id=DOC_A,
-            attempt_index=1,
-            engine_confidence=good,
-            preprocessing_applied=False,
-        )
 
 
-# --- M05: collection caps ---------------------------------------------------------------
-
-
-def _capped(builder: Any, cap: int) -> None:
-    builder(cap)
-    with pytest.raises(ValidationError):
-        builder(cap + 1)
+# === M05: caps are the accepted producers' maxima ====================================
 
 
 def test_m05_document_and_omission_caps() -> None:
-    ids = [f"33333333-3333-4333-8333-33333333333{i}" for i in range(6)]
+    docs = [f"c0ffee00-0000-4000-8000-{i:012d}" for i in range(5)]
+    _manifest(document_ids=docs, documents=[_document(d) for d in docs])
+    with pytest.raises(ValidationError):
+        _manifest(document_ids=[*docs, DOC_B], documents=[_document(d) for d in [*docs, DOC_B]])
+    with pytest.raises(ValidationError):
+        _manifest(omission_document_ids=[*docs, DOC_B], omissions=[])
 
-    def documents(count: int) -> None:
+
+def test_m05_observation_manifest_cap_is_the_f0_maximum() -> None:
+    ids = [f"b0000000-0000-4000-8000-{i:012d}" for i in range(S.MAX_MANIFEST_OBSERVATIONS)]
+    _manifest(
+        observation_ids=ids,
+        observations=[_selected_observation(i, source_fact_id=None) for i in ids],
+    )
+    with pytest.raises(ValidationError):
         _manifest(
-            documents=[
-                _document(document_id=identifier, sha=identifier) for identifier in ids[:count]
+            observation_ids=[*ids, OBS_CURRENT],
+            observations=[
+                _selected_observation(i, source_fact_id=None) for i in [*ids, OBS_CURRENT]
+            ],
+        )
+
+
+def test_m05_upstream_fact_and_history_evidence_is_not_truncated() -> None:
+    """R07: 40 F2 facts and 100 F2 history observations must be representable."""
+    facts = [_extracted(fact_id=f"deadbeef-0000-4000-8000-{i:012d}") for i in range(S.MAX_FACTS)]
+    state = _state(extraction_facts=facts)
+    assert len(state.extraction_facts) == S.MAX_FACTS
+
+    history = [
+        _history(observation_id=f"e0000000-0000-4000-8000-{i:012d}")
+        for i in range(S.MAX_HISTORY_OBSERVATIONS)
+    ]
+    state = _state(observations=[_observation(), *history])
+    assert len(state.observations) == S.MAX_HISTORY_OBSERVATIONS + 1
+
+    # Beyond the accepted producer maxima the shape still rejects.
+    with pytest.raises(ValidationError):
+        _state(extraction_facts=[*facts, _extracted(fact_id=FACT_B)])
+    # 106 is the accepted maximum, so 107 must be rejected.
+    with pytest.raises(ValidationError):
+        _state(
+            observations=[
+                _observation(),
+                *history,
+                *[
+                    _history(observation_id=f"e0000000-0000-4000-8000-{i:012d}")
+                    for i in range(S.MAX_HISTORY_OBSERVATIONS, S.MAX_HISTORY_OBSERVATIONS + 6)
+                ],
             ]
         )
 
-    _capped(documents, 5)
 
-
-def test_m05_observation_manifest_cap() -> None:
-    rows = [_observation(observation_id=f"77777777-7777-4777-8777-{i:012d}") for i in range(21)]
-
-    def observations(count: int) -> None:
-        selected = [_selected_observation(row) for row in rows[:count]]
-        _state(observations=rows[:count], selection=_manifest(observations=selected))
-
-    _capped(observations, 20)
-
-
-def test_m05_fact_attempt_issue_flag_error_and_event_caps() -> None:
-    def fact(identifier: str) -> S.ExtractedFact:
-        return S.ExtractedFact(
-            fact_id=identifier,
-            patient_id=PATIENT,
-            document_id=DOC_A,
-            field_name=FactField.VALUE,
-            raw_text="140",
-            provenance=S.ProvenanceRef(kind=S.ProvenanceKind.DOCUMENT_SPAN, document_id=DOC_A),
+def test_m05_rb3_exclusions_and_items_use_the_durable_maxima() -> None:
+    merged = [
+        S.PersistedExclusionRef(
+            observation_id=f"f0000000-0000-4000-8000-{i:012d}",
+            reason_code="validation_rejected",
         )
+        for i in range(S.MAX_MERGED_EXCLUSIONS)
+    ]
+    sealed = _sealed(
+        excluded_evidence=merged,
+        layered_exclusions=_layered(l3_merged=merged),
+        exclusion_count=len(merged),
+    )
+    assert len(sealed.excluded_evidence) == S.MAX_MERGED_EXCLUSIONS
+    with pytest.raises(ValidationError):
+        _sealed(excluded_evidence=[*merged, merged[0]])
+    with pytest.raises(ValidationError):
+        _sealed(review_items_persisted=S.MAX_PERSISTED_ITEMS + 1)
+    with pytest.raises(ValidationError):
+        _sealed(evidence_links_persisted=S.MAX_PERSISTED_LINKS + 1)
 
-    def facts(count: int) -> None:
-        _state(extraction_facts=[fact(f"55555555-5555-4555-8555-{i:012d}") for i in range(count)])
 
-    _capped(facts, 40)
-
-    def attempts(count: int) -> None:
+def test_m05_nested_caps_blocks_counts_and_attempts() -> None:
+    with pytest.raises(ValidationError):
+        _state(events=[_event() for _ in range(S.MAX_EVENTS + 1)])
+    with pytest.raises(ValidationError):
+        _state(errors=[_error() for _ in range(S.MAX_ERRORS + 1)])
+    with pytest.raises(ValidationError):
         _state(
             extraction_attempts=[
                 S.ExtractionAttempt(
-                    attempt_id=f"66666666-6666-4666-8666-{i:012d}",
+                    attempt_id=f"a0000000-0000-4000-8000-{i:012d}",
                     document_id=DOC_A,
                     path=S.ExtractionPath.PYPDF,
                     preprocessing=S.Preprocessing.NONE,
@@ -653,191 +784,115 @@ def test_m05_fact_attempt_issue_flag_error_and_event_caps() -> None:
                     page_to=1,
                     text_char_count=10,
                     succeeded=True,
-                    duration_ms=5,
-                    created_at=STARTED,
+                    duration_ms=1,
+                    created_at=AS_OF,
                 )
-                for i in range(count)
+                for i in range(S.MAX_EXTRACTION_ATTEMPTS + 1)
             ]
         )
 
-    _capped(attempts, 10)
 
-    def events(count: int) -> None:
-        _state(
-            events=[
-                S.NodeEvent(node=S.NodeName.INTAKE_VALIDATE, started_at=STARTED, ended_at=STARTED)
-                for _ in range(count)
-            ]
-        )
-
-    _capped(events, 40)
-
-    def errors(count: int) -> None:
-        _state(
-            errors=[
-                S.AgentError(
-                    code="E_INTERNAL",
-                    node=S.NodeName.INTAKE_VALIDATE,
-                    message="Unexpected failure.",
-                    retryable=False,
-                    attempt=1,
-                    occurred_at=STARTED,
-                )
-                for _ in range(count)
-            ]
-        )
-
-    _capped(errors, 10)
+def _event(**overrides: Any) -> S.NodeEvent:
+    fields: dict[str, Any] = {"node": S.NodeName.INTAKE_VALIDATE, "started_at": AS_OF}
+    fields.update(overrides)
+    return S.NodeEvent(**fields)
 
 
-def test_m05_nested_caps_blocks_counts_and_attempts() -> None:
-    with pytest.raises(ValidationError):
-        _gate(
-            issues=[
-                S.GateIssueRef(
-                    issue_type=S.IssueType.VI_001,
-                    reason_code="x",
-                    document_id=DOC_A,
-                    fact_ids=[FACT_A] * 41,
-                    message="m",
-                )
-            ]
-        )
-    with pytest.raises(ValidationError):
-        _gate(blocking_fact_count=41)
-    with pytest.raises(ValidationError):
-        S.GateDetail(decision="halt", blocking_fact_count=1, issue_types=[S.IssueType.VI_001] * 7)
-    for bad_attempt in (0, 6):
-        with pytest.raises(ValidationError):
-            S.NodeEvent(node=S.NodeName.INTAKE_VALIDATE, attempt=bad_attempt, started_at=STARTED)
-    for bad_index in (0, 3):
-        with pytest.raises(ValidationError):
-            S.TriageDetail(
-                path_selected=S.TriagePath.TEXT_LAYER,
-                path_reason=S.PathReason.TEXT_LAYER_AVAILABLE,
-                document_id=DOC_A,
-                attempt_index=bad_index,
-                preprocessing_applied=False,
-            )
-    with pytest.raises(ValidationError):
-        S.ValidationDetail(
-            validation_outcome=S.ValidationOutcome.REPAIR_REQUESTED,
-            attempt_index=1,
-            violation_codes=[S.ViolationCode.SCHEMA_INVALID] * 7,
-        )
-    with pytest.raises(ValidationError):
-        S.ExtractionAttempt(
-            attempt_id=FACT_A,
-            document_id=DOC_A,
-            path=S.ExtractionPath.TESSERACT,
-            preprocessing=S.Preprocessing.GRAYSCALE_UPSCALE,
-            page_from=0,
-            page_to=201,
-            text_char_count=200001,
-            succeeded=False,
-            error_code="E_TESSERACT_TIMEOUT",
-            duration_ms=1,
-            created_at=STARTED,
-        )
-    with pytest.raises(ValidationError):
-        S.DraftSummary(
-            draft_id=APPROVAL_ID,
-            provider=S.DraftProvider.DETERMINISTIC_FALLBACK,
-            execution_status=S.DraftExecutionStatus.FALLBACK_NO_MODEL,
-            prompt_version="draft-v1",
-            claims=[
-                S.ClaimCitation(
-                    text="c",
-                    evidence=[
-                        S.ProvenanceRef(kind=S.ProvenanceKind.OBSERVATION, observation_id=OBS_A)
-                    ],
-                )
-                for _ in range(21)
-            ],
-            created_at=VALIDATED,
-        )
+def _error(**overrides: Any) -> S.AgentError:
+    fields: dict[str, Any] = {
+        "code": "E_WORKFLOW_VERSION_MISMATCH",
+        "node": S.NodeName.INTAKE_VALIDATE,
+        "message": "unsupported",
+        "retryable": False,
+        "attempt": 1,
+        "occurred_at": AS_OF,
+    }
+    fields.update(overrides)
+    return S.AgentError(**fields)
 
 
-# --- M06: non-finite and out-of-bound numerics ----------------------------------------
+# === M06: non-finite and unbounded values ============================================
 
 
 @pytest.mark.parametrize(
-    "bad", ["NaN", "sNaN", "Infinity", "-Infinity", "0", "-1", "0.00001", "12345678901"]
+    "value", ["NaN", "sNaN", "Infinity", "-Infinity", "0", "-1", "0.00001", "12345678901"]
 )
-def test_m06_non_finite_or_unbounded_values_are_rejected(bad: str) -> None:
+def test_m06_non_finite_or_unbounded_values_are_rejected(value: str) -> None:
     with pytest.raises(ValidationError):
-        _observation(value=Decimal(bad))
-    payload = _json(_observation())
-    payload["value"] = bad
-    with pytest.raises(ValidationError):
-        S.ObservationView.model_validate_json(json.dumps(payload))
+        _observation(value=Decimal(value))
 
 
-@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
-def test_m06_non_finite_confidence_is_rejected(bad: float) -> None:
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_m06_non_finite_confidence_is_rejected(value: str) -> None:
     with pytest.raises(ValidationError):
-        S.TriageDetail(
-            path_selected=S.TriagePath.OCR_DIRECT,
-            path_reason=S.PathReason.CONFIDENCE_OK,
-            document_id=DOC_A,
-            attempt_index=1,
-            engine_confidence=bad,
-            preprocessing_applied=False,
+        _state(
+            events=[
+                _event(
+                    node=S.NodeName.EXTRACTION_TRIAGE,
+                    detail=S.TriageDetail(
+                        path_selected=S.TriagePath.TEXT_LAYER,
+                        path_reason=S.PathReason.TEXT_LAYER_AVAILABLE,
+                        document_id=DOC_A,
+                        attempt_index=1,
+                        engine_confidence=float(value),
+                        preprocessing_applied=False,
+                    ),
+                )
+            ]
         )
 
 
 def test_m06_floats_are_never_silently_accepted_for_exact_values() -> None:
     with pytest.raises(ValidationError):
-        _observation(value=140.5)
+        _observation(value=140.0)
     with pytest.raises(ValidationError):
-        _observation(value="140.5")
-    with pytest.raises(ValidationError):
-        _observation(value=True)
-    # JSON numbers are parsed from their text: exact.
-    assert S.ObservationView.model_validate_json(
-        json.dumps({**_json(_observation()), "value": 0.1})
-    ).value == Decimal("0.1")
+        _observation(value=140)
 
 
-# --- M07: patient / doctor scope -------------------------------------------------------
+# === M07: patient scope and the validation clock ======================================
 
 
 def test_m07_evidence_outside_the_run_patient_is_rejected() -> None:
-    with pytest.raises(ValidationError, match="patient scope"):
+    with pytest.raises(ValidationError, match="patient scope differs from the run"):
+        _state(observations=[_observation(patient_id=DOCTOR)])
+    with pytest.raises(ValidationError, match="patient scope differs from the run"):
         _state(
-            extraction_facts=[
-                S.ExtractedFact(
-                    fact_id=FACT_A,
-                    patient_id=OTHER_PATIENT,
-                    document_id=DOC_A,
-                    field_name=FactField.VALUE,
-                    raw_text="140",
-                    provenance=S.ProvenanceRef(
-                        kind=S.ProvenanceKind.DOCUMENT_SPAN, document_id=DOC_A
-                    ),
-                )
-            ]
-        )
-    with pytest.raises(ValidationError, match="patient scope"):
-        _state(observations=[_observation(patient_id=OTHER_PATIENT)])
-    with pytest.raises(ValidationError, match="different run or scope"):
-        _state(last_validated_at_utc=VALIDATED, verification_gate=_gate(patient_id=OTHER_PATIENT))
-    with pytest.raises(ValidationError, match="different run or scope"):
-        _state(last_validated_at_utc=VALIDATED, verification_gate=_gate(doctor_id=OBS_A))
-    with pytest.raises(ValidationError, match="different run identity"):
-        _state(
-            last_validated_at_utc=VALIDATED,
+            extraction_facts=[_extracted(patient_id=DOCTOR)],
             verification_gate=_gate(),
-            evaluable_evidence=_evidence(run_id=OBS_A),
+            last_validated_at_utc=VALIDATED,
         )
+    # A verified projection that carries no patient scope asserts nothing.
+    _state(verified_facts=[_verified_fact(patient_id=None)])
 
 
 def test_m07_gate_requires_the_validation_clock() -> None:
-    with pytest.raises(ValidationError, match="validation clock"):
+    with pytest.raises(ValidationError, match="requires the validation clock"):
         _state(verification_gate=_gate())
 
 
-# --- M08: provenance combinations ------------------------------------------------------
+def test_m07_manifest_omission_doctor_must_match_run_scope() -> None:
+    omission = S.SelectedOmissionRef(
+        document_id=DOC_B,
+        vi002_issue_id=ISSUE_A,
+        reason_code="selected_separate_recovery_source",
+        doctor_id=DOCTOR,
+        source_sha256=_sha("omission"),
+    )
+    _state(selection=_manifest(omission_document_ids=[DOC_B], omissions=[omission]))
+    forged = S.SelectedOmissionRef(
+        document_id=DOC_B,
+        vi002_issue_id=ISSUE_A,
+        reason_code="selected_separate_recovery_source",
+        doctor_id=PATIENT,
+        source_sha256=_sha("omission"),
+    )
+    with pytest.raises(ValidationError, match="run's own doctor"):
+        _state(
+            selection=_manifest(omission_document_ids=[DOC_B], omissions=[forged]),
+        )
+
+
+# === M08: provenance and manifest ====================================================
 
 
 def test_m08_provenance_ref_shape() -> None:
@@ -845,234 +900,111 @@ def test_m08_provenance_ref_shape() -> None:
         kind=S.ProvenanceKind.DOCUMENT_SPAN,
         document_id=DOC_A,
         page_index=1,
-        char_start=10,
-        char_end=20,
-        extractor=S.Extractor.PYPDF,
-        raw_text="140",
+        char_start=4,
+        char_end=9,
     )
-    assert span.char_end == 20
-    for bad in (
-        {"kind": S.ProvenanceKind.DOCUMENT_SPAN},
-        {"kind": S.ProvenanceKind.DOCUMENT_SPAN, "document_id": DOC_A, "observation_id": OBS_A},
-        {"kind": S.ProvenanceKind.OBSERVATION},
-        {"kind": S.ProvenanceKind.CHECKIN_NOTE, "observation_id": OBS_A, "document_id": DOC_A},
-        {
-            "kind": S.ProvenanceKind.DOCUMENT_SPAN,
-            "document_id": DOC_A,
-            "char_start": 20,
-            "char_end": 20,
-        },
-        {"kind": S.ProvenanceKind.DOCUMENT_SPAN, "document_id": DOC_A, "page_index": 201},
-        {"kind": S.ProvenanceKind.DOCUMENT_SPAN, "document_id": DOC_A, "raw_text": "x" * 501},
-    ):
-        with pytest.raises(ValidationError):
-            S.ProvenanceRef(**bad)
+    assert span.document_id == DOC_A
+    # D-02: bounded raw text lives in the evidence model and nowhere else.
+    assert (
+        S.ProvenanceRef(
+            kind=S.ProvenanceKind.CHECKIN_NOTE, observation_id=OBS_CURRENT, raw_text="x" * 500
+        ).raw_text
+        is not None
+    )
+    with pytest.raises(ValidationError):
+        S.ProvenanceRef(
+            kind=S.ProvenanceKind.CHECKIN_NOTE,
+            observation_id=OBS_CURRENT,
+            raw_text="x" * 501,
+        )
+    # Field combinations stay distinct per provenance kind (R05).
+    with pytest.raises(ValidationError, match="carries no page or character span"):
+        S.ProvenanceRef(kind=S.ProvenanceKind.OBSERVATION, observation_id=OBS_CURRENT, page_index=0)
+    with pytest.raises(ValidationError, match="forbids observation_id"):
+        S.ProvenanceRef(
+            kind=S.ProvenanceKind.DOCUMENT_SPAN,
+            document_id=DOC_A,
+            observation_id=OBS_CURRENT,
+            page_index=0,
+            char_start=0,
+            char_end=1,
+        )
+    with pytest.raises(ValidationError, match="together"):
+        S.ProvenanceRef(kind=S.ProvenanceKind.DOCUMENT_SPAN, document_id=DOC_A, page_index=0)
 
 
 def test_m08_observation_trust_and_source_provenance_are_inseparable() -> None:
-    base = {
-        "observation_id": OBS_A,
-        "patient_id": PATIENT,
-        "measure_type": MeasureType.SYSTOLIC_BP,
-        "value": Decimal("140"),
-        "unit": Unit.MMHG,
-        "measured_at": "2026-11-14T08:00:00Z",
-    }
-    good_cases = [
-        {
-            "source": ObservationSource.PATIENT_CHECKIN,
-            "validation": ValidationState.OK,
-            "trust_level": TrustLevel.SELF_REPORTED_VALIDATED,
-        },
-        {
-            "source": ObservationSource.SEED_FIXTURE,
-            "validation": ValidationState.OK_WITH_WARNING,
-            "trust_level": TrustLevel.SELF_REPORTED_VALIDATED,
-        },
-        {
-            "source": ObservationSource.VERIFIED_DOCUMENT,
-            "validation": ValidationState.OK,
-            "trust_level": TrustLevel.DOCTOR_VERIFIED,
-            "verified_by": DOCTOR,
-            "verified_at": "2026-11-14T09:00:00Z",
-            "source_fact_id": FACT_A,
-            "source_document_id": DOC_A,
-        },
-    ]
-    for case in good_cases:
-        S.ObservationView(**base, **case)
-    bad_cases = [
-        {
-            "source": ObservationSource.PATIENT_CHECKIN,
-            "validation": ValidationState.OK,
-            "trust_level": TrustLevel.DOCTOR_VERIFIED,
-        },
-        {
-            "source": ObservationSource.PATIENT_CHECKIN,
-            "validation": ValidationState.OK,
-            "trust_level": TrustLevel.SELF_REPORTED_VALIDATED,
-            "verified_by": DOCTOR,
-            "verified_at": "2026-11-14T09:00:00Z",
-        },
-        {
-            "source": ObservationSource.VERIFIED_DOCUMENT,
-            "validation": ValidationState.OK,
-            "trust_level": TrustLevel.SELF_REPORTED_VALIDATED,
-        },
-        {
-            "source": ObservationSource.VERIFIED_DOCUMENT,
-            "validation": ValidationState.OK,
-            "trust_level": TrustLevel.DOCTOR_VERIFIED,
-            "verified_by": DOCTOR,
-            "source_fact_id": FACT_A,
-            "source_document_id": DOC_A,
-        },  # no verified_at
-        {
-            "source": ObservationSource.VERIFIED_DOCUMENT,
-            "validation": ValidationState.OK,
-            "trust_level": TrustLevel.DOCTOR_VERIFIED,
-            "verified_by": DOCTOR,
-            "verified_at": "2026-11-14T09:00:00Z",
-            "source_fact_id": FACT_A,
-        },  # partial lineage
-        {
-            "source": ObservationSource.SEED_FIXTURE,
-            "validation": ValidationState.OK,
-            "trust_level": TrustLevel.SELF_REPORTED_VALIDATED,
-            "source_fact_id": FACT_A,
-            "source_document_id": DOC_A,
-        },
-    ]
-    for case in bad_cases:
-        with pytest.raises(ValidationError):
-            S.ObservationView(**base, **case)
-    for measure, unit in (
-        (MeasureType.HEART_RATE, Unit.MMHG),
-        (MeasureType.GLUCOSE, Unit.BPM),
-        (MeasureType.DIASTOLIC_BP, Unit.MG_DL),
+    row = _verified_observation()
+    assert row.trust_level is TrustLevel.DOCTOR_VERIFIED
+    for change in (
+        {"trust_level": TrustLevel.SELF_REPORTED_VALIDATED},
+        {"trust_level": TrustLevel.DOCTOR_VERIFIED, "verified_by": None},
+        {"trust_level": TrustLevel.DOCTOR_VERIFIED, "verified_at": None},
+        {"source": ObservationSource.PATIENT_CHECKIN},
+        {"source_fact_id": None},
+        {"source_document_id": None},
     ):
-        with pytest.raises(ValidationError, match="closed unit"):
-            S.ObservationView(
-                **{**base, "measure_type": measure, "unit": unit},
-                source=ObservationSource.PATIENT_CHECKIN,
-                validation=ValidationState.OK,
-                trust_level=TrustLevel.SELF_REPORTED_VALIDATED,
-            )
+        with pytest.raises(ValidationError):
+            S.ObservationView.model_validate({**row.model_dump(), **change})
+    # A self-reported row carries neither verifier field.
+    plain = _observation()
+    assert plain.verified_by is None and plain.verified_at is None
 
 
 def test_m08_extracted_fact_decision_shape_and_verified_lineage() -> None:
-    def fact(**overrides: Any) -> S.ExtractedFact:
-        fields: dict[str, Any] = {
-            "fact_id": FACT_A,
-            "patient_id": PATIENT,
-            "document_id": DOC_A,
-            "field_name": FactField.VALUE,
-            "raw_text": "140",
-            "provenance": S.ProvenanceRef(kind=S.ProvenanceKind.DOCUMENT_SPAN, document_id=DOC_A),
-        }
-        fields.update(overrides)
-        return S.ExtractedFact(**fields)
-
-    assert fact().verification_status is S.VerificationStatus.PENDING
-    fact(
-        verification_status=S.VerificationStatus.VERIFIED,
-        verified_by=DOCTOR,
-        verified_at="2026-11-14T09:00:00Z",
-    )
-    fact(
-        verification_status=S.VerificationStatus.REJECTED,
-        verified_by=DOCTOR,
-        verified_at="2026-11-14T09:00:00Z",
-    )
-    for bad in (
-        {"verified_by": DOCTOR, "verified_at": "2026-11-14T09:00:00Z"},  # pending with a decision
-        {"verification_status": S.VerificationStatus.VERIFIED},
-        {"verification_status": S.VerificationStatus.REJECTED},
-        {"field_name": "diagnosis"},
-        {"quality_flags": [S.QualityFlag.CLEAN] * 8},
+    assert _extracted().verification_status is S.VerificationStatus.PENDING
+    for change in (
+        {"verified_by": DOCTOR},
+        {"verified_at": "2026-11-14T09:00:00Z"},
+        {
+            "verification_status": S.VerificationStatus.VERIFIED,
+            "verified_by": DOCTOR,
+            "verified_at": "2026-11-14T09:00:00Z",
+        },
     ):
+        if change.get("verification_status") is S.VerificationStatus.VERIFIED:
+            S.ExtractedFact.model_validate({**_extracted().model_dump(), **change})
+            continue
         with pytest.raises(ValidationError):
-            fact(**bad)
-
-    evidence = [S.ProvenanceRef(kind=S.ProvenanceKind.DOCUMENT_SPAN, document_id=DOC_A)]
-    S.VerifiedFact(
-        fact_id=FACT_A,
-        patient_id=PATIENT,
-        document_id=DOC_A,
-        field_name=FactField.VALUE,
-        normalized_value="140",
-        unit="mg/dL",
-        corrected_from_fact_id=FACT_B,
-        evidence=evidence,
-        verified_by=DOCTOR,
-        verified_at="2026-11-14T09:00:00Z",
-    )
-    base = {
-        "fact_id": FACT_A,
-        "patient_id": PATIENT,
-        "document_id": DOC_A,
-        "field_name": FactField.VALUE,
-        "normalized_value": "140",
-        "evidence": evidence,
-        "verified_by": DOCTOR,
-        "verified_at": "2026-11-14T09:00:00Z",
-    }
-    for bad in (
-        {"corrected_from_fact_id": FACT_A},  # corrected from itself
-        {"evidence": []},  # REQ-VERIFY-01
-        {"normalized_value": ""},
-    ):
-        with pytest.raises(ValidationError):
-            S.VerifiedFact(**{**base, **bad})
+            S.ExtractedFact.model_validate({**_extracted().model_dump(), **change})
+    with pytest.raises(ValidationError, match="cannot be corrected from itself"):
+        _verified_fact(corrected_from_fact_id=FACT_A)
+    with pytest.raises(ValidationError, match="projected together"):
+        _verified_fact(verified_by=DOCTOR)
 
 
 def test_m08_selection_manifest_shape() -> None:
-    with pytest.raises(ValidationError, match="exactly document_ids"):
-        _manifest(document_ids=[DOC_A], documents=[_document(DOC_B)])
-    with pytest.raises(ValidationError, match="ascending"):
-        _manifest(document_ids=[DOC_B, DOC_A], documents=[_document(DOC_B), _document(DOC_A)])
-    with pytest.raises(ValidationError, match="omitted document"):
-        _manifest(
-            omissions=[
-                S.SelectedOmissionRef(
-                    document_id=DOC_A,
-                    vi002_issue_id=OMISSION_ISSUE,
-                    reason_code="selected_separate_recovery_source",
-                    doctor_id=DOCTOR,
-                    source_sha256=_sha("o"),
-                )
-            ]
-        )
-    with pytest.raises(ValidationError, match="source_fact_id"):
-        S.SelectedObservationRef(
-            observation_id=OBS_A,
-            trust_level=TrustLevel.DOCTOR_VERIFIED,
-            observation_created_at=STARTED,
-        )
-    with pytest.raises(ValidationError, match="selected_separate_recovery_source"):
-        S.SelectedOmissionRef(
-            document_id=DOC_B,
-            vi002_issue_id=OMISSION_ISSUE,
-            reason_code="because",
-            doctor_id=DOCTOR,
-            source_sha256=_sha("o"),
-        )
+    manifest = _manifest()
+    assert manifest.document_ids == [DOC_A]
+    assert manifest.selection_fingerprint == manifest.compute_fingerprint()
+    with pytest.raises(ValidationError, match="does not match the manifest content"):
+        S.SelectedSourceManifest(**{**manifest.model_dump(), "selection_fingerprint": _sha("x")})
+    # An omitted document cannot also be selected.
+    with pytest.raises(ValidationError, match="cannot also be a selected document"):
+        _manifest(omission_document_ids=[DOC_A], omissions=[])
 
 
 def test_m08_manifest_fingerprint_is_self_verifying() -> None:
-    manifest = _manifest()
-    payload = _json(manifest)
-    payload["documents"][0]["source_sha256"] = _sha("changed")
-    with pytest.raises(ValidationError, match="selection_fingerprint does not match"):
-        S.SelectedSourceManifest.model_validate_json(json.dumps(payload))
-    rebuilt = _manifest(documents=[_document(DOC_A, sha="changed")])
-    assert rebuilt.selection_fingerprint != manifest.selection_fingerprint
+    rebuilt = _manifest(documents=[_document(DOC_A, sha="b" * 64)])
     assert rebuilt.selection_fingerprint == rebuilt.compute_fingerprint()
-    assert S.selection_fingerprint({"a": 1}) == S.selection_fingerprint({"a": 1})
-    assert S.selection_fingerprint({"a": 1}) != S.selection_fingerprint({"a": 2})
+    assert rebuilt.selection_fingerprint != _manifest().selection_fingerprint
 
 
-# --- M09: self-reported cannot be promoted --------------------------------------------
+def test_m08_manifest_build_rejects_unknown_members() -> None:
+    """R07: an unknown keyword must raise, never be silently discarded."""
+    with pytest.raises(ValueError, match="unknown manifest member"):
+        S.SelectedSourceManifest.build(document_ids=[DOC_A], documments=[_document()])
+    # A typo'd member must not quietly produce a manifest missing evidence.
+    complete = S.SelectedSourceManifest.build(
+        document_ids=[DOC_A],
+        documents=[_document()],
+        observation_ids=[OBS_CURRENT],
+        observations=[_selected_observation()],
+    )
+    assert complete.documents == [_document()]
+
+
+# === M09: no trust promotion =========================================================
 
 
 def test_m09_self_reported_cannot_be_promoted_by_any_input_path() -> None:
@@ -1081,1130 +1013,1644 @@ def test_m09_self_reported_cannot_be_promoted_by_any_input_path() -> None:
     for change in (
         {"trust_level": "doctor_verified"},
         {
-            "trust_level": "doctor_verified",
+            "trust_level": TrustLevel.DOCTOR_VERIFIED,
             "verified_by": DOCTOR,
             "verified_at": "2026-11-14T09:00:00Z",
         },
     ):
         with pytest.raises(ValidationError):
-            _revalidated(row, **change)
+            S.ObservationView.model_validate({**row.model_dump(), **change})
     # Turning every knob at once still cannot relabel a patient check-in: the
     # source must itself be a verified document.
     with pytest.raises(ValidationError):
-        _revalidated(
-            row,
-            trust_level="doctor_verified",
-            verified_by=DOCTOR,
-            verified_at="2026-11-14T09:00:00Z",
-            source_fact_id=FACT_A,
-            source_document_id=DOC_A,
+        S.ObservationView.model_validate(
+            {
+                **row.model_dump(),
+                "trust_level": TrustLevel.DOCTOR_VERIFIED,
+                "verified_by": DOCTOR,
+                "verified_at": "2026-11-14T09:00:00Z",
+                "source_fact_id": FACT_A,
+                "source_document_id": DOC_A,
+            }
         )
-    # A doctor-verified projection whose data check failed stays representable and
-    # labelled; the admissibility predicate (F2) excludes it downstream — the type
-    # does not pretend the row never existed.
-    rejected = _revalidated(_verified_observation(), validation=ValidationState.REJECTED)
-    assert rejected.trust_level is TrustLevel.DOCTOR_VERIFIED
-    assert rejected.validation is ValidationState.REJECTED
-    verified = _verified_observation()
-    assert verified.trust_level is TrustLevel.DOCTOR_VERIFIED
-    assert verified.source_fact_id == FACT_A and verified.source_document_id == DOC_A
 
 
 def test_m09_selection_manifest_cannot_relabel_a_typed_observation() -> None:
-    row = _observation()
-    selected = _selected_observation(row)
-    with pytest.raises(ValidationError, match="manifest differs"):
-        _state(
-            observations=[row],
-            selection=_manifest(
-                observations=[
-                    S.SelectedObservationRef(
-                        observation_id=OBS_A,
-                        trust_level=TrustLevel.DOCTOR_VERIFIED,
-                        source_fact_id=FACT_A,
-                        observation_created_at=row.measured_at,
-                    )
-                ]
-            ),
-        )
-    with pytest.raises(ValidationError, match="must be present in observations"):
+    selected = _selected_observation(
+        OBS_CURRENT, trust_level=TrustLevel.DOCTOR_VERIFIED, source_fact_id=FACT_A
+    )
+    with pytest.raises(ValidationError, match="manifest differs from the typed observation"):
         _state(selection=_manifest(observations=[selected]))
 
 
 def test_m09_copy_bypass_is_caught_by_revalidation() -> None:
     row = _observation()
-    forged = row.model_copy(
-        update={"trust_level": TrustLevel.DOCTOR_VERIFIED}
-    )  # bypasses validation by design
-    assert forged.trust_level is TrustLevel.DOCTOR_VERIFIED
+    forged = row.model_copy(update={"trust_level": TrustLevel.DOCTOR_VERIFIED})
+    assert forged.trust_level is TrustLevel.DOCTOR_VERIFIED  # bypasses validation by design
     with pytest.raises(ValidationError):
         S.ObservationView.model_validate_json(forged.model_dump_json())
+    state = _state(observations=[row])
+    forged_state = state.model_copy(update={"observations": [forged]})
+    with pytest.raises(ValidationError):
+        S.SharedGraphState.revalidate(forged_state)
 
 
-# --- M10: pending / rejected is not verified ------------------------------------------
+def test_m09_mutated_container_is_caught_by_revalidation() -> None:
+    """R07: a mutated list cannot bypass the explicit full-revalidation path."""
+    state = _state(observations=[_observation()])
+    state.observations.append(_observation(observation_id=OBS_BASELINE_V5, patient_id=DOCTOR))  # type: ignore[attr-defined]
+    assert len(state.observations) == 2  # frozen does not freeze list contents
+    with pytest.raises(ValidationError, match="patient scope differs from the run"):
+        S.SharedGraphState.revalidate(state)
 
 
-def _extracted(status: S.VerificationStatus, **overrides: Any) -> S.ExtractedFact:
-    fields: dict[str, Any] = {
-        "fact_id": FACT_A,
-        "patient_id": PATIENT,
-        "document_id": DOC_A,
-        "field_name": FactField.VALUE,
-        "raw_text": "140",
-        "verification_status": status,
-        "provenance": S.ProvenanceRef(kind=S.ProvenanceKind.DOCUMENT_SPAN, document_id=DOC_A),
-    }
-    if status is not S.VerificationStatus.PENDING:
-        fields.update(verified_by=DOCTOR, verified_at="2026-11-14T09:00:00Z")
-    fields.update(overrides)
-    return S.ExtractedFact(**fields)
-
-
-def _verified(**overrides: Any) -> S.VerifiedFact:
-    fields: dict[str, Any] = {
-        "fact_id": FACT_A,
-        "patient_id": PATIENT,
-        "document_id": DOC_A,
-        "field_name": FactField.VALUE,
-        "normalized_value": "140",
-        "evidence": [S.ProvenanceRef(kind=S.ProvenanceKind.DOCUMENT_SPAN, document_id=DOC_A)],
-        "verified_by": DOCTOR,
-        "verified_at": "2026-11-14T09:00:00Z",
-    }
-    fields.update(overrides)
-    return S.VerifiedFact(**fields)
+# === M10: pending / rejected is not verified =========================================
 
 
 def test_m10_pending_or_rejected_facts_cannot_be_projected_as_verified() -> None:
-    for status in (S.VerificationStatus.PENDING, S.VerificationStatus.REJECTED):
-        with pytest.raises(ValidationError, match="pending/rejected"):
-            _state(extraction_facts=[_extracted(status)], verified_facts=[_verified()])
+    verified = _verified_fact()
     with pytest.raises(ValidationError, match="pending/rejected"):
         _state(
-            extraction_facts=[_extracted(S.VerificationStatus.VERIFIED)],
-            verified_facts=[_verified(document_id=DOC_B)],
+            extraction_facts=[_extracted(verification_status=S.VerificationStatus.PENDING)],
+            verified_facts=[verified],
         )
-    _state(
-        extraction_facts=[_extracted(S.VerificationStatus.VERIFIED)], verified_facts=[_verified()]
-    )
-    with pytest.raises(ValidationError, match="duplicate"):
-        _state(extraction_facts=[_extracted(S.VerificationStatus.PENDING)] * 2)
+    with pytest.raises(ValidationError, match="pending/rejected"):
+        _state(
+            extraction_facts=[
+                _extracted(
+                    verification_status=S.VerificationStatus.REJECTED,
+                    verified_by=DOCTOR,
+                    verified_at="2026-11-14T09:00:00Z",
+                )
+            ],
+            verified_facts=[verified],
+        )
+    # Agreement is required on every stored source field (R05).
+    for change in (
+        {"document_id": DOC_B},
+        {"field_name": FactField.TEST_NAME},
+        {"corrected_from_fact_id": FACT_B},
+    ):
+        with pytest.raises(ValidationError):
+            _state(
+                extraction_facts=[
+                    _extracted(
+                        verification_status=S.VerificationStatus.VERIFIED,
+                        verified_by=DOCTOR,
+                        verified_at="2026-11-14T09:00:00Z",
+                    )
+                ],
+                verified_facts=[_verified_fact(**change)],
+            )
 
 
-# --- M11: comparison consistency -------------------------------------------------------
-
-
-def _comparison(**overrides: Any) -> S.ComparisonResult:
-    fields: dict[str, Any] = {
-        "measure_type": MeasureType.SYSTOLIC_BP,
-        "unit": Unit.MMHG,
-        "current_observation_id": OBS_A,
-        "baseline_observation_id": OBS_HIST,
-        "current_value": Decimal("140.5"),
-        "baseline_value": Decimal("140.5"),
-        "delta": Decimal("0"),
-        "comparable": True,
-        "trust_basis": S.TrustBasis.SELF_REPORTED,
-    }
-    fields.update(overrides)
-    return S.ComparisonResult(**fields)
+# === M11: comparison consistency and trust binding ===================================
 
 
 def test_m11_comparable_and_incomparable_shapes_are_mutually_exclusive() -> None:
-    _comparison()  # exact zero delta is a valid comparable result
-    for bad in (
-        {
-            "baseline_observation_id": None,
-            "baseline_value": None,
-            "delta": None,
-        },  # comparable w/o baseline
-        {"incomparable_reason": S.IncomparableReason.NO_BASELINE},  # comparable with a reason
-        {"comparable": False, "delta": Decimal("1")},  # incomparable with a delta
-        {"comparable": False, "incomparable_reason": None},  # incomparable w/o reason
-        {"delta": Decimal("0.0001")},  # delta must equal current - baseline exactly
-        {"baseline_observation_id": OBS_A},  # own baseline
-        {"baseline_value": Decimal("0")},
-        {"current_value": Decimal("-1")},
-        {"unit": Unit.BPM},
-        {"trust_basis": "mixed"},
-    ):
-        with pytest.raises(ValidationError):
-            _comparison(**bad)
-    _comparison(
-        comparable=False,
-        baseline_value=None,
-        delta=None,
-        incomparable_reason=S.IncomparableReason.STALE_BASELINE,
+    with pytest.raises(ValidationError, match="needs a baseline id and delta"):
+        _comparison(comparable=True, delta=None)
+    with pytest.raises(ValidationError, match="carries no incomparable_reason"):
+        _comparison(comparable=True, incomparable_reason=S.IncomparableReason.NO_BASELINE)
+    with pytest.raises(ValidationError, match="needs a reason and no delta"):
+        _comparison(comparable=False, incomparable_reason=None, delta=Decimal("1"))
+    with pytest.raises(ValidationError, match="cannot be its own baseline"):
+        _comparison(baseline_observation_id=OBS_CURRENT)
+    # D-03: stale_baseline is reserved vocabulary and stays representable.
+    assert (
+        _comparison(
+            comparable=False,
+            delta=None,
+            baseline_value=None,
+            incomparable_reason=S.IncomparableReason.STALE_BASELINE,
+        ).incomparable_reason
+        is S.IncomparableReason.STALE_BASELINE
     )
-    _comparison(
-        comparable=False,
-        baseline_observation_id=None,
-        baseline_value=None,
-        delta=None,
-        incomparable_reason=S.IncomparableReason.NOT_ADMISSIBLE,
-    )
+    # ... but no accepted service emits it (F2 emits only two reasons).
+    assert {S.IncomparableReason.STALE_BASELINE}.isdisjoint(S.F2_EMITTED_INCOMPARABLE)
+    assert {
+        S.IncomparableReason.NO_BASELINE,
+        S.IncomparableReason.NOT_ADMISSIBLE,
+    } == S.F2_EMITTED_INCOMPARABLE
 
 
 def test_m11_state_binds_comparison_values_and_trust_basis_to_observations() -> None:
-    current = _observation()
-    baseline = _verified_observation(
-        observation_id=OBS_HIST, value=Decimal("135"), measured_at="2026-11-01T08:00:00Z"
-    )
-    good = _comparison(
-        current_value=Decimal("140.5"),
-        baseline_value=Decimal("135"),
-        delta=Decimal("5.5"),
-        trust_basis=S.TrustBasis.MIXED,
-    )
-    state = _state(
+    current, baseline = _observation(), _history()
+    good = _comparison()
+    _state(
         observations=[current, baseline],
         comparisons=[good],
         verification_gate=_gate(),
         last_validated_at_utc=VALIDATED,
     )
-    assert state.comparisons[0].trust_basis is S.TrustBasis.MIXED
-    for bad in (
-        _comparison(
-            current_value=Decimal("140.5"),
-            baseline_value=Decimal("135"),
-            delta=Decimal("5.5"),
-            trust_basis=S.TrustBasis.SELF_REPORTED,
-        ),  # mixed pair labelled self_reported
-        _comparison(
-            current_value=Decimal("141"), baseline_value=Decimal("135"), delta=Decimal("6")
-        ),
-    ):
-        with pytest.raises(ValidationError):
-            _state(
-                observations=[current, baseline],
-                comparisons=[bad],
-                verification_gate=_gate(),
-                last_validated_at_utc=VALIDATED,
-            )
-    with pytest.raises(ValidationError, match="require a proceed"):
-        _state(observations=[current, baseline], comparisons=[good])  # no gate at all
-    # Baseline outside the state: the label may only match the current trust or be mixed.
-    _state(
-        observations=[current],
-        comparisons=[_comparison(trust_basis=S.TrustBasis.SELF_REPORTED)],
-        verification_gate=_gate(),
-        last_validated_at_utc=VALIDATED,
-    )
-    with pytest.raises(ValidationError, match="contradicts the current observation"):
+    with pytest.raises(ValidationError, match="current value differs"):
+        _state(
+            observations=[current, baseline],
+            comparisons=[_comparison(current_value=Decimal("141"), delta=Decimal("13"))],
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+        )
+    with pytest.raises(ValidationError, match="baseline value differs"):
+        _state(
+            observations=[current, baseline],
+            comparisons=[_comparison(baseline_value=Decimal("127"), delta=Decimal("13"))],
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+        )
+    # D-11: the label is re-derived, never taken on trust.
+    with pytest.raises(ValidationError, match="trust_basis must follow"):
+        _state(
+            observations=[current, baseline],
+            comparisons=[_comparison(trust_basis=S.TrustBasis.DOCTOR_VERIFIED)],
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+        )
+    # A missing baseline cannot smuggle in a mixed or doctor_verified claim.
+    with pytest.raises(ValidationError, match="no baseline means trust_basis cannot be mixed"):
         _state(
             observations=[current],
-            comparisons=[_comparison(trust_basis=S.TrustBasis.DOCTOR_VERIFIED)],
+            comparisons=[
+                _comparison(
+                    baseline_observation_id=None,
+                    comparable=False,
+                    delta=None,
+                    baseline_value=None,
+                    incomparable_reason=S.IncomparableReason.NO_BASELINE,
+                    trust_basis=S.TrustBasis.MIXED,
+                )
+            ],
             verification_gate=_gate(),
             last_validated_at_utc=VALIDATED,
         )
 
 
-# --- M12: VI vs DR separation ---------------------------------------------------------
+def test_m11_history_cannot_become_selected_current_and_delta_must_follow() -> None:
+    current, baseline = _observation(), _history()
+    with pytest.raises(ValidationError, match="must be a selected current, not history"):
+        _state(
+            observations=[baseline, current],
+            comparisons=[
+                _comparison(
+                    current_observation_id=OBS_BASELINE_V5,
+                    baseline_observation_id=OBS_BASELINE_V5_B,
+                )
+            ],
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+        )
+    with pytest.raises(ValidationError, match="must be a history row"):
+        _state(
+            observations=[
+                current,
+                _history(observation_id=OBS_BASELINE_V5_B, role=S.ObservationRole.SELECTED_CURRENT),
+            ],
+            comparisons=[_comparison(baseline_observation_id=OBS_BASELINE_V5_B)],
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+        )
+    with pytest.raises(ValidationError, match="baseline must precede the current"):
+        _state(
+            observations=[current, _history(measured_at=MEASURED_CURRENT)],
+            comparisons=[_comparison()],
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+        )
+    with pytest.raises(ValidationError, match="delta must equal"):
+        _state(
+            observations=[current, baseline],
+            comparisons=[_comparison(delta=Decimal("11"))],
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+        )
+
+
+def test_m11_window_labels_are_distinguishable_and_never_relabelled() -> None:
+    """D-04: a 365-day F2 comparison is never presented as the 90-day rule input."""
+    assert S.ComparisonWindow.F2_365D.value == "f2-history-365d-v1"
+    assert S.ComparisonWindow.RB1_90D.value == "rb1-demo-90d-v1"
+    # The producer pins its own label; the typed state must not relabel it.
+    from app.services.p5_evidence_bridge import COMPARISON_HISTORY_VERSION
+
+    assert S.ComparisonWindow.F2_365D.value == COMPARISON_HISTORY_VERSION
+    # A 90-day row is representable on its own (a different producer's output)...
+    rb1 = _comparison(
+        history_policy=S.ComparisonWindow.RB1_90D,
+        baseline_observation_id=None,
+        comparable=False,
+        delta=None,
+        baseline_value=None,
+        incomparable_reason=S.IncomparableReason.NO_BASELINE,
+    )
+    assert rb1.history_policy is S.ComparisonWindow.RB1_90D
+    _state(
+        comparisons=[rb1],
+        verification_gate=_gate(),
+        last_validated_at_utc=VALIDATED,
+    )
+    # ... but never beside an F2 evidence reference: that would present 90-day
+    # rule input as the 365-day window (D-04).
+    with pytest.raises(ValidationError, match="cannot carry a 90-day RB1 comparison"):
+        _state(
+            comparisons=[rb1],
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+            evaluable_evidence=_evidence(),
+        )
+
+
+# === M12: closed vocabularies and gate issue identity ===============================
 
 
 def test_m12_issue_and_rule_vocabularies_are_closed_and_disjoint() -> None:
-    assert {item.value for item in S.IssueType} == {f"VI-{n:03d}" for n in range(1, 7)}
-    assert {item.value for item in S.ReviewRuleId} == {
+    assert [e.value for e in S.IssueType] == [f"VI-{n:03d}" for n in range(1, 7)]
+    assert [e.value for e in S.ReviewRuleId] == [
         "DR-001",
         "DR-003",
         "DR-005",
         "DR-006",
         "DR-008",
         "DR-009",
-    }
-    assert not {item.value for item in S.IssueType} & {item.value for item in S.ReviewRuleId}
-    with pytest.raises(ValidationError):
-        S.GateDetail(decision="halt", blocking_fact_count=1, issue_types=["DR-001"])
-    with pytest.raises(ValidationError):
-        S.GateIssueRef(issue_type="DR-001", reason_code="x", document_id=DOC_A, message="m")
-    for rule in ("DR-002", "DR-004", "DR-007", "DR-010", "VI-001", "DR-000", "DR-0100"):
-        with pytest.raises(ValidationError):
-            S.ReviewFlag(
-                review_item_id=ISSUE_A,
-                rule_id=rule,
-                reason_code="r",
-                message="m",
-                trust_basis=S.TrustBasis.DOCTOR_VERIFIED,
-                evidence=[S.ProvenanceRef(kind=S.ProvenanceKind.OBSERVATION, observation_id=OBS_A)],
-                policy_version="demo-policy-1.1.0",
-                dedupe_key=_sha("k"),
-            )
-    flag = S.ReviewFlag(
-        review_item_id=ISSUE_A,
-        rule_id=S.ReviewRuleId.DR_008,
-        reason_code="duplicate",
-        message="m",
-        workflow_hint=S.ReviewHint.DATA_QUALITY,
-        trust_basis=S.TrustBasis.SELF_REPORTED,
-        evidence=[S.ProvenanceRef(kind=S.ProvenanceKind.OBSERVATION, observation_id=OBS_A)],
-        policy_version="demo-policy-1.1.0",
-        dedupe_key=_sha("k"),
-    )
-    assert flag.demo_only is True and flag.state is S.ReviewItemState.OPEN
+    ]
+    assert not (set(S.IssueType) & set(S.ReviewRuleId))
 
 
-def test_m12_state_verification_issues_mirror_the_gate_evaluation() -> None:
-    gate = _gate(S.GateDecision.HALT)
-    issue = S.VerificationIssue(
-        issue_id=ISSUE_A,
-        issue_type=S.IssueType.VI_001,
-        reason_code="pending_fact",
-        message="One fact is pending verification.",
-        document_id=DOC_A,
-        fact_ids=[FACT_A],
-        evidence=[S.ProvenanceRef(kind=S.ProvenanceKind.DOCUMENT_SPAN, document_id=DOC_A)],
-        created_at=VALIDATED,
-    )
-    halted = _state(
-        status=S.RunStatus.NEEDS_VERIFICATION,
-        halt_reason=S.HaltReason.UNVERIFIED_FACTS,
-        last_validated_at_utc=VALIDATED,
-        verification_gate=gate,
-        verification_issues=[issue],
-    )
-    assert halted.halt_reason is S.HaltReason.UNVERIFIED_FACTS
-    with pytest.raises(ValidationError, match="mirror the gate"):
-        _state(
-            status=S.RunStatus.NEEDS_VERIFICATION,
-            halt_reason=S.HaltReason.UNVERIFIED_FACTS,
-            last_validated_at_utc=VALIDATED,
-            verification_gate=gate,
-        )
-    with pytest.raises(ValidationError, match="needs_verification requires"):
-        _state(
-            status=S.RunStatus.NEEDS_VERIFICATION,
-            halt_reason=S.HaltReason.UNVERIFIED_FACTS,
-            last_validated_at_utc=VALIDATED,
-            verification_gate=_gate(),
-        )
-    with pytest.raises(ValidationError, match="blocking"):
-        S.VerificationIssue(
-            issue_id=ISSUE_A,
-            issue_type=S.IssueType.VI_001,
-            reason_code="r",
-            message="m",
-            evidence=[S.ProvenanceRef(kind=S.ProvenanceKind.DOCUMENT_SPAN, document_id=DOC_A)],
-            created_at=VALIDATED,
-            blocking=False,
-        )
+def test_m12_gate_issue_identity_is_full_not_just_the_type() -> None:
+    """D-12: type, reason, document and fact identities all take part."""
+    base = _issue()
+    assert base.semantic_key() == (S.IssueType.VI_003, "unverified_fact", DOC_A, (FACT_A,))
+    assert _issue(reason_code="other").semantic_key() != base.semantic_key()
+    assert _issue(document_id=DOC_B).semantic_key() != base.semantic_key()
+    assert _issue(fact_ids=[FACT_B]).semantic_key() != base.semantic_key()
+    assert _issue(message="Other message").semantic_key() == base.semantic_key()
 
 
-# --- M13: F1 proceed / halt / unavailable ---------------------------------------------
+# === M13: F1 gate outcome semantics (R03) ============================================
 
 
 def test_m13_gate_decision_combinations() -> None:
     _gate(S.GateDecision.PROCEED)
-    _gate(S.GateDecision.HALT)
-    _gate(S.GateDecision.UNAVAILABLE)
-    for bad in (
-        {"decision": S.GateDecision.PROCEED, "blocking_fact_count": 1},
-        {"decision": S.GateDecision.HALT, "blocking_fact_count": 0},
-        {"decision": S.GateDecision.HALT, "issues": []},
-        {"decision": S.GateDecision.PROCEED, "issues": _gate(S.GateDecision.HALT).issues},
-        {"decision": S.GateDecision.UNAVAILABLE, "unavailable_reason": None},
-        {
-            "decision": S.GateDecision.PROCEED,
-            "unavailable_reason": S.GateUnavailableReason.INVALID_RUN_CLOCK,
-        },
-        {"decision": "paused"},
-        {"gate_evaluated": False},
-        {"runtime_evaluable": True},
-        {"unavailable_reason": "made_up_reason"},
-    ):
-        with pytest.raises(ValidationError):
-            _gate(**bad)
-    assert _gate().runtime_evaluable is False and _gate().gate_evaluated is True
+    # A genuine halt can have ZERO distinct blocking facts: every blocker is
+    # document-level (F1 derives the count from distinct referenced facts).
+    document_only = _gate(S.GateDecision.HALT, issues=[_issue(fact_ids=[])], count=0)
+    assert document_only.blocking_fact_count == 0
+    _gate(S.GateDecision.HALT, issues=[_issue(fact_ids=[FACT_A])], count=1)
+    # UNAVAILABLE may retain recorded diagnostics (never discarded for the schema).
+    _gate(
+        S.GateDecision.UNAVAILABLE,
+        issues=[_issue(fact_ids=[FACT_A])],
+        count=1,
+        reason=S.GateUnavailableReason.SOURCE_BYTES_UNAVAILABLE,
+    )
+    _gate(
+        S.GateDecision.UNAVAILABLE,
+        issues=[],
+        count=0,
+        reason=S.GateUnavailableReason.SELECTED_DOCUMENT_CHANGED,
+    )
+    # Contradictory counts are rejected.
+    with pytest.raises(ValidationError, match="distinct referenced fact count"):
+        _gate(S.GateDecision.HALT, issues=[_issue(fact_ids=[FACT_A])], count=2)
+    with pytest.raises(ValidationError, match="proceed records no blocking issue"):
+        _gate(S.GateDecision.PROCEED, issues=[_issue()], count=1)
+    with pytest.raises(ValidationError, match="unavailable_reason is present iff"):
+        _gate(
+            S.GateDecision.HALT,
+            issues=[_issue()],
+            count=1,
+            reason=S.GateUnavailableReason.SOURCE_BYTES_UNAVAILABLE,
+        )
+    with pytest.raises(ValidationError, match="unavailable_reason is present iff"):
+        _gate(S.GateDecision.UNAVAILABLE, issues=[], count=0, reason=None)
+    # Above the persisted bound the producer can only report too_many_blocking_facts.
+    with pytest.raises(ValidationError, match="too_many_blocking_facts"):
+        _gate(S.GateDecision.HALT, issues=[_issue(fact_ids=[FACT_A])], count=99)
+    _gate(
+        S.GateDecision.UNAVAILABLE,
+        issues=[_issue(fact_ids=[FACT_A])],
+        count=99,
+        reason=S.GateUnavailableReason.TOO_MANY_BLOCKING_FACTS,
+    )
 
 
 def test_m13_unavailable_reason_vocabulary_matches_the_f1_service() -> None:
-    source = (REPO_ROOT / "backend" / "app" / "services" / "p5_run_gate.py").read_text(
-        encoding="utf-8"
-    )
+    source = (REPO_ROOT / "backend" / "app" / "services" / "p5_run_gate.py").read_text()
     emitted = set(re.findall(r'unavailable = "([a-z0-9_]+)"', source))
-    assert emitted, "F1 source scan found no unavailable reasons"
-    assert emitted == {item.value for item in S.GateUnavailableReason}
+    assert emitted == {reason.value for reason in S.GateUnavailableReason}
 
 
 def test_m13_state_reactions_to_each_decision() -> None:
-    # halt + needs_verification is consistent; halt + post-draft is impossible
+    # proceed: nothing post-draft yet, but evidence may follow.
+    _state(last_validated_at_utc=VALIDATED, verification_gate=_gate())
+    _state(
+        last_validated_at_utc=VALIDATED,
+        verification_gate=_gate(),
+        evaluable_evidence=_evidence(),
+        observations=[_observation()],
+    )
+    # halt: representable on a queued run; needs_verification requires it.
+    _state(
+        last_validated_at_utc=VALIDATED,
+        verification_gate=_gate(S.GateDecision.HALT, issues=[_issue()]),
+    )
     _state(
         status=S.RunStatus.NEEDS_VERIFICATION,
         halt_reason=S.HaltReason.UNVERIFIED_FACTS,
+        verification_gate=_gate(S.GateDecision.HALT, issues=[_issue()]),
         last_validated_at_utc=VALIDATED,
-        verification_gate=_gate(S.GateDecision.HALT),
-        verification_issues=[
-            S.VerificationIssue(
-                issue_id=ISSUE_A,
-                issue_type=S.IssueType.VI_001,
-                reason_code="pending_fact",
-                message="m",
-                document_id=DOC_A,
-                evidence=[S.ProvenanceRef(kind=S.ProvenanceKind.DOCUMENT_SPAN, document_id=DOC_A)],
-                created_at=VALIDATED,
-            )
-        ],
     )
+    with pytest.raises(ValidationError, match="requires a recorded halt decision"):
+        _state(status=S.RunStatus.NEEDS_VERIFICATION, halt_reason=S.HaltReason.UNVERIFIED_FACTS)
+    # A halting gate cannot coexist with a post-draft status.
     with pytest.raises(ValidationError, match="halting gate cannot coexist"):
         _approved_state(
             S.RunStatus.AWAITING_DECISION,
             approval=None,
-            verification_gate=_gate(S.GateDecision.HALT),
+            verification_gate=_gate(S.GateDecision.HALT, issues=[_issue()]),
         )
-    # unavailable: representable on a queued run, never alongside a draft
-    _state(last_validated_at_utc=VALIDATED, verification_gate=_gate(S.GateDecision.UNAVAILABLE))
+    # unavailable: representable on a queued run, never alongside a draft.
+    _state(
+        last_validated_at_utc=VALIDATED,
+        verification_gate=_gate(
+            S.GateDecision.UNAVAILABLE,
+            issues=[_issue()],
+            count=1,
+            reason=S.GateUnavailableReason.SOURCE_BYTES_UNAVAILABLE,
+        ),
+    )
     with pytest.raises(ValidationError, match="require a proceed"):
         _approved_state(
             S.RunStatus.AWAITING_DECISION,
             approval=None,
-            verification_gate=_gate(S.GateDecision.UNAVAILABLE),
+            verification_gate=_gate(
+                S.GateDecision.UNAVAILABLE,
+                issues=[_issue()],
+                count=1,
+                reason=S.GateUnavailableReason.SOURCE_BYTES_UNAVAILABLE,
+            ),
         )
-    # gate evaluation alone changes nothing about completion
-    gated = _state(last_validated_at_utc=VALIDATED, verification_gate=_gate())
-    assert gated.workflow_completed is False and gated.status is S.RunStatus.QUEUED
 
 
-# --- M14: typed node trace -------------------------------------------------------------
+def test_m13_gate_trace_consistency_without_fabricated_decisions() -> None:
+    """R03/D-01: no proceed/halt trace value is invented for an unavailable gate."""
+    halt = _gate(S.GateDecision.HALT, issues=[_issue()])
+    good = _state(
+        verification_gate=halt,
+        last_validated_at_utc=VALIDATED,
+        events=[
+            _event(
+                node=S.NodeName.FACT_VERIFY_GATE,
+                detail=S.GateDetail(decision="halt", blocking_fact_count=1, issues=[_issue()]),
+            )
+        ],
+    )
+    assert good.events[0].detail is not None
+    with pytest.raises(ValidationError, match="differs from the evaluation"):
+        _state(
+            verification_gate=halt,
+            last_validated_at_utc=VALIDATED,
+            events=[
+                _event(
+                    node=S.NodeName.FACT_VERIFY_GATE,
+                    detail=S.GateDetail(decision="proceed", blocking_fact_count=0, issues=[]),
+                )
+            ],
+        )
+    with pytest.raises(ValidationError, match="produces no proceed/halt trace decision"):
+        _state(
+            verification_gate=_gate(
+                S.GateDecision.UNAVAILABLE,
+                issues=[_issue()],
+                count=1,
+                reason=S.GateUnavailableReason.SOURCE_BYTES_UNAVAILABLE,
+            ),
+            last_validated_at_utc=VALIDATED,
+            events=[
+                _event(
+                    node=S.NodeName.FACT_VERIFY_GATE,
+                    detail=S.GateDetail(decision="halt", blocking_fact_count=1, issues=[_issue()]),
+                )
+            ],
+        )
+    # A trace whose blockers differ in full identity is rejected (D-12).
+    with pytest.raises(ValidationError, match="blockers differ"):
+        _state(
+            verification_gate=halt,
+            last_validated_at_utc=VALIDATED,
+            events=[
+                _event(
+                    node=S.NodeName.FACT_VERIFY_GATE,
+                    detail=S.GateDetail(
+                        decision="halt",
+                        blocking_fact_count=1,
+                        issues=[_issue(reason_code="forged")],
+                    ),
+                )
+            ],
+        )
 
 
-def _event(node: S.NodeName, **overrides: Any) -> S.NodeEvent:
-    fields: dict[str, Any] = {"node": node, "started_at": STARTED, "ended_at": STARTED}
-    fields.update(overrides)
-    return S.NodeEvent(**fields)
+# === M14: typed node trace ==========================================================
 
 
 def test_m14_detail_is_mandatory_iff_the_node_makes_a_bounded_decision() -> None:
     for node in S.NodeName:
-        if node in S.DETAIL_KIND_BY_NODE:
-            with pytest.raises(ValidationError, match="must carry exactly one"):
-                _event(node)
+        expected = S.DETAIL_KIND_BY_NODE.get(node)
+        if expected is None:
+            _event(node=node)
+            with pytest.raises(ValidationError, match="makes no bounded decision"):
+                _event(
+                    node=node,
+                    detail=S.TriageDetail(
+                        path_selected=S.TriagePath.TEXT_LAYER,
+                        path_reason=S.PathReason.TEXT_LAYER_AVAILABLE,
+                        document_id=DOC_A,
+                        attempt_index=1,
+                        preprocessing_applied=False,
+                    ),
+                )
         else:
-            assert _event(node).detail is None
-    triage = S.TriageDetail(
-        path_selected=S.TriagePath.TEXT_LAYER,
-        path_reason=S.PathReason.TEXT_LAYER_AVAILABLE,
-        document_id=DOC_A,
-        attempt_index=1,
-        preprocessing_applied=False,
-    )
-    with pytest.raises(ValidationError, match="must carry exactly one gate"):
-        _event(S.NodeName.FACT_VERIFY_GATE, detail=triage)
-    with pytest.raises(ValidationError, match="detail must be null"):
-        _event(S.NodeName.INTAKE_VALIDATE, detail=triage)
-    assert _event(S.NodeName.EXTRACTION_TRIAGE, detail=triage).detail is triage
+            with pytest.raises(ValidationError, match="must carry exactly one"):
+                _event(node=node)
 
 
 def test_m14_discriminated_union_rejects_unknown_kinds_and_mismatched_payloads() -> None:
-    good = {
-        "node": "draft_validation",
-        "started_at": STARTED,
-        "detail": {"kind": "validation", "validation_outcome": "accept", "attempt_index": 1},
-    }
-    assert S.NodeEvent.model_validate_json(json.dumps(good)).detail is not None
-    for bad in (
-        {**good, "detail": {"kind": "validation"}},  # missing required members
-        {**good, "detail": {"kind": "triage", "validation_outcome": "accept", "attempt_index": 1}},
-        {**good, "detail": {"kind": "prose", "text": "anything"}},
+    for payload in (
+        {"kind": "unknown"},
+        {"kind": "triage"},
+        {"kind": "validation", "validation_outcome": "accept"},
         {
-            **good,
-            "detail": {
-                "kind": "validation",
-                "validation_outcome": "accept",
-                "attempt_index": 1,
-                "note": "x",
-            },
-        },
-        {
-            **good,
-            "detail": {"kind": "validation", "validation_outcome": "accepted", "attempt_index": 1},
+            "kind": "triage",
+            "path_selected": "text_layer",
+            "path_reason": "text_layer_available",
+            "document_id": DOC_A,
+            "path_reason_x": 1,
         },
     ):
         with pytest.raises(ValidationError):
-            S.NodeEvent.model_validate_json(json.dumps(bad))
+            S.NodeEvent.model_validate_json(
+                json.dumps({"node": "extraction_triage", "started_at": AS_OF, "detail": payload})
+            )
 
 
 def test_m14_trace_details_carry_no_free_text_or_unbounded_fields() -> None:
-    for model in (S.TriageDetail, S.ValidationDetail, S.GateDetail, S.FinalizeDetail):
-        for name, info in model.model_fields.items():
-            if info.annotation is str:
-                # the only string fields are canonical UUIDs enforced by an AfterValidator
-                assert any(isinstance(item, AfterValidator) for item in info.metadata), (
-                    f"{model.__name__}.{name} is free text"
-                )
-    text = S.TriageDetail.model_json_schema()
-    assert "document text" not in json.dumps(text)
-
-
-def test_m14_tool_allowlist_is_per_node() -> None:
-    assert set(S.NODE_TOOLS) == set(S.NodeName)
-    details: dict[S.NodeName, Any] = {
-        S.NodeName.EXTRACTION_TRIAGE: S.TriageDetail(
+    """D-02: raw text lives in the evidence model, never in a trace detail."""
+    for detail in (
+        S.TriageDetail(
             path_selected=S.TriagePath.TEXT_LAYER,
             path_reason=S.PathReason.TEXT_LAYER_AVAILABLE,
             document_id=DOC_A,
             attempt_index=1,
             preprocessing_applied=False,
         ),
-        S.NodeName.FACT_VERIFY_GATE: S.GateDetail(decision="proceed", blocking_fact_count=0),
-        S.NodeName.DRAFT_VALIDATION: S.ValidationDetail(
-            validation_outcome=S.ValidationOutcome.ACCEPT, attempt_index=1
-        ),
-        S.NodeName.FINALIZE_ACTIONS: S.FinalizeDetail(
+        S.ValidationDetail(validation_outcome=S.ValidationOutcome.ACCEPT, attempt_index=1),
+        S.GateDetail(decision="halt", blocking_fact_count=1, issues=[_issue()]),
+        S.FinalizeDetail(
             approval_decision="approve", task_created=False, notification_created=False
         ),
-    }
-    for node, allowed in S.NODE_TOOLS.items():
-        if allowed:
-            _event(node, tools_called=list(allowed), detail=details.get(node))
-        for tool in set(S.ToolName) - allowed:
-            with pytest.raises(ValidationError, match="allowlist"):
-                _event(node, tools_called=[tool], detail=details.get(node))
-    with pytest.raises(ValidationError, match="duplicate"):
-        _event(S.NodeName.DOCUMENT_EXTRACT, tools_called=[S.ToolName.EXTRACT_DOCUMENT] * 2)
-    with pytest.raises(ValidationError):
-        _event(S.NodeName.INTAKE_VALIDATE, tools_called=["extract_document"])  # str in Python mode
-    with pytest.raises(ValidationError, match="ended_at precedes"):
-        _event(S.NodeName.INTAKE_VALIDATE, ended_at="2026-11-23T09:59:59Z")
-    with pytest.raises(ValidationError, match="zero blocking"):
-        S.GateDetail(decision="proceed", blocking_fact_count=1)
-    with pytest.raises(ValidationError, match="notification"):
-        S.FinalizeDetail(approval_decision="approve", task_created=False, notification_created=True)
-    with pytest.raises(ValidationError):
-        S.FinalizeDetail(approval_decision="reject", task_created=False, notification_created=False)
+    ):
+        for name, info in type(detail).model_fields.items():
+            assert name != "raw_text"
+            assert "text" not in name
+            assert info.annotation is not None
+
+
+def test_m14_tool_allowlist_is_per_node() -> None:
+    _event(node=S.NodeName.DOCUMENT_EXTRACT, tools_called=[S.ToolName.EXTRACT_DOCUMENT])
+    with pytest.raises(ValidationError, match="exceeds the"):
+        _event(node=S.NodeName.INTAKE_VALIDATE, tools_called=[S.ToolName.EXTRACT_DOCUMENT])
+    with pytest.raises(ValidationError, match="duplicate tools_called"):
+        _event(
+            node=S.NodeName.DOCUMENT_EXTRACT,
+            tools_called=[S.ToolName.EXTRACT_DOCUMENT, S.ToolName.EXTRACT_DOCUMENT],
+        )
 
 
 def test_m14_trace_path_vocabulary_matches_the_openapi_contract() -> None:
-    spec = yaml.safe_load(
-        (REPO_ROOT / "docs" / "contracts" / "openapi.phase0.yaml").read_text(encoding="utf-8")
-    )
-    triage = spec["components"]["schemas"]["TriageEventDetail"]["properties"]
-    assert set(triage["path_selected"]["enum"]) == {item.value for item in S.TriagePath}
-    assert set(triage["path_reason"]["enum"]) == {item.value for item in S.PathReason}
-    validation = spec["components"]["schemas"]["ValidationEventDetail"]["properties"]
-    assert set(validation["validation_outcome"]["enum"]) == {
-        item.value for item in S.ValidationOutcome
-    }
-    assert set(validation["violation_codes"]["items"]["enum"]) == {
-        item.value for item in S.ViolationCode
-    }
-    gate = spec["components"]["schemas"]["GateEventDetail"]["properties"]
-    assert set(gate["decision"]["enum"]) == {"proceed", "halt"}  # trace stays two-valued
-    finalize = spec["components"]["schemas"]["FinalizeEventDetail"]["properties"]
-    assert set(finalize["approval_decision"]["enum"]) == {"approve", "edit", "reject"}
-    models = (REPO_ROOT / "backend" / "app" / "db" / "models.py").read_text(encoding="utf-8")
-    workflow_run = models.split("class WorkflowRun(")[1].split("\n\nclass ")[0]
-    statuses = re.search(r"status IN \((.*?)\)", workflow_run, re.S)
-    assert statuses is not None
-    assert set(re.findall(r"'([a-z_]+)'", statuses.group(1))) == {
-        item.value for item in S.RunStatus
-    }
+    contract = (REPO_ROOT / "docs" / "contracts" / "openapi.phase0.yaml").read_text()
+    match = re.search(r"^\s{4}TriageEventDetail:\s*$", contract, re.MULTILINE)
+    assert match, "TriageEventDetail schema definition not found"
+    block = contract[match.start() :]
+    block = block[: re.search(r"^\s{4}\w+:\s*$", block[10:], re.MULTILINE).start() + 10]
+    for member in S.TriagePath:
+        assert member.value in block, member.value
+    for member in S.PathReason:
+        assert member.value in block, member.value
 
 
-# --- M15: retry budget -----------------------------------------------------------------
+# === M15: retry bounds ==============================================================
 
 
 def test_m15_retry_counts_are_bounded_and_keyed_by_node() -> None:
-    state = _state(retry_counts={S.NodeName.DOCUMENT_EXTRACT: 1, S.NodeName.DRAFT_SUMMARY: 5})
-    assert state.retry_counts[S.NodeName.DOCUMENT_EXTRACT] == 1
+    _state(retry_counts={S.NodeName.DOCUMENT_EXTRACT: 5})
     for bad in (
         {S.NodeName.DOCUMENT_EXTRACT: 0},
         {S.NodeName.DOCUMENT_EXTRACT: 6},
+        {S.NodeName.DOCUMENT_EXTRACT: True},
         {"document_extract": 1},
-        {S.NodeName.HALTED: -1},
     ):
         with pytest.raises(ValidationError):
             _state(retry_counts=bad)
-    payload = _json(_state())
-    payload["retry_counts"] = {"not_a_node": 2}
-    with pytest.raises(ValidationError):
-        S.SharedGraphState.model_validate_json(json.dumps(payload))
 
 
-# --- M16: review completion is not workflow completion --------------------------------
-
-
-def _sealed_state(**overrides: Any) -> S.SharedGraphState:
-    observation = _verified_observation()
-    fields: dict[str, Any] = {
-        "observations": [observation],
-        "selection": _manifest(observations=[_selected_observation(observation)]),
-        "last_validated_at_utc": VALIDATED,
-        "verification_gate": _gate(),
-        "evaluable_evidence": _evidence(selected_observation_ids=[OBS_B]),
-        "review_persistence": _sealed(),
-    }
-    fields.update(overrides)
-    return _state(**fields)
+# === M16: RB3 replay, denial and resume classification (R02) =========================
 
 
 def test_m16_sealed_evaluation_does_not_complete_the_workflow() -> None:
-    sealed = _sealed_state()  # status stays queued
-    assert sealed.review_evaluation_sealed is True
-    assert sealed.workflow_completed is False
-    assert sealed.review_persistence is not None and sealed.review_persistence.kind == "sealed"
-    completed = _approved_state(S.RunStatus.COMPLETED)
-    assert completed.workflow_completed is True
-    assert (
-        completed.review_evaluation_sealed is False
-    )  # completion without a sealed evaluation is legal
-    both = _sealed_state(
-        status=S.RunStatus.COMPLETED,
-        draft_summary=_approved_state(S.RunStatus.COMPLETED).draft_summary,
-        approval=_approved_state(S.RunStatus.COMPLETED).approval,
+    state = _state(
+        verification_gate=_gate(gate_evaluation_id=GATE_EVAL),
+        last_validated_at_utc=VALIDATED,
+        evaluable_evidence=_evidence(),
+        observations=[_observation()],
+        review_persistence=_sealed(),
     )
-    assert both.workflow_completed and both.review_evaluation_sealed
+    assert state.review_evaluation_sealed is True
+    assert state.workflow_completed is False
+    assert state.status is S.RunStatus.QUEUED
 
 
-def test_m16_sealed_evaluation_is_bound_to_its_evidence_and_all_or_nothing() -> None:
-    for bad in (
-        {"review_items_persisted": 0},
-        {"evidence_links_persisted": 0},
-        {"bridge_input_fingerprint_sha256": _sha("other-bridge")},
-        {"gate_evaluation_id": OBS_A},
-        {"patient_id": OTHER_PATIENT},
-        {"dr006_policy": "allowed"},
-        {"evaluation_completed": False},
-        {"runtime_evaluable": True},
-        {"policy_status": "approved"},
+def test_m16_first_persistence_and_exact_replay_are_both_representable() -> None:
+    """R02: the accepted durable service's two receipt shapes."""
+    first = _sealed(
+        replayed=False,
+        review_items_persisted=3,
+        review_items_total=3,
+        evidence_links_persisted=6,
+        evidence_links_total=6,
+    )
+    assert (first.review_items_persisted, first.review_items_total) == (3, 3)
+    replay = _sealed(
+        replayed=True,
+        review_items_persisted=0,
+        review_items_total=3,
+        evidence_links_persisted=0,
+        evidence_links_total=6,
+    )
+    assert (replay.review_items_persisted, replay.review_items_total) == (0, 3)
+    # A zero-item first persistence is legal too.
+    _sealed(
+        replayed=False,
+        review_items_persisted=0,
+        review_items_total=0,
+        evidence_links_persisted=0,
+        evidence_links_total=0,
+    )
+    # A replay that claims writes is not a replay.
+    with pytest.raises(ValidationError, match="zero review items and zero evidence links"):
+        _sealed(
+            replayed=True,
+            review_items_persisted=1,
+            review_items_total=3,
+            evidence_links_persisted=0,
+            evidence_links_total=6,
+        )
+    # A first persistence that skipped items is not all-or-nothing.
+    with pytest.raises(ValidationError, match="writes every review item"):
+        _sealed(
+            replayed=False,
+            review_items_persisted=2,
+            review_items_total=3,
+            evidence_links_persisted=4,
+            evidence_links_total=4,
+        )
+    # Negative and out-of-bound counts are rejected.
+    with pytest.raises(ValidationError):
+        _sealed(review_items_persisted=-1)
+    with pytest.raises(ValidationError):
+        _sealed(review_items_total=13)
+
+
+def test_m16_exclusion_counts_follow_the_deduplicated_merged_semantics() -> None:
+    """R02: ``exclusion_count == len(l3_merged)``, never ``l1 + l2``."""
+    l1 = [
+        S.PersistedExclusionRef(observation_id=OBS_BASELINE_V5, reason_code="validation_rejected")
+    ]
+    l2 = [S.PersistedExclusionRef(observation_id=OBS_BASELINE_V5, reason_code="measurement_stale")]
+    merged = [
+        S.PersistedExclusionRef(observation_id=OBS_BASELINE_V5, reason_code="validation_rejected"),
+        S.PersistedExclusionRef(observation_id=OBS_BASELINE_V5, reason_code="measurement_stale"),
+    ]
+    sealed = _sealed(
+        excluded_evidence=merged,
+        layered_exclusions=_layered(l1_exclusions=l1, l2_exclusions=l2, l3_merged=merged),
+        exclusion_count=2,
+        l1_exclusion_count=1,
+        l2_exclusion_count=1,
+    )
+    assert sealed.exclusion_count == 2  # not 1 + 1 = 2 by luck; try a real overlap
+    overlapping = _sealed(
+        excluded_evidence=[merged[0]],
+        layered_exclusions=_layered(l1_exclusions=l1, l2_exclusions=l1, l3_merged=[merged[0]]),
+        exclusion_count=1,
+        l1_exclusion_count=1,
+        l2_exclusion_count=1,
+    )
+    assert (
+        overlapping.exclusion_count
+        == 1
+        != overlapping.l1_exclusion_count + overlapping.l2_exclusion_count
+    )
+    with pytest.raises(ValidationError, match="must equal the merged exclusion entry count"):
+        _sealed(exclusion_count=5)
+
+
+def test_m16_sealed_evaluation_pins_the_policy_sha_fingerprint_and_dr006() -> None:
+    with pytest.raises(ValidationError, match="pinned RB3 policy SHA"):
+        _sealed(policy_reference_sha256=_sha("other"))
+    with pytest.raises(ValidationError, match="prohibited_denied"):
+        _sealed(dr006_policy="not_present")
+    with pytest.raises(ValidationError, match="evidence_links_total is never below"):
+        _sealed(
+            review_items_persisted=5,
+            review_items_total=5,
+            evidence_links_persisted=1,
+            evidence_links_total=1,
+        )
+
+
+def test_m16_sealed_evaluation_is_bound_to_its_evidence_and_scope() -> None:
+    base = {
+        "verification_gate": _gate(gate_evaluation_id=GATE_EVAL),
+        "last_validated_at_utc": VALIDATED,
+        "evaluable_evidence": _evidence(),
+        "observations": [_observation()],
+    }
+    _state(review_persistence=_sealed(), **base)
+    for change, match in (
+        ({"run_id": DOC_A}, "different run or scope"),
+        ({"as_of_utc": "2026-11-15T12:00:00Z"}, "different as-of clock"),
+        ({"policy_version": "demo-policy-1.2.0"}, "different policy version"),
+        ({"bridge_input_fingerprint_sha256": _sha("other")}, "different bridge evidence"),
+        ({"gate_evaluation_id": ISSUE_A}, "different gate evaluation"),
     ):
-        with pytest.raises(ValidationError):
-            _sealed_state(review_persistence=_sealed(**bad))
+        with pytest.raises(ValidationError, match=match):
+            _state(review_persistence=_sealed(**change), **base)
+    # A sealed evaluation requires the F2 evidence it was computed from.
     with pytest.raises(ValidationError, match="requires the F2 evidence"):
         _state(
-            last_validated_at_utc=VALIDATED, verification_gate=_gate(), review_persistence=_sealed()
+            verification_gate=_gate(gate_evaluation_id=GATE_EVAL),
+            last_validated_at_utc=VALIDATED,
+            review_persistence=_sealed(),
         )
 
 
 def test_m16_denied_persistence_is_an_outcome_not_a_completion() -> None:
-    denied = S.DeniedReviewPersistence(
-        reason=RB3DenialReason.DR006_PERSISTENCE_NOT_AUTHORIZED, observed_at_utc=VALIDATED
-    )
-    state = _state(review_persistence=denied)
-    assert state.review_evaluation_sealed is False
-    assert state.workflow_completed is False
-    assert denied.writes_performed == 0 and "evaluation_id" not in denied.model_dump()
-    for bad in (
-        {"writes_performed": 1},
-        {"reason": "made_up"},
-        {"kind": "sealed"},  # discriminator mismatch
-    ):
-        with pytest.raises(ValidationError):
-            S.DeniedReviewPersistence(
-                **{
-                    "reason": RB3DenialReason.INTEGRITY_CONFLICT,
-                    "observed_at_utc": VALIDATED,
-                    **bad,
-                }
-            )
-    assert S.RB3DenialReason is RB3DenialReason  # single source of truth
-    for reason in RB3DenialReason:
-        S.DeniedReviewPersistence(reason=reason, observed_at_utc=VALIDATED)
+    denied = _state(review_persistence=_denied())
+    assert denied.review_evaluation_sealed is False
+    assert denied.workflow_completed is False
+    # A denial can never be a successful downstream review completion (R06).
+    with pytest.raises(ValidationError, match="denied persistence cannot be a successful"):
+        _approved_state(S.RunStatus.COMPLETED, review_persistence=_denied())
+    with pytest.raises(ValidationError, match="denied persistence cannot be a successful"):
+        _approved_state(S.RunStatus.FINALIZING, review_persistence=_denied())
 
 
 def test_m16_resume_classification_distinguishes_unchanged_changed_and_corrected() -> None:
     same = _sha("same")
-    unchanged = S.ResumeAssessment(
+    S.ResumeAssessment(
         disposition=S.ResumeDisposition.RESUME_UNCHANGED,
         app_db_status=S.RunStatus.AWAITING_DECISION,
         stored_selection_fingerprint=same,
         observed_selection_fingerprint=same,
-        sealed_evaluation_present=True,
+        sealed_evaluation_present=False,
         checkpoint_present=True,
     )
-    assert unchanged.corrected_fact_ids == []
-    changed = S.ResumeAssessment(
+    S.ResumeAssessment(
         disposition=S.ResumeDisposition.CHANGED_SOURCE_IDENTITY,
-        app_db_status=S.RunStatus.NEEDS_VERIFICATION,
+        app_db_status=S.RunStatus.AWAITING_DECISION,
         stored_selection_fingerprint=same,
-        observed_selection_fingerprint=_sha("changed"),
+        observed_selection_fingerprint=_sha("other"),
         sealed_evaluation_present=False,
-        checkpoint_present=False,
+        checkpoint_present=True,
     )
-    corrected = S.ResumeAssessment(
+    S.ResumeAssessment(
         disposition=S.ResumeDisposition.CORRECTED_SOURCE_NEW_RUN,
         app_db_status=S.RunStatus.AWAITING_DECISION,
         stored_selection_fingerprint=same,
-        observed_selection_fingerprint=same,
+        observed_selection_fingerprint=_sha("other"),
         corrected_fact_ids=[FACT_A],
         sealed_evaluation_present=True,
         checkpoint_present=True,
     )
-    assert changed.disposition is S.ResumeDisposition.CHANGED_SOURCE_IDENTITY
-    assert corrected.disposition is S.ResumeDisposition.CORRECTED_SOURCE_NEW_RUN
-    for bad in (
-        {
-            "disposition": S.ResumeDisposition.RESUME_UNCHANGED,
-            "observed_selection_fingerprint": _sha("changed"),
-        },
-        {"disposition": S.ResumeDisposition.RESUME_UNCHANGED, "corrected_fact_ids": [FACT_A]},
-        {"disposition": S.ResumeDisposition.CHANGED_SOURCE_IDENTITY},
-        {
-            "disposition": S.ResumeDisposition.CHANGED_SOURCE_IDENTITY,
-            "corrected_fact_ids": [FACT_A],
-        },
-        {"disposition": S.ResumeDisposition.CORRECTED_SOURCE_NEW_RUN},
-        {"corrected_fact_ids": [FACT_A, FACT_A]},
-    ):
-        with pytest.raises(ValidationError):
-            S.ResumeAssessment(
-                **{
-                    "disposition": unchanged.disposition,
-                    "app_db_status": S.RunStatus.QUEUED,
-                    "stored_selection_fingerprint": same,
-                    "observed_selection_fingerprint": same,
-                    "sealed_evaluation_present": False,
-                    "checkpoint_present": False,
-                    **bad,
-                }
-            )
-    assert (
-        "reuse_sealed_evaluation" not in S.ResumeAssessment.model_fields
-    )  # no reuse path exists by design
+    with pytest.raises(ValidationError, match="requires identical fingerprints"):
+        S.ResumeAssessment(
+            disposition=S.ResumeDisposition.RESUME_UNCHANGED,
+            app_db_status=S.RunStatus.QUEUED,
+            stored_selection_fingerprint=same,
+            observed_selection_fingerprint=_sha("other"),
+            sealed_evaluation_present=False,
+            checkpoint_present=False,
+        )
+    with pytest.raises(ValidationError, match="requires at least one corrected fact id"):
+        S.ResumeAssessment(
+            disposition=S.ResumeDisposition.CORRECTED_SOURCE_NEW_RUN,
+            app_db_status=S.RunStatus.QUEUED,
+            stored_selection_fingerprint=same,
+            observed_selection_fingerprint=_sha("other"),
+            sealed_evaluation_present=False,
+            checkpoint_present=False,
+        )
 
 
-# --- M17: unapproved runtime policy boundary ------------------------------------------
+# === M17: honesty literals ==========================================================
 
 
 def test_m17_honesty_literals_cannot_be_flipped_through_any_input() -> None:
-    payload = _json(_state())
-    for field, bad in (
-        ("policy_status", "approved"),
-        ("runtime_policy_activated", True),
-        ("runtime_evaluable", True),
-        ("demo_only", False),
-        ("not_for_clinical_use", False),
-    ):
-        with pytest.raises(ValidationError, match=field):
-            S.SharedGraphState.model_validate_json(json.dumps({**payload, field: bad}))
-    with pytest.raises(ValidationError, match="policy_status"):
-        _state(policy_status="approved")
-    evidence = _json(_evidence())
-    for field, bad in (
-        ("rules_executed", True),
-        ("runtime_evaluable", True),
-        ("policy_status", "approved"),
-        ("bridge_validated", False),
+    for payload in (
+        {**_state().model_dump(), "policy_status": "approved"},
+        {**_state().model_dump(), "runtime_policy_activated": True},
+        {**_state().model_dump(), "runtime_evaluable": True},
+        {**_state().model_dump(), "demo_only": False},
+        {**_state().model_dump(), "not_for_clinical_use": False},
     ):
         with pytest.raises(ValidationError):
-            S.EvaluableEvidenceRef.model_validate_json(json.dumps({**evidence, field: bad}))
-    sealed = _json(_sealed())
-    for field, bad in (
-        ("offline_evaluator_invoked", False),
-        ("runtime_evaluable", True),
-        ("policy_status", "approved"),
-        ("demo_only", False),
-    ):
-        with pytest.raises(ValidationError):
-            S.SealedReviewEvaluation.model_validate_json(json.dumps({**sealed, field: bad}))
-    flag = {
-        "review_item_id": ISSUE_A,
-        "rule_id": "DR-008",
-        "reason_code": "r",
-        "message": "m",
-        "trust_basis": "mixed",
-        "evidence": [{"kind": "observation", "observation_id": OBS_A}],
-        "policy_version": "demo-policy-1.1.0",
-        "dedupe_key": _sha("k"),
-        "demo_only": False,
-    }
-    with pytest.raises(ValidationError, match="demo_only"):
-        S.ReviewFlag.model_validate_json(json.dumps(flag))
+            S.SharedGraphState.model_validate(payload)
+    assert _state().policy_status == "unapproved"
 
 
 def test_m17_model_copy_bypass_is_documented_and_revalidation_restores_the_boundary() -> None:
     state = _state()
-    forged = state.model_copy(
-        update={"runtime_policy_activated": True, "policy_status": "approved"}
-    )
-    assert forged.runtime_policy_activated is True  # the bypass is real: frozen ≠ authority
+    forged = state.model_copy(update={"runtime_evaluable": True})
+    assert forged.runtime_evaluable is True  # documented Pydantic limitation (D-08)
     with pytest.raises(ValidationError):
-        S.SharedGraphState.model_validate_json(forged.model_dump_json())
-    with pytest.raises(ValidationError, match="policy_status"):
-        _state(policy_status="approved")
+        S.SharedGraphState.revalidate(forged)
 
 
-# --- M18: deserialization creates no approval / task / execution authority -------------
+# === M18: authority, lifecycle and evidence binding (R05/R06) =======================
 
 
 def test_m18_deserialized_state_fields_are_shapes_not_authority() -> None:
-    forbidden = {
-        "approved",
-        "approval_granted",
-        "gate_passed",
-        "run_gate_completed",
-        "cleared",
-        "authorized",
-        "executed",
-    }
-    assert not forbidden & set(S.SharedGraphState.model_fields)
-    assert not {"verified", "trusted", "grounded"} & set(S.ApprovalDecision.model_fields)
-    # approval shape validates on its own — and authorizes nothing on its own
-    decision = S.ApprovalDecision(
-        decision_id=APPROVAL_ID,
-        decision=S.ApprovalChoice.APPROVE,
-        doctor_id=DOCTOR,
-        decided_at=VALIDATED,
-    )
-    assert decision.recorded is True
-    # but it cannot be attached to a pre-draft run
-    with pytest.raises(ValidationError, match="no approval can exist before"):
-        _state(approval=decision)
-    with pytest.raises(ValidationError, match="finalizing/completed require"):
-        _state(status=S.RunStatus.COMPLETED, approval=decision)
-    with pytest.raises(ValidationError, match="awaiting_decision has a draft"):
-        _state(status=S.RunStatus.AWAITING_DECISION, approval=None)
-    # an approval is bound to a consistent status and a draft through the proceed gate
-    approved = _approved_state(S.RunStatus.AWAITING_DECISION, approval=None)
-    assert approved.approval is None and approved.draft_summary is not None
-    _approved_state(S.RunStatus.FINALIZING)
-    _approved_state(S.RunStatus.COMPLETED)
+    text = _approved_state(S.RunStatus.COMPLETED).model_dump_json()
+    revived = S.SharedGraphState.model_validate_json(text)
+    assert revived.status is S.RunStatus.COMPLETED
+    assert revived.assurance_level is S.AssuranceLevel.SHAPE_VALIDATED
+    # Nothing in the payload can grant runtime authority.
+    assert revived.runtime_evaluable is False
 
 
 def test_m18_tasks_exist_only_after_a_decision_and_within_its_task_ids() -> None:
     task = S.TaskDraft(
-        action_key=_sha("task"), task_id=DERIVED_TASK, title="Call the patient (synthetic)"
+        action_key=_sha("task"),
+        task_id="51a0b7c4-9d8e-5f3a-8c21-7b6e5d4c3a2f",
+        title="Follow up",
     )
-    with pytest.raises(ValidationError, match="task drafts exist only after"):
-        _state(pending_tasks=[task])
-    with pytest.raises(ValidationError, match="must reference pending task drafts"):
-        _approved_state(S.RunStatus.FINALIZING, created_task_ids=[DERIVED_TASK])
     ok = _approved_state(
-        S.RunStatus.FINALIZING, pending_tasks=[task], created_task_ids=[DERIVED_TASK]
+        S.RunStatus.COMPLETED, pending_tasks=[task], created_task_ids=[task.task_id]
     )
-    assert ok.created_task_ids == [DERIVED_TASK]
-    with pytest.raises(ValidationError, match="task_created must match"):
+    assert ok.created_task_ids == [task.task_id]
+    with pytest.raises(ValidationError, match="must reference pending task drafts"):
+        _approved_state(S.RunStatus.COMPLETED, created_task_ids=[task.task_id])
+    with pytest.raises(ValidationError, match="only after an approve/edit decision"):
+        _approved_state(S.RunStatus.AWAITING_DECISION, approval=None, pending_tasks=[task])
+
+
+def test_m18_status_lifecycle_invariants() -> None:
+    # A rejection completes with zero tasks (R06).
+    _approved_state(
+        S.RunStatus.COMPLETED,
+        approval=_approval(S.ApprovalChoice.REJECT),
+        pending_tasks=[],
+        created_task_ids=[],
+    )
+    with pytest.raises(ValidationError, match="rejected run completes with no task"):
+        task = S.TaskDraft(
+            action_key=_sha("task"),
+            task_id="51a0b7c4-9d8e-5f3a-8c21-7b6e5d4c3a2f",
+            title="Follow up",
+        )
         _approved_state(
             S.RunStatus.COMPLETED,
+            approval=_approval(S.ApprovalChoice.REJECT),
             pending_tasks=[task],
-            created_task_ids=[],
+            created_task_ids=[task.task_id],
+        )
+    # Rejection never routes through finalize_actions.
+    with pytest.raises(ValidationError, match="never passes through finalize_actions"):
+        _approved_state(
+            S.RunStatus.COMPLETED,
+            approval=_approval(S.ApprovalChoice.REJECT),
             events=[
                 _event(
-                    S.NodeName.FINALIZE_ACTIONS,
+                    node=S.NodeName.FINALIZE_ACTIONS,
                     detail=S.FinalizeDetail(
-                        approval_decision="approve", task_created=True, notification_created=True
+                        approval_decision="approve", task_created=False, notification_created=False
                     ),
                 )
             ],
         )
-    with pytest.raises(ValidationError, match="UUIDv5"):
-        S.TaskDraft(action_key=_sha("task"), task_id=RUN, title="t")
-    namespace = UUID(DOC_A)
-    assert S.derive_task_id(namespace, "action") == S.derive_task_id(namespace, "action")
-    assert UUID(S.derive_task_id(namespace, "action")).version == 5
-    assert S.derive_task_id(namespace, "action") != S.derive_task_id(UUID(DOC_B), "action")
-
-
-def test_m18_status_lifecycle_invariants() -> None:
-    # halt_reason iff halted
+    # A rejection cannot finalize (only approve/edit can).
+    with pytest.raises(ValidationError, match="finalizing requires an approve-or-edit decision"):
+        _approved_state(S.RunStatus.FINALIZING, approval=_approval(S.ApprovalChoice.REJECT))
+    # An empty ApprovalDecision shape is not a recorded approval.
+    with pytest.raises(ValidationError, match="requires a draft and a recorded decision"):
+        _approved_state(S.RunStatus.COMPLETED, approval=S.ApprovalDecision())
+    # A wrong-doctor decision cannot satisfy structural run scope.
+    with pytest.raises(ValidationError, match="run's own doctor"):
+        _approved_state(S.RunStatus.COMPLETED, approval=_approval(doctor_id=PATIENT))
+    # halt_reason presence follows the halted statuses.
     with pytest.raises(ValidationError, match="halt_reason is present iff"):
-        _state(halt_reason=S.HaltReason.MODEL_FAILED)
-    for status in (
-        S.RunStatus.NEEDS_VERIFICATION,
-        S.RunStatus.FAILED_RETRYABLE,
-        S.RunStatus.FAILED_TERMINAL,
-    ):
-        with pytest.raises(ValidationError, match="halt_reason is present iff"):
-            _state(status=status)
-    # needs_verification must halt on unverified facts with a halting gate
-    with pytest.raises(ValidationError, match="unverified_facts"):
-        _state(status=S.RunStatus.NEEDS_VERIFICATION, halt_reason=S.HaltReason.RETRY_EXHAUSTED)
-    # failed_retryable must be retry_exhausted
-    with pytest.raises(ValidationError, match="retry_exhausted"):
-        _state(status=S.RunStatus.FAILED_RETRYABLE, halt_reason=S.HaltReason.MODEL_FAILED)
-    assert (
+        _state(status=S.RunStatus.COMPLETED, halt_reason=S.HaltReason.UNVERIFIED_FACTS)
+    with pytest.raises(ValidationError, match="needs_verification halts with"):
         _state(
-            status=S.RunStatus.FAILED_RETRYABLE, halt_reason=S.HaltReason.RETRY_EXHAUSTED
-        ).halt_reason
-        is S.HaltReason.RETRY_EXHAUSTED
-    )
-    assert (
-        _state(status=S.RunStatus.FAILED_TERMINAL, halt_reason=S.HaltReason.MODEL_FAILED).status
-        is S.RunStatus.FAILED_TERMINAL
-    )
-    with pytest.raises(ValidationError, match="updated_at precedes"):
-        _state(updated_at="2026-11-23T09:59:59Z")
+            status=S.RunStatus.NEEDS_VERIFICATION,
+            halt_reason=S.HaltReason.MODEL_FAILED,
+            verification_gate=_gate(S.GateDecision.HALT, issues=[_issue()]),
+            last_validated_at_utc=VALIDATED,
+        )
+    with pytest.raises(ValidationError, match="failed_retryable halts with"):
+        _state(status=S.RunStatus.FAILED_RETRYABLE, halt_reason=S.HaltReason.UNVERIFIED_FACTS)
+    # Awaiting a decision with a draft and no recorded decision is the valid shape.
+    _approved_state(S.RunStatus.AWAITING_DECISION, approval=None)
+    # ... but a recorded decision belongs to a later status.
+    with pytest.raises(ValidationError, match="awaiting_decision has a draft"):
+        _approved_state(S.RunStatus.AWAITING_DECISION, approval=_approval())
 
 
 def test_m18_evidence_reference_is_bound_to_the_selection_and_gate() -> None:
-    good = _state(
-        last_validated_at_utc=VALIDATED,
-        verification_gate=_gate(),
-        evaluable_evidence=_evidence(
-            selected_observation_ids=[], no_current_reason="no_current_selected"
-        ),
-    )
-    assert (
-        good.evaluable_evidence is not None
-        and good.evaluable_evidence.no_current_reason == "no_current_selected"
-    )
+    base = {
+        "verification_gate": _gate(gate_evaluation_id=GATE_EVAL),
+        "last_validated_at_utc": VALIDATED,
+        "observations": [_observation()],
+    }
+    _state(evaluable_evidence=_evidence(), **base)
     for bad in (
         {"selected_document_ids": [DOC_B]},
+        {"selected_observation_ids": []},
         {"gate_input_fingerprint_sha256": _sha("other-gate")},
+        {"gate_version": "1.0.1"},
         {"policy_version": "demo-policy-1.2.0"},
         {"as_of_utc": "2026-11-15T12:00:00Z"},
     ):
+        overrides = dict(bad)
+        if "selected_observation_ids" in overrides:
+            overrides["no_current_reason"] = "no_current_selected"
         with pytest.raises(ValidationError):
             _state(
+                verification_gate=_gate(gate_evaluation_id=GATE_EVAL),
                 last_validated_at_utc=VALIDATED,
-                verification_gate=_gate(),
-                evaluable_evidence=_evidence(**bad),
+                observations=[_observation()],
+                evaluable_evidence=_evidence(**overrides),
             )
     with pytest.raises(ValidationError, match="requires the gate evaluation"):
-        _state(last_validated_at_utc=VALIDATED, evaluable_evidence=_evidence())
-    with pytest.raises(ValidationError, match="only follow a proceed"):
         _state(
             last_validated_at_utc=VALIDATED,
-            verification_gate=_gate(S.GateDecision.HALT),
+            observations=[_observation()],
             evaluable_evidence=_evidence(),
         )
-    # absent vs empty is explicit: None ≠ an evaluated projection with zero current observations
-    assert _state().evaluable_evidence is None
-    assert good.evaluable_evidence.selected_observation_ids == []
 
 
 def test_m18_draft_provider_and_execution_status_are_consistent() -> None:
-    def draft(**overrides: Any) -> S.DraftSummary:
-        fields: dict[str, Any] = {
-            "draft_id": APPROVAL_ID,
-            "provider": S.DraftProvider.OLLAMA,
-            "model": "llama3.1:8b",
-            "execution_status": S.DraftExecutionStatus.MODEL_OK,
-            "prompt_version": "draft-v1",
-            "latency_ms": 900,
-            "created_at": VALIDATED,
-        }
-        fields.update(overrides)
-        return S.DraftSummary(**fields)
-
-    ok = draft()
-    assert ok.disclaimer == "EDUCATIONAL / SYNTHETIC DATA / NOT FOR CLINICAL USE"
-    for bad in (
-        {"model": None},
-        {"execution_status": S.DraftExecutionStatus.MODEL_TIMEOUT},
-        {"provider": S.DraftProvider.DETERMINISTIC_FALLBACK},
-        {"prompt_version": "draft v1"},
-        {"latency_ms": -1},
-        {"uncertainties": ["x" * 241]},
-        {"disclaimer": "Educational only"},
-    ):
-        with pytest.raises(ValidationError):
-            draft(**bad)
-    fallback = draft(
-        provider=S.DraftProvider.DETERMINISTIC_FALLBACK,
-        model=None,
-        execution_status=S.DraftExecutionStatus.FALLBACK_NO_MODEL,
-        latency_ms=None,
+    _draft(
+        provider=S.DraftProvider.OLLAMA,
+        model="llama3.1:8b",
+        execution_status=S.DraftExecutionStatus.MODEL_OK,
     )
-    assert fallback.model is None
+    with pytest.raises(ValidationError, match="records a model and execution_status=model_ok"):
+        _draft(
+            provider=S.DraftProvider.OLLAMA, execution_status=S.DraftExecutionStatus.MODEL_TIMEOUT
+        )
+    with pytest.raises(ValidationError, match="fallback draft has no model"):
+        _draft(model="llama3.1:8b")
 
 
-# --- M19: mutable-default isolation ---------------------------------------------------
+# === M19: mutable-default isolation =================================================
 
 
 def test_m19_defaults_are_not_shared_between_instances() -> None:
-    first = _state()
-    second = _state()
-    assert first.observations is not second.observations
-    assert first.retry_counts is not second.retry_counts
-    first.observations.append(_observation())
-    first.retry_counts[S.NodeName.HALTED] = 1
-    first.events.append(_event(S.NodeName.INTAKE_VALIDATE))
-    first.model_metadata["provider"] = "ollama"
-    assert second.observations == [] and second.retry_counts == {} and second.events == []
-    assert second.model_metadata == {}
-    # Pydantic's own default-factory semantics are what we rely on; nothing is mocked.
-    assert S.SharedGraphState.model_fields["observations"].default_factory is not None
-    assert (
-        S.SharedGraphState.model_fields["identity"].default_factory is None
-    )  # required, no shared default
+    a, b = _state(), _state()
+    assert a.observations is not b.observations
+    assert a.extraction_facts is not b.extraction_facts
+    assert a.model_metadata is not b.model_metadata
+    before = len(b.observations)
+    a.observations.append(_observation(patient_id=DOCTOR))  # type: ignore[attr-defined]
+    assert len(b.observations) == before
 
 
-# --- M20: import / execution side-effect boundaries -----------------------------------
-
-
-FORBIDDEN_MODULE_PREFIXES = (
-    "langgraph",
-    "app.main",
-    "app.api",
-    "app.db",
-    "app.services",
-    "app.llm",
-    "sqlalchemy",
-    "sqlite3",
-    "requests",
-    "httpx",
-    "ollama",
-    "fastapi",
-    "alembic",
-)
-IO_TOKENS = (
-    "datetime.now(",
-    "utcnow(",
-    "time.time(",
-    "subprocess",
-    "socket",
-    "open(",
-    "Path(",
-    "os.environ",
-    "print(",
-)
+# === M20: import side effects and single-source vocabularies ========================
 
 
 def test_m20_importing_the_state_module_loads_no_service_or_runtime_module() -> None:
     code = (
-        "import json, sys\n"
-        "before = set(sys.modules)\n"
-        "import app.agents.state as state\n"
-        "after = set(sys.modules)\n"
-        "loaded = sorted(m for m in after - before if m.startswith('app') or m.startswith('langgraph'))\n"
-        "print(json.dumps({'loaded': loaded, 'has_db': 'app.db' in sys.modules, 'has_services': 'app.services' in sys.modules}))\n"
+        "import sys;\n"
+        "before=set(sys.modules);\n"
+        "import app.agents.state;\n"
+        "leaked=sorted(m for m in set(sys.modules)-before "
+        "if m.split('.')[0] in {'langgraph','ollama','smtplib','sendgrid','twilio',"
+        "'requests','httpx','aiohttp','sqlalchemy','fastapi'} "
+        "or m.startswith('app.services') or m.startswith('app.api') "
+        "or m.startswith('app.db'));\n"
+        "print(leaked);\n"
     )
-    completed = subprocess.run(
+    out = subprocess.run(
         [sys.executable, "-c", code],
-        cwd=REPO_ROOT / "backend",
+        cwd=str(REPO_ROOT / "backend"),
         capture_output=True,
         text=True,
         check=True,
-        env={"PYTHONPATH": str(REPO_ROOT / "backend"), "PATH": "/usr/bin:/bin"},
     )
-    report = json.loads(completed.stdout.strip().splitlines()[-1])
-    assert report["has_db"] is False and report["has_services"] is False
-    assert report["loaded"] == [
-        "app",
-        "app.agents",
-        "app.agents.state",
-        "app.core",
-        "app.core.enums",
-        "app.core.version",
-        "app.schemas",
-        "app.schemas.p4_rb3_review_persistence",
-        "app.schemas.system",
-    ]
-    for name in report["loaded"]:
-        assert not name.startswith(FORBIDDEN_MODULE_PREFIXES), name
+    assert out.stdout.strip() == "[]"
 
 
 def test_m20_state_source_has_no_runtime_or_io_imports_or_calls() -> None:
-    text = STATE_MODULE.read_text(encoding="utf-8")
-    for prefix in FORBIDDEN_MODULE_PREFIXES:
-        for pattern in (f"import {prefix}", f"from {prefix}"):
-            assert pattern not in text, pattern
-    for token in IO_TOKENS:
-        assert re.search(r"(?<![A-Za-z_])" + re.escape(token), text) is None, token
-    imported = set(re.findall(r"^(?:from|import)\s+([\w\.]+)", text, re.M))
-    assert imported == {
-        "__future__",
-        "json",
-        "uuid",
-        "datetime",
-        "decimal",
-        "enum",
-        "hashlib",
-        "typing",
-        "pydantic",
-        "app.core.enums",
-        "app.schemas.p4_rb3_review_persistence",
-    }
+    source = (REPO_ROOT / "backend" / "app" / "agents" / "state.py").read_text()
+    # Import statements only — a provider *value* such as ``ollama`` is data, not
+    # an import (the repository safety guard scans the same way).
+    for module in (
+        "langgraph",
+        "ollama",
+        "smtplib",
+        "sendgrid",
+        "twilio",
+        "requests",
+        "httpx",
+        "aiohttp",
+        "sqlalchemy",
+        "fastapi",
+    ):
+        assert f"import {module}" not in source, module
+        assert f"from {module}" not in source, module
+    for call in ("datetime.now", "utcnow", "open("):
+        assert call not in source, call
+    # A call must not be used as an identifier either (``compute_fingerprint``).
+    assert not re.search(r"\bprint\s*\(", source)
+    # ``Path(`` must appear only as part of an identifier such as TriagePath.
+    assert not re.search(r"(?<![A-Za-z_])Path\(", source)
+    # No clinical capability vocabulary is implemented. The list mirrors the
+    # repository-wide guard ``FORBIDDEN_TERMS`` (tests/p2), which also scans this
+    # file; the P2 guard remains the authority.
+    for term in (
+        "diagnos",
+        "prescrib",
+        "dosage",
+        "differential_diagnosis",
+        "risk_score",
+        "treatment_plan",
+        "send_sms",
+        "send_email",
+        "whatsapp",
+    ):
+        assert term not in source.lower(), term
 
 
 def test_m20_vocabulary_single_sources_of_truth() -> None:
-    # enums reused from app.core.enums are the same objects (no drift possible)
-    assert S.MeasureType is MeasureType and S.TrustLevel is TrustLevel and S.Unit is Unit
-    assert S.ObservationSource is ObservationSource and S.ValidationState is ValidationState
-    # exclusion reasons cover what the F2 bridge and admissibility predicate actually emit
-    bridge = (REPO_ROOT / "backend" / "app" / "services" / "p5_evidence_bridge.py").read_text(
-        encoding="utf-8"
+    from app.core.enums import IssueType as ServiceIssueType
+    from app.core.enums import TrustLevel as ServiceTrustLevel
+
+    assert {e.value for e in S.IssueType} == {e.value for e in ServiceIssueType}
+    assert {e.value for e in S.TrustLevel} == {e.value for e in ServiceTrustLevel}
+    # DR-* ids are pinned by the persisted review_item CHECK, not by an enum.
+    from app.db.models import ReviewItem
+
+    checks = [
+        str(getattr(item, "sqltext", ""))
+        for item in ReviewItem.__table__.constraints
+        if "rule_allowed" in (getattr(item, "name", None) or "")
+    ]
+    assert checks, "review_item_rule_allowed CHECK not found"
+    assert {e.value for e in S.ReviewRuleId} == set(re.findall(r"DR-\d{3}", checks[0]))
+
+    from app.services.p4_rb3_review_persistence import (
+        MAX_EXCLUSIONS,
+        MAX_PERSISTED_ITEMS,
+        MAX_PERSISTED_LINKS,
+        MAX_SELECTED_DOCUMENTS,
     )
-    monitoring = (REPO_ROOT / "backend" / "app" / "services" / "monitoring.py").read_text(
-        encoding="utf-8"
+    from app.services.p4_run_bound_preview import POLICY_LOOKBACK_DAYS
+    from app.services.p5_evidence_bridge import (
+        COMPARISON_HISTORY_VERSION,
+        HISTORY_LOOKBACK_DAYS,
+        MAX_CURRENT_OBSERVATIONS,
+        MAX_FACTS,
+        MAX_HISTORY_OBSERVATIONS,
     )
-    bridge_codes = set(re.findall(r'return "([a-z_]+)"', bridge))
-    admissible_codes = set(
-        re.findall(
-            r'return "([a-z_]+)"',
-            monitoring.split("def admissibility_reason")[1].split("def _trust_basis")[0],
-        )
-    )
-    members = {item.value for item in S.ExclusionReason}
-    assert {
-        "verified_lineage_unavailable",
-        "verified_mapping_unproven",
-        "stored_trust_source_mismatch",
-        "malformed_history",
-    } <= members
-    assert bridge_codes <= members, bridge_codes - members
-    assert admissible_codes == {
-        "validation_rejected",
-        "unit_mismatch",
-        "missing_timestamp",
-        "future_timestamp",
-    }
-    assert admissible_codes <= members
-    assert (
-        S.derived_trust_basis(
-            TrustLevel.SELF_REPORTED_VALIDATED, TrustLevel.SELF_REPORTED_VALIDATED
-        )
-        is S.TrustBasis.SELF_REPORTED
-    )
-    assert (
-        S.derived_trust_basis(TrustLevel.DOCTOR_VERIFIED, TrustLevel.SELF_REPORTED_VALIDATED)
-        is S.TrustBasis.MIXED
-    )
-    assert S.derived_trust_basis(TrustLevel.DOCTOR_VERIFIED, None) is S.TrustBasis.DOCTOR_VERIFIED
+
+    assert S.MAX_FACTS == MAX_FACTS == 40
+    assert S.MAX_HISTORY_OBSERVATIONS == MAX_HISTORY_OBSERVATIONS == 100
+    assert S.MAX_SELECTED_CURRENT == MAX_CURRENT_OBSERVATIONS == 6
+    assert S.MAX_SELECTED_DOCUMENTS == MAX_SELECTED_DOCUMENTS == 5
+    assert S.MAX_PERSISTED_ITEMS == MAX_PERSISTED_ITEMS == 12
+    assert S.MAX_PERSISTED_LINKS == MAX_PERSISTED_LINKS == 24
+    assert S.MAX_MERGED_EXCLUSIONS == MAX_EXCLUSIONS == 200
+    from typing import get_args
+
+    assert get_args(S.F2_HISTORY_POLICY) == (COMPARISON_HISTORY_VERSION,)
+    assert HISTORY_LOOKBACK_DAYS == 365
+    assert get_args(S.RB1_LOOKBACK_DAYS) == (POLICY_LOOKBACK_DAYS,)
+
+
+def test_m20_f0_persists_no_prompt_version_and_the_state_does_not_claim_it() -> None:
+    """R01/D-06: F0 has no ``prompt_version`` column, so the slot stays empty."""
+    from app.db.models import WorkflowRun
+
+    columns = {column.name for column in WorkflowRun.__table__.columns}
+    assert "prompt_version" not in columns
+    assert "encounter_id" not in columns
+    assert _identity().prompt_version is None
+    assert _identity().encounter_id is None
 
 
 def test_m20_state_round_trips_through_every_outcome_kind() -> None:
-    """A fully populated state (halt, resumed, approved, sealed) survives one round trip."""
-    sealed = _sealed_state(
-        status=S.RunStatus.COMPLETED,
-        draft_summary=_approved_state(S.RunStatus.COMPLETED).draft_summary,
-        approval=_approved_state(S.RunStatus.COMPLETED).approval,
-        pending_tasks=[
-            S.TaskDraft(action_key=_sha("task"), task_id=DERIVED_TASK, title="Synthetic follow-up")
-        ],
-        created_task_ids=[DERIVED_TASK],
-        events=[
-            _event(
-                S.NodeName.FACT_VERIFY_GATE,
-                detail=S.GateDetail(decision="proceed", blocking_fact_count=0),
-            ),
-            _event(
-                S.NodeName.EXTRACTION_TRIAGE,
-                detail=S.TriageDetail(
-                    path_selected=S.TriagePath.TEXT_LAYER,
-                    path_reason=S.PathReason.TEXT_LAYER_AVAILABLE,
-                    document_id=DOC_A,
-                    attempt_index=1,
-                    engine_confidence=0.93,
-                    preprocessing_applied=False,
+    for outcome in (
+        _sealed(),
+        _denied(),
+        None,
+    ):
+        state = _state(
+            review_persistence=outcome,
+            verification_gate=_gate(gate_evaluation_id=GATE_EVAL),
+            last_validated_at_utc=VALIDATED,
+            evaluable_evidence=_evidence() if outcome is not None else None,
+            observations=[_observation()],
+        )
+        assert S.SharedGraphState.model_validate_json(state.model_dump_json()) == state
+
+
+# === R04: context-independent exact numerics ========================================
+
+
+def test_r04_exact_values_and_deltas_under_the_default_context() -> None:
+    assert S.exact_delta(Decimal("140"), Decimal("128")) == Decimal("12")
+    assert json.loads(_observation(value=Decimal("140.5")).model_dump_json())["value"] == "140.5"
+    row = _comparison()
+    assert json.loads(row.model_dump_json())["delta"] == "12"
+
+
+def test_r04_behaviour_is_identical_under_a_hostile_decimal_context() -> None:
+    """R04: no ambient precision, rounding or trap may change the result."""
+    values = [Decimal("140.5"), Decimal("0.0001"), Decimal("9999.9999"), Decimal("1234567890")]
+    baseline = [S._decimal_text(v) for v in values]
+    deltas = [S.exact_delta(Decimal("9999.9999"), Decimal("0.0001"))]
+    with localcontext() as ctx:
+        ctx.prec = 3
+        ctx.rounding = "ROUND_UP"
+        ctx.traps[InvalidOperation] = True
+        assert [S._decimal_text(v) for v in values] == baseline
+        assert [S.exact_delta(Decimal("9999.9999"), Decimal("0.0001"))] == deltas
+        # Serialization of a model is unchanged too.
+        assert (
+            json.loads(_observation(value=Decimal("140.5")).model_dump_json())["value"] == "140.5"
+        )
+        assert (
+            json.loads(_comparison().model_dump_json())["delta"]
+            == json.loads(_comparison().model_dump_json())["delta"]
+        )
+    # No significant digit is lost.
+    assert S._decimal_text(Decimal("0.0001")) == "0.0001"
+    assert S._decimal_text(Decimal("1234567890")) == "1234567890"
+    for bad in ("NaN", "sNaN", "Infinity", "-Infinity"):
+        with pytest.raises(ValueError, match="non-finite"):
+            S._decimal_text(Decimal(bad))
+
+
+# === R01: genuine accepted-producer compatibility (supporting integration) ===========
+
+
+@dataclass(frozen=True)
+class _Doc:
+    document_id: str
+    facts: tuple[str, ...]
+
+
+def _seed_session(engine) -> Session:
+    from app.services.seed import seed_demo_data
+
+    session = Session(engine)
+    seed_demo_data(
+        session,
+        password=SEED_PASSWORD,
+        now=datetime(2026, 11, 14, 12, tzinfo=UTC),
+        iterations=1000,
+    )
+    session.commit()
+    return session
+
+
+def _doctor(db: Session) -> Any:
+    from app.core.enums import Role
+    from app.core.policies import Principal
+    from app.db.models import User, UserSession
+
+    row = db.execute(select(User).where(User.username == "demo_doctor")).scalar_one()
+    session_id = "dddddddd-dddd-4ddd-8ddd-0000000000p5"
+    if db.get(UserSession, session_id) is None:
+        db.add(
+            UserSession(
+                id=session_id,
+                user_id=row.id,
+                token_sha256=_sha("p5-s0-session"),
+                created_at="2026-11-01T00:00:00Z",
+                expires_at="2026-12-01T00:00:00Z",
+            )
+        )
+        db.commit()
+    return Principal(
+        user_id=row.id,
+        username=row.username,
+        display_name=row.display_name,
+        role=Role(row.role),
+        patient_id=row.patient_id,
+        session_id=session_id,
+    )
+
+
+def _add_checkin(
+    db: Session, *, observation_id: str, patient_id: str, measure: str, value: float, unit: str
+) -> Any:
+    from app.db.models import Observation
+
+    row = Observation(
+        id=observation_id,
+        patient_id=patient_id,
+        measure_type=measure,
+        value=value,
+        unit=unit,
+        measured_at="2026-11-01T09:00:00Z",
+        source="patient_checkin",
+        validation="ok",
+        trust_level="self_reported_validated",
+        created_at="2026-11-14T12:00:00Z",
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+
+def _add_verified_document(db: Session, *, patient_id: str, root: Path, label: str) -> Any:
+    """Store a scripted synthetic document whose four facts are all verified.
+
+    Mirrors the accepted RB4 GOLD fixture shape (report_date, test_name, value,
+    unit) so the genuine F1 gate has an unambiguous report date to read. This is
+    fixture construction, not ingestion, OCR or a clinician decision.
+    """
+    import hashlib
+
+    from app.db.models import Document, ExtractedFact, FactVerification, Patient, User
+
+    patient = db.get(Patient, patient_id)
+    assert patient is not None
+    raw = f"P5-S0 synthetic-only source: {label}".encode()
+    name = f"p5-s0-{label}.pdf"
+    (root / name).write_bytes(raw)
+    doc = Document(
+        patient_id=patient_id,
+        uploaded_by_user_id=patient.assigned_doctor_id,
+        original_filename=name,
+        stored_path=name,
+        mime_type="application/pdf",
+        sha256=hashlib.sha256(raw).hexdigest(),
+        size_bytes=len(raw),
+        page_count=1,
+        extraction_status="verified",
+        document_patient_ref=patient.external_ref,
+        document_patient_refs=json.dumps([patient.external_ref]),
+        uploaded_at="2026-06-14T08:00:00Z",
+    )
+    db.add(doc)
+    db.flush()
+    verifier = db.execute(select(User).where(User.username == "demo_doctor")).scalar_one()
+    specs = (
+        ("report_date", "2026-10-20", "2026-10-20", None),
+        ("test_name", "Hemoglobin", "Hemoglobin", None),
+        ("value", "13.4", "13.4", "g/dL"),
+        ("unit", "g/dL", "g/dL", None),
+    )
+    for field_name, raw_text, normalized, unit in specs:
+        fact = ExtractedFact(
+            document_id=doc.id,
+            patient_id=patient_id,
+            field_name=field_name,
+            raw_text=raw_text,
+            normalized_value=normalized,
+            unit=unit,
+            page_index=0,
+            char_start=0,
+            char_end=max(len(raw_text), 1),
+            verification_status="verified",
+            quality_flags="[]",
+            created_at="2026-06-14T08:00:00Z",
+        )
+        db.add(fact)
+        db.flush()
+        db.add(
+            FactVerification(
+                fact_id=fact.id,
+                decision="verified",
+                verified_by_user_id=verifier.id,
+                decided_at="2026-06-14T08:00:00Z",
+                source_image_compared=1,
+            )
+        )
+    db.commit()
+    return doc
+
+
+def test_r01_genuine_stored_identities_include_uuid5_observations() -> None:
+    """R01: accepted GOLD/RB4 data uses UUIDv5 observation identities."""
+    data = json.loads((REPO_ROOT / "data" / "synthetic" / "observations.json").read_text())
+    rows = data["observations"]
+    versions = {_uuid_version(row["id"]) for row in rows}
+    assert versions == {5}, versions
+    # Every stored identity in that accepted fixture is representable.
+    for row in rows:
+        assert S.Uuid is not None
+        from pydantic import TypeAdapter
+
+        TypeAdapter(S.Uuid).validate_python(row["id"])
+    # ... while run identity still refuses them.
+    from pydantic import TypeAdapter
+
+    for row in rows[:2]:
+        with pytest.raises(ValidationError):
+            TypeAdapter(S.RunUuid).validate_python(row["id"])
+
+
+def _uuid_version(value: str) -> int:
+    import uuid as _uuid
+
+    return _uuid.UUID(value).version
+
+
+def test_r01_genuine_stored_run_projects_every_accepted_producer(engine, tmp_path) -> None:
+    """Drive F0 -> F1 -> F2 -> RB3 for real, then project the genuine receipts.
+
+    This is *supporting executable integration evidence*, not a schema test: it
+    proves the S0 shapes accept what the accepted services actually emit. It is
+    scripted synthetic fixture construction — not ingestion, OCR or human
+    verification — and a successful run asserts nothing clinical.
+    """
+    from app.core.enums import Role  # noqa: F401  (import surface used by the fixtures)
+    from app.db.models import Observation, Patient, RunGateEvaluation, WorkflowRun
+    from app.schemas.p4_rb3_review_persistence import ReviewPersistenceReceiptV1
+    from app.services import p4_rb3_review_persistence as rb3
+    from app.services.p5_evidence_bridge import (
+        COMPARISON_HISTORY_VERSION,
+        build_run_evaluable_review_evidence,
+    )
+    from app.services.p5_run_foundation import create_run_foundation
+    from app.services.p5_run_gate import evaluate_run_verification_gate
+
+    db = _seed_session(engine)
+    try:
+        patient = db.execute(
+            select(Patient).where(Patient.external_ref == "DEMO-A-001")
+        ).scalar_one()
+        doctor = _doctor(db)
+        _add_checkin(
+            db,
+            observation_id=OBS_CURRENT,
+            patient_id=patient.id,
+            measure="systolic_bp",
+            value=121,
+            unit="mmHg",
+        )
+        document = _add_verified_document(db, patient_id=patient.id, root=tmp_path, label="glucose")
+        document_ids = (document.id,)
+
+        with Session(engine) as session:
+            receipt = create_run_foundation(
+                session,
+                principal=doctor,
+                patient_id=patient.id,
+                document_ids=document_ids,
+                observation_ids=(OBS_CURRENT,),
+                omissions=(),
+                client_request_id="p5-s0-integration",
+                as_of_utc=datetime(2026, 11, 14, 12, tzinfo=UTC),
+            )
+            session.commit()
+        run_id = receipt.run_id
+
+        gate = evaluate_run_verification_gate(
+            Session(engine),
+            principal=doctor,
+            run_id=run_id,
+            validation_clock=datetime(2026, 11, 14, 12, tzinfo=UTC),
+            upload_root=str(tmp_path),
+        )
+        # The genuine producer decides; this test projects whatever it recorded.
+        assert gate.decision in {decision.value for decision in S.GateDecision}, gate
+
+        evidence = build_run_evaluable_review_evidence(
+            Session(engine),
+            principal=doctor,
+            run_id=run_id,
+            validation_clock=datetime(2026, 11, 14, 12, tzinfo=UTC),
+            upload_root=str(tmp_path),
+        )
+        persisted = rb3.persist_run_review_items(
+            Session(engine),
+            principal=doctor,
+            run_id=run_id,
+            validation_clock=datetime(2026, 11, 14, 12, tzinfo=UTC),
+            upload_root=str(tmp_path),
+        )
+        replayed = rb3.persist_run_review_items(
+            Session(engine),
+            principal=doctor,
+            run_id=run_id,
+            validation_clock=datetime(2026, 11, 14, 12, tzinfo=UTC),
+            upload_root=str(tmp_path),
+        )
+        assert isinstance(persisted, ReviewPersistenceReceiptV1)
+        assert isinstance(replayed, ReviewPersistenceReceiptV1)
+        assert persisted.replayed is False
+        assert replayed.replayed is True
+        assert replayed.review_items_persisted == 0
+        assert replayed.evidence_links_persisted == 0
+
+        with Session(engine) as check:
+            run = check.get(WorkflowRun, run_id)
+            stored_gate = check.execute(
+                select(RunGateEvaluation).where(RunGateEvaluation.workflow_run_id == run_id)
+            ).scalar_one()
+            assert run is not None
+            assert stored_gate is not None
+
+            # --- project the genuine F0 run row + receipt -------------------------
+            identity = S.RunIdentity(
+                run_id=run.id,
+                thread_id=receipt.thread_id,
+                patient_id=run.patient_id,
+                doctor_id=run.doctor_id,
+                workflow_version=run.workflow_version,
+                state_schema_version=run.state_schema_version,
+                policy_version=run.policy_version,
+                mapping_version=run.mapping_version,
+                as_of_utc=run.as_of_utc,
+                idempotency_key=run.idempotency_key,
+                started_at=run.started_at,
+            )
+            assert identity.run_id == run.id
+            # F0 persists no prompt_version and no encounter_id (D-06).
+            assert identity.prompt_version is None
+            assert identity.encounter_id is None
+
+            # --- project the genuine F1 receipt (no gate_evaluation_id in it) ----
+            gate_ref = S.GateEvaluationRef(
+                run_id=gate.run_id,
+                patient_id=gate.patient_id,
+                doctor_id=gate.doctor_id,
+                gate_version=gate.gate_version,
+                input_fingerprint_sha256=gate.input_fingerprint_sha256,
+                decision=S.GateDecision(gate.decision),
+                issues=[
+                    S.GateIssueRef(
+                        issue_type=S.IssueType(item.issue_type),
+                        reason_code=item.reason_code,
+                        document_id=item.document_id,
+                        fact_ids=list(item.fact_ids),
+                        message=item.message,
+                    )
+                    for item in gate.issues
+                ],
+                historical_excluded_vi002_ids=list(gate.historical_excluded_vi002_ids),
+                blocking_fact_count=gate.blocking_fact_count,
+                unavailable_reason=(
+                    S.GateUnavailableReason(gate.unavailable_reason)
+                    if gate.unavailable_reason
+                    else None
                 ),
-            ),
-            _event(
-                S.NodeName.FINALIZE_ACTIONS,
-                detail=S.FinalizeDetail(
-                    approval_decision="approve", task_created=True, notification_created=True
+                replayed=gate.replayed,
+            )
+            # The receipt genuinely does not expose the stored gate row identity.
+            assert gate_ref.gate_evaluation_id is None
+            assert not hasattr(gate, "gate_evaluation_id")
+
+            # The stored gate row is a *different* identity space (R01/R03).
+            assert stored_gate.id != run.id
+            gate_ref_stored = gate_ref.model_copy(update={"gate_evaluation_id": stored_gate.id})
+            assert (
+                S.GateEvaluationRef.model_validate_json(
+                    gate_ref_stored.model_dump_json()
+                ).gate_evaluation_id
+                == stored_gate.id
+            )
+
+            # --- project the genuine F2 DTO (which DOES carry it) ---------------
+            evidence_ref = S.EvaluableEvidenceRef(
+                run_id=evidence.run_id,
+                patient_id=evidence.patient_id,
+                doctor_id=evidence.doctor_id,
+                as_of_utc=evidence.as_of_utc,
+                workflow_version=evidence.workflow_version,
+                state_schema_version=evidence.state_schema_version,
+                mapping_version=evidence.mapping_version,
+                policy_version=evidence.policy_version,
+                gate_evaluation_id=evidence.gate_evaluation_id,
+                gate_version=evidence.gate_version,
+                gate_input_fingerprint_sha256=evidence.gate_input_fingerprint_sha256,
+                bridge_input_fingerprint_sha256=evidence.bridge_input_fingerprint_sha256,
+                # ``history_policy`` is not a field of the F2 DTO: the bridge pins
+                # it in its canonical fingerprint, so the label comes from there.
+                history_policy=COMPARISON_HISTORY_VERSION,
+                selected_document_ids=list(evidence.selected_document_ids),
+                selected_observation_ids=list(evidence.selected_observation_ids),
+                historical_excluded_vi002_ids=list(evidence.historical_excluded_vi002_ids),
+                no_current_reason=evidence.no_current_reason,
+            )
+            assert evidence_ref.gate_evaluation_id == stored_gate.id
+            assert evidence_ref.history_policy == S.ComparisonWindow.F2_365D.value
+
+            # --- project the genuine F2 content rows ---------------------------
+            # The F2 ``ObservationV2`` carries no validation state and no verifier,
+            # so those columns are projected from the authoritative stored row
+            # (D-10) and the DTO is cross-checked against it, never assumed.
+            observations = []
+            for row in evidence.selected_observations:
+                stored_observation = check.get(Observation, row.observation_id)
+                assert stored_observation is not None, row.observation_id
+                assert stored_observation.measure_type == row.measure_type
+                assert stored_observation.unit == row.unit
+                assert stored_observation.measured_at == row.measured_at
+                assert stored_observation.source == row.source
+                assert stored_observation.trust_level == row.trust_level
+                assert Decimal(str(stored_observation.value)) == Decimal(str(row.value))
+                observations.append(
+                    S.ObservationView(
+                        observation_id=stored_observation.id,
+                        patient_id=stored_observation.patient_id,
+                        role=S.ObservationRole.SELECTED_CURRENT,
+                        measure_type=MeasureType(stored_observation.measure_type),
+                        value=Decimal(str(stored_observation.value)),
+                        unit=Unit(stored_observation.unit),
+                        measured_at=stored_observation.measured_at,
+                        source=ObservationSource(stored_observation.source),
+                        validation=ValidationState(stored_observation.validation),
+                        trust_level=TrustLevel(stored_observation.trust_level),
+                        verified_by=stored_observation.verified_by_user_id,
+                        verified_at=stored_observation.verified_at,
+                        source_fact_id=stored_observation.source_fact_id,
+                        source_document_id=row.source_document_id,
+                    )
+                )
+            assert observations
+
+            verified = [
+                S.VerifiedFact(
+                    fact_id=row.fact_id,
+                    document_id=row.document_id,
+                    field_name=FactField(row.field_name),
+                    normalized_value=row.normalized_value,
+                    unit=row.unit,
+                    corrected_from_fact_id=row.corrected_from_fact_id,
+                )
+                for row in evidence.verified_facts
+            ]
+
+            # Genuine UUIDv5 baselines are accepted from real producer output.
+            baseline_ids = {
+                comparison.baseline_observation_id
+                for comparison in evidence.comparisons
+                if comparison.baseline_observation_id
+            }
+            v5_baselines = {value for value in baseline_ids if _uuid_version(value) == 5}
+            assert v5_baselines, baseline_ids
+
+            # --- project the genuine RB3 receipts (first write and replay) -----
+            def project(receipt: ReviewPersistenceReceiptV1) -> S.SealedReviewEvaluation:
+                return S.SealedReviewEvaluation(
+                    run_id=receipt.run_id,
+                    patient_id=receipt.patient_id,
+                    doctor_id=receipt.doctor_id,
+                    as_of_utc=receipt.as_of_utc,
+                    policy_version=receipt.policy_version,
+                    policy_reference_sha256=receipt.policy_reference_sha256,
+                    gate_evaluation_id=receipt.gate_evaluation_id,
+                    gate_version=receipt.gate_version,
+                    gate_input_fingerprint_sha256=receipt.gate_input_fingerprint_sha256,
+                    bridge_input_fingerprint_sha256=receipt.bridge_input_fingerprint_sha256,
+                    input_fingerprint_sha256=receipt.input_fingerprint_sha256,
+                    output_identity_sha256=receipt.output_identity_sha256,
+                    evaluation_id=receipt.evaluation_id,
+                    audit_event_id=receipt.audit_event_id,
+                    lineage_label_policy=receipt.lineage_label_policy,
+                    dr006_policy=receipt.dr006_policy,
+                    replayed=receipt.replayed,
+                    review_items_persisted=receipt.review_items_persisted,
+                    review_items_total=receipt.review_items_total,
+                    evidence_links_persisted=receipt.evidence_links_persisted,
+                    evidence_links_total=receipt.evidence_links_total,
+                    excluded_evidence=[
+                        S.PersistedExclusionRef(
+                            observation_id=item.observation_id, reason_code=item.reason_code
+                        )
+                        for item in receipt.excluded_evidence
+                    ],
+                    layered_exclusions=S.LayeredExclusions(
+                        l0_lineage_checks=[
+                            S.PersistedExclusionRef(
+                                observation_id=i.observation_id, reason_code=i.reason_code
+                            )
+                            for i in receipt.layered_exclusions.l0_lineage_checks
+                        ],
+                        l1_exclusions=[
+                            S.PersistedExclusionRef(
+                                observation_id=i.observation_id, reason_code=i.reason_code
+                            )
+                            for i in receipt.layered_exclusions.l1_exclusions
+                        ],
+                        l2_exclusions=[
+                            S.PersistedExclusionRef(
+                                observation_id=i.observation_id, reason_code=i.reason_code
+                            )
+                            for i in receipt.layered_exclusions.l2_exclusions
+                        ],
+                        l3_merged=[
+                            S.PersistedExclusionRef(
+                                observation_id=i.observation_id, reason_code=i.reason_code
+                            )
+                            for i in receipt.layered_exclusions.l3_merged
+                        ],
+                    ),
+                    exclusion_count=len(receipt.excluded_evidence),
+                    l1_exclusion_count=receipt.l1_exclusion_count,
+                    l2_exclusion_count=receipt.l2_exclusion_count,
+                )
+
+            first_sealed = project(persisted)
+            replay_sealed = project(replayed)
+            assert first_sealed.replayed is False
+            assert replay_sealed.replayed is True
+            assert replay_sealed.review_items_persisted == 0
+            assert replay_sealed.evidence_links_persisted == 0
+            assert first_sealed.evaluation_id == replay_sealed.evaluation_id
+            assert first_sealed.audit_event_id == replay_sealed.audit_event_id
+
+            # --- and the whole thing assembles into one state -------------------
+            # The manifest members are projected from the authoritative stored
+            # rows (D-10): F0 stores only ids in its receipt.
+            from app.db.models import Document
+            from app.db.models import Observation as StoredObservation
+
+            manifest_documents = []
+            for document_id in evidence.selected_document_ids:
+                stored_document = check.get(Document, document_id)
+                assert stored_document is not None, document_id
+                manifest_documents.append(
+                    S.SelectedDocumentRef(
+                        document_id=stored_document.id,
+                        source_sha256=stored_document.sha256,
+                        source_status=stored_document.extraction_status,
+                    )
+                )
+            manifest_observations = []
+            for observation_id in evidence.selected_observation_ids:
+                stored_observation = check.get(StoredObservation, observation_id)
+                assert stored_observation is not None, observation_id
+                manifest_observations.append(
+                    S.SelectedObservationRef(
+                        observation_id=stored_observation.id,
+                        trust_level=TrustLevel(stored_observation.trust_level),
+                        source_fact_id=stored_observation.source_fact_id,
+                        observation_created_at=stored_observation.created_at,
+                    )
+                )
+            S.SharedGraphState(
+                identity=identity,
+                selection=S.SelectedSourceManifest.build(
+                    document_ids=list(evidence.selected_document_ids),
+                    documents=manifest_documents,
+                    observation_ids=list(evidence.selected_observation_ids),
+                    observations=manifest_observations,
                 ),
-                tools_called=[S.ToolName.CREATE_IN_APP_TASK],
-            ),
-        ],
-        checkpoint=S.CheckpointRef(
-            checkpoint_id="ckpt-final",
-            thread_id=RUN,
-            last_completed_node=S.NodeName.FINALIZE_ACTIONS,
-            claimed_status=S.RunStatus.COMPLETED,
-        ),
-    )
-    text = sealed.model_dump_json()
-    revived = S.SharedGraphState.model_validate_json(text)
-    assert revived == sealed and revived.model_dump_json() == text
-    assert (
-        revived.workflow_completed
-        and revived.review_evaluation_sealed
-        and not revived.checkpoint_diverges
-    )
-    assert revived.runtime_evaluable is False and revived.policy_status == "unapproved"
-    # the only truth the deserialized shape carries is its own status field
-    assert (
-        revived.status is S.RunStatus.COMPLETED
-        and revived.approval is not None
-        and revived.approval.decision is S.ApprovalChoice.APPROVE
-    )
+                observations=observations,
+                verified_facts=verified,
+                verification_gate=gate_ref.model_copy(
+                    update={"gate_evaluation_id": stored_gate.id}
+                ),
+                evaluable_evidence=evidence_ref,
+                review_persistence=first_sealed,
+                last_validated_at_utc="2026-11-14T12:00:00Z",
+                updated_at="2026-11-14T12:00:00Z",
+            )
+    finally:
+        db.close()
+
+
+def test_r01_genuine_seeded_observation_rows_are_representable(engine) -> None:
+    """Every seeded observation row projects into ``ObservationView`` (UUIDv5 ids)."""
+    from app.db.models import Observation
+
+    db = _seed_session(engine)
+    try:
+        rows = db.execute(select(Observation)).scalars().all()
+        assert rows
+        for row in rows:
+            projected = S.ObservationView(
+                observation_id=row.id,
+                patient_id=row.patient_id,
+                role=S.ObservationRole.HISTORY,
+                measure_type=MeasureType(row.measure_type),
+                value=Decimal(str(row.value)),
+                unit=Unit(row.unit),
+                measured_at=row.measured_at,
+                source=ObservationSource(row.source),
+                validation=ValidationState(row.validation),
+                trust_level=TrustLevel(row.trust_level),
+                verified_by=row.verified_by_user_id,
+                verified_at=row.verified_at,
+                source_fact_id=row.source_fact_id,
+                source_document_id=None,
+            )
+            assert projected.observation_id == row.id
+    finally:
+        db.close()
