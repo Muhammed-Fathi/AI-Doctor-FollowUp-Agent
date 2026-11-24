@@ -245,3 +245,9 @@ Pushed head `08b457fb80bbf1c1150c3552444f52e4af49e7b7` — draft PR [#48](https:
 This is the first green exact-head run for the slice. It was read from the Actions API, not inferred. Windows `test_all.ps1` was **not** run by the agent; owner Windows acceptance remains outstanding.
 
 **Status:** PR #48 **OPEN / DRAFT / NOT MERGED**; P5 **IN_REVIEW / NOT ACCEPTED**; issue #14 **OPEN**; no merge, auto-merge, self-approval, main change or P5-S2 work. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
+
+## 11. Final-head CI verification (2026-11-24)
+
+After the documentation-only commits, the branch head is `85b8f47cfc67a9ee0cc8c3c181842b86b618d62f`. Both exact-head runs at that SHA — push [#45481000638](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45481000638) and pull_request [#45480990524](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45480990524) — are **COMPLETED / SUCCESS** (Frontend Node 22 and Backend Python 3.12, including Ruff lint/format, backend tests, Alembic smoke, OpenAPI and repository scan). This section is a documentation-only append: no application or test blob changes after `08b457f`, so the CI evidence above covers the reviewed code exactly. Windows `test_all.ps1` remains **not run** by the agent.
+
+**Status:** PR #48 **OPEN / DRAFT / NOT MERGED**; P5 **IN_REVIEW / NOT ACCEPTED**; issue #14 **OPEN**; no merge, auto-merge, self-approval, main change or P5-S2 work. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
