@@ -148,15 +148,18 @@ def test_p2_tables_still_exist_and_no_later_phase_table_appears() -> None:
     assert tables_0007.isdisjoint(P4_PLUS_TABLES)
 
 
-#: Owner decision D-14 (PR #47 comment 7122838674): the *only* authorized P5-S0
-#: application modules, as paths relative to ``backend/app/agents``. Every other
-#: path under ``agents`` - and the whole ``llm`` package - stays forbidden. This
-#: is an exact-path allowlist, never a directory-wide exemption.
-AUTHORIZED_AGENT_MODULE_PATHS = ("__init__.py", "state.py")
+#: Owner decision D-14 (PR #47 comment 7122838674) authorized the P5-S0 state
+#: modules. Owner decision **D-15** (P5-S1 in-session authorization, 2026-11-24)
+#: adds exactly one further module - the bounded read-only tool adapters - so the
+#: authorized paths relative to ``backend/app/agents`` are now precisely these
+#: three. This is a *new* S1 decision, not a retroactive widening of D-14: every
+#: other path under ``agents`` - and the whole ``llm`` package - stays forbidden,
+#: and this remains an exact-path allowlist, never a directory-wide exemption.
+AUTHORIZED_AGENT_MODULE_PATHS = ("__init__.py", "state.py", "tools.py")
 
 
 def _stray_agent_modules(app_root: Path) -> list[str]:
-    """Every file under ``app_root/agents`` that the D-14 allowlist does not name.
+    """Every file under ``app_root/agents`` that the D-15 allowlist does not name.
 
     Relative paths are compared as canonical POSIX-style paths, so a nested
     package (``agents/graph/nodes.py``) is rejected exactly like a stray
@@ -209,21 +212,38 @@ def test_no_later_phase_module_exists() -> None:
     )
 
 
-def test_d14_allowlist_rejects_every_other_agents_module(tmp_path: Path) -> None:
-    """Rejection proof for the D-14 allowlist (owner decision, PR #47).
+def test_d15_allowlist_is_exactly_the_three_authorized_modules() -> None:
+    """D-15 (owner, in-session, 2026-11-24): the tuple is exact, never a prefix."""
+    assert AUTHORIZED_AGENT_MODULE_PATHS == ("__init__.py", "state.py", "tools.py")
 
-    The allowlist admits exactly ``__init__.py`` and ``state.py``; a graph, an
-    orchestrator, a tool adapter, a checkpoint module, an LLM module and any
-    nested sub-package are all reported as violations.
+
+def test_d14_allowlist_rejects_every_other_agents_module(tmp_path: Path) -> None:
+    """Rejection proof for the D-14/D-15 allowlist (owner decisions, PR #47 + S1).
+
+    The allowlist admits exactly ``__init__.py``, ``state.py`` and ``tools.py``;
+    a graph, an orchestrator, a checkpoint module, an LLM module, every
+    tool-adapter *variant* and any nested sub-package are all reported as
+    violations. A near-miss filename is never treated as the authorized module.
     """
     app_root = tmp_path / "app"
     (app_root / "agents").mkdir(parents=True)
     assert _stray_agent_modules(app_root) == []
-    (app_root / "agents" / "__init__.py").write_text("", encoding="utf-8")
-    (app_root / "agents" / "state.py").write_text("", encoding="utf-8")
+    for name in AUTHORIZED_AGENT_MODULE_PATHS:
+        (app_root / "agents" / name).write_text("", encoding="utf-8")
     assert _stray_agent_modules(app_root) == []
 
-    for name in ("orchestrator.py", "tool_adapter.py", "checkpoint.py", "llm.py"):
+    for name in (
+        "orchestrator.py",
+        "tool_adapter.py",
+        "tool_adapters.py",
+        "agent_tools.py",
+        "tools_v2.py",
+        "tools_extra.py",
+        "checkpoint.py",
+        "checkpoints.py",
+        "llm.py",
+        "runtime.py",
+    ):
         stray_path = app_root / "agents" / name
         stray_path.write_text("", encoding="utf-8")
         assert _stray_agent_modules(app_root) == [f"agents/{name}"], name
@@ -233,6 +253,14 @@ def test_d14_allowlist_rejects_every_other_agents_module(tmp_path: Path) -> None
     nested.parent.mkdir()
     nested.write_text("", encoding="utf-8")
     assert _stray_agent_modules(app_root) == ["agents/graph/nodes.py"]
+    nested.unlink()
+    nested.parent.rmdir()
+
+    # A nested *tools* package is not the authorized flat ``tools.py`` module.
+    nested_tools = app_root / "agents" / "tools" / "adapters.py"
+    nested_tools.parent.mkdir()
+    nested_tools.write_text("", encoding="utf-8")
+    assert _stray_agent_modules(app_root) == ["agents/tools/adapters.py"]
     # The reported path is canonical and POSIX-style on every platform, so this
     # assertion compares no platform-dependent separator.
     assert all("/" in item and "\\" not in item for item in _stray_agent_modules(app_root))
