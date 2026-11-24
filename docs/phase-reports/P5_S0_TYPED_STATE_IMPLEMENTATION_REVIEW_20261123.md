@@ -548,3 +548,51 @@ Focused S0 **173 passed / 0 failed**; P5 **232**; P2 **282**; P3 **443**; **full
 ### 13.6 Status
 
 P5-S0 remains **IN_REVIEW pending independent verification and actual owner Windows re-verification**; issue #14 **OPEN**; P4 **`CONDITIONALLY_ACCEPTED_SYNTHETIC`**; GOLD-EX-11 **FAIL / NOT PROVEN**; RB3-75..77 **deferred / NOT EXECUTED**; DR-006 persistence **prohibited**; runtime demo policy **not activated / unapproved**. No P5-S1 work. PR #47 stays **OPEN / DRAFT / NOT MERGED**; no merge, auto-merge, direct main edit or self-approval. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
+
+---
+
+## 14. Owner Windows verification PASS and bounded acceptance (2026-11-24) — append-only
+
+### 14.1 Live verification of the owner comment
+
+The owner acceptance comment was read live from the GitHub API on 2026-11-24, not from a local artifact:
+
+- Marker: `OWNER-ACCEPT-P5-S0-BOUNDED-TYPED-STATE`
+- Comment id: `7141020839`; URL: https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/47#issuecomment-7141020839
+- Author: `Muhammed-Fathi`; `author_association`: **OWNER**
+- `created_at`: `2026-11-24T18:41:53Z`; `updated_at`: `2026-11-24T18:41:53Z` (never edited)
+- Exact SHA named in the comment: `34336512ce299d468d058bd10d928d1541541dab`, equal to the PR head at verification time.
+
+### 14.2 Owner Windows verification — PASS
+
+Recorded as the owner reported it for exact HEAD `34336512ce299d468d058bd10d928d1541541dab`:
+
+| Field | Owner result |
+|---|---|
+| Windows PowerShell | 5.1.22621.4249 |
+| Python | 3.12.9 |
+| Node.js | v24.15.0 |
+| npm | 11.17.0 |
+| Expected HEAD vs final HEAD | exact match |
+| UTF-8 regression test | PASS |
+| `test_all.ps1` exit code | 0 |
+| Mandatory gates | 12 PASS / 0 FAIL |
+| Optional Playwright | 1 SKIPPED |
+| Duration | 833.9 seconds |
+| Working tree changes | 0 |
+
+This is the owner's own Windows run. The agent did not execute it and makes no independent Windows claim beyond recording the owner's report.
+
+### 14.3 The earlier failed run remains on record
+
+§13 is unchanged. The first owner Windows verification at `5831c44557a48d7e03781fe3871f2241b4aa2f89` **failed** with quality gate PASS 11 / FAIL 1 / SKIPPED 1 in 774.5 s on `UnicodeDecodeError: 'charmap' codec can't decode byte 0x90 in position 37394`, caused by platform-default cp1252 decoding of UTF-8 source. The root-cause evidence — the cp1252 reproduction at byte `0x90`, the tail of the UTF-8 sequence for `←` (U+2190), with `36506 + 888` CRLF bytes `= 37394` — and the six-call `read_text(encoding="utf-8")` correction are preserved verbatim. The passing run in §14.2 is the re-verification of that correction at `3433651`.
+
+### 14.4 Bounded owner acceptance
+
+The owner's decision, in substance: accept the bounded P5-S0 typed-state implementation and its associated test evidence, subject to final append-only closure documentation, exact-head CI verification and owner-controlled merge.
+
+The acceptance is **bounded**. It does **not** authorize, and this report does not claim: runtime policy activation, graph execution, tool adapters, checkpoints, LLM integration, clinical use, medical authorization, API/UI work, tasks, notifications or P5-S1 implementation. Structural eligibility in the state module selects nothing and authorizes nothing, and the module contains no runtime behaviour.
+
+### 14.5 Status after closure
+
+P5-S0 is **owner-accepted within the bounded scope above**; PR #47 remains **OPEN / DRAFT / NOT MERGED** pending independent verification and owner-controlled merge. Issue #14 **OPEN**. P4 **`CONDITIONALLY_ACCEPTED_SYNTHETIC`**. GOLD-EX-11 **FAIL / NOT PROVEN**. RB3-75..77 **deferred / NOT EXECUTED**. DR-006 persistence **prohibited**. Runtime demo policy **not activated / unapproved**. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
