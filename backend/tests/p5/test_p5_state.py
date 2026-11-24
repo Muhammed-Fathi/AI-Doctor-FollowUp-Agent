@@ -59,6 +59,9 @@ AUDIT_A = "2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b"
 EVAL_A = "3c3c3c3c-3c3c-4c3c-8c3c-3c3c3c3c3c3c"
 #: Current observation: a live check-in, UUIDv4.
 OBS_CURRENT = "a0000000-0000-4000-8000-000000000001"
+#: GOLD-D-shaped history fixtures (UUIDv5, like the accepted seeded rows).
+WARN_OBS = "f0000000-0000-5000-8000-0000000000a1"
+REJECTED_OBS = "f0000000-0000-5000-8000-0000000000a2"
 #: **Genuine seeded synthetic observation identities** (UUIDv5), used as
 #: baselines by the accepted RB4 run-backed GOLD comparisons. Taken verbatim
 #: from ``data/synthetic/observations.json`` — see R01.
@@ -244,6 +247,18 @@ def _issue(
         fact_ids=fact_ids if fact_ids is not None else [FACT_A],
         message=message,
     )
+
+
+def _trace_issue(**overrides: Any) -> S.TraceGateIssue:
+    """Typed trace payload for one blocker: identity only, no message (R2-04)."""
+    fields: dict[str, Any] = {
+        "issue_type": S.IssueType.VI_003,
+        "reason_code": "unverified_fact",
+        "document_id": DOC_A,
+        "fact_ids": [FACT_A],
+    }
+    fields.update(overrides)
+    return S.TraceGateIssue(**fields)
 
 
 def _gate(
@@ -755,8 +770,9 @@ def test_m05_rb3_exclusions_and_items_use_the_durable_maxima() -> None:
     ]
     sealed = _sealed(
         excluded_evidence=merged,
-        layered_exclusions=_layered(l3_merged=merged),
+        layered_exclusions=_layered(l1_exclusions=merged, l3_merged=merged),
         exclusion_count=len(merged),
+        l1_exclusion_count=len(merged),
     )
     assert len(sealed.excluded_evidence) == S.MAX_MERGED_EXCLUSIONS
     with pytest.raises(ValidationError):
@@ -1198,6 +1214,18 @@ def test_m11_history_cannot_become_selected_current_and_delta_must_follow() -> N
             verification_gate=_gate(),
             last_validated_at_utc=VALIDATED,
         )
+    with pytest.raises(ValidationError, match="must equal the immutable selected manifest"):
+        _state(
+            observations=[
+                current,
+                _history(observation_id=OBS_BASELINE_V5_B, role=S.ObservationRole.SELECTED_CURRENT),
+            ],
+            comparisons=[_comparison(baseline_observation_id=OBS_BASELINE_V5_B)],
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+        )
+    # ... and once the manifest genuinely selects it, the baseline check still
+    # refuses it, because a selected-current row can never serve as a baseline.
     with pytest.raises(ValidationError, match="must be a history row"):
         _state(
             observations=[
@@ -1205,6 +1233,13 @@ def test_m11_history_cannot_become_selected_current_and_delta_must_follow() -> N
                 _history(observation_id=OBS_BASELINE_V5_B, role=S.ObservationRole.SELECTED_CURRENT),
             ],
             comparisons=[_comparison(baseline_observation_id=OBS_BASELINE_V5_B)],
+            selection=_manifest(
+                observation_ids=sorted([OBS_CURRENT, OBS_BASELINE_V5_B]),
+                observations=[
+                    _selected_observation(observation_id=value)
+                    for value in sorted([OBS_CURRENT, OBS_BASELINE_V5_B])
+                ],
+            ),
             verification_gate=_gate(),
             last_validated_at_utc=VALIDATED,
         )
@@ -1399,7 +1434,9 @@ def test_m13_gate_trace_consistency_without_fabricated_decisions() -> None:
         events=[
             _event(
                 node=S.NodeName.FACT_VERIFY_GATE,
-                detail=S.GateDetail(decision="halt", blocking_fact_count=1, issues=[_issue()]),
+                detail=S.GateDetail(
+                    decision="halt", blocking_fact_count=1, issues=[_trace_issue()]
+                ),
             )
         ],
     )
@@ -1427,7 +1464,9 @@ def test_m13_gate_trace_consistency_without_fabricated_decisions() -> None:
             events=[
                 _event(
                     node=S.NodeName.FACT_VERIFY_GATE,
-                    detail=S.GateDetail(decision="halt", blocking_fact_count=1, issues=[_issue()]),
+                    detail=S.GateDetail(
+                        decision="halt", blocking_fact_count=1, issues=[_trace_issue()]
+                    ),
                 )
             ],
         )
@@ -1442,7 +1481,7 @@ def test_m13_gate_trace_consistency_without_fabricated_decisions() -> None:
                     detail=S.GateDetail(
                         decision="halt",
                         blocking_fact_count=1,
-                        issues=[_issue(reason_code="forged")],
+                        issues=[_trace_issue(reason_code="forged")],
                     ),
                 )
             ],
@@ -1503,7 +1542,7 @@ def test_m14_trace_details_carry_no_free_text_or_unbounded_fields() -> None:
             preprocessing_applied=False,
         ),
         S.ValidationDetail(validation_outcome=S.ValidationOutcome.ACCEPT, attempt_index=1),
-        S.GateDetail(decision="halt", blocking_fact_count=1, issues=[_issue()]),
+        S.GateDetail(decision="halt", blocking_fact_count=1, issues=[_trace_issue()]),
         S.FinalizeDetail(
             approval_decision="approve", task_created=False, notification_created=False
         ),
@@ -1625,9 +1664,10 @@ def test_m16_exclusion_counts_follow_the_deduplicated_merged_semantics() -> None
         S.PersistedExclusionRef(observation_id=OBS_BASELINE_V5, reason_code="validation_rejected")
     ]
     l2 = [S.PersistedExclusionRef(observation_id=OBS_BASELINE_V5, reason_code="measurement_stale")]
+    # Canonical order is ascending by (observation_id, reason_code), as RB3 sorts.
     merged = [
-        S.PersistedExclusionRef(observation_id=OBS_BASELINE_V5, reason_code="validation_rejected"),
         S.PersistedExclusionRef(observation_id=OBS_BASELINE_V5, reason_code="measurement_stale"),
+        S.PersistedExclusionRef(observation_id=OBS_BASELINE_V5, reason_code="validation_rejected"),
     ]
     sealed = _sealed(
         excluded_evidence=merged,
@@ -1638,8 +1678,8 @@ def test_m16_exclusion_counts_follow_the_deduplicated_merged_semantics() -> None
     )
     assert sealed.exclusion_count == 2  # not 1 + 1 = 2 by luck; try a real overlap
     overlapping = _sealed(
-        excluded_evidence=[merged[0]],
-        layered_exclusions=_layered(l1_exclusions=l1, l2_exclusions=l1, l3_merged=[merged[0]]),
+        excluded_evidence=[merged[1]],
+        layered_exclusions=_layered(l1_exclusions=l1, l2_exclusions=l1, l3_merged=[merged[1]]),
         exclusion_count=1,
         l1_exclusion_count=1,
         l2_exclusion_count=1,
@@ -1680,7 +1720,7 @@ def test_m16_sealed_evaluation_is_bound_to_its_evidence_and_scope() -> None:
         ({"as_of_utc": "2026-11-15T12:00:00Z"}, "different as-of clock"),
         ({"policy_version": "demo-policy-1.2.0"}, "different policy version"),
         ({"bridge_input_fingerprint_sha256": _sha("other")}, "different bridge evidence"),
-        ({"gate_evaluation_id": ISSUE_A}, "different gate evaluation"),
+        ({"gate_evaluation_id": ISSUE_A}, "different F2 gate identity"),
     ):
         with pytest.raises(ValidationError, match=match):
             _state(review_persistence=_sealed(**change), **base)
@@ -2153,8 +2193,19 @@ def _doctor(db: Session) -> Any:
 
 
 def _add_checkin(
-    db: Session, *, observation_id: str, patient_id: str, measure: str, value: float, unit: str
+    db: Session,
+    *,
+    observation_id: str,
+    patient_id: str,
+    measure: str,
+    value: float,
+    unit: str,
+    measured_at: str = "2026-11-01T09:00:00Z",
+    source: str = "patient_checkin",
+    validation: str = "ok",
+    trust_level: str = "self_reported_validated",
 ) -> Any:
+    """Store one scripted synthetic observation row (fixture construction only)."""
     from app.db.models import Observation
 
     row = Observation(
@@ -2163,10 +2214,10 @@ def _add_checkin(
         measure_type=measure,
         value=value,
         unit=unit,
-        measured_at="2026-11-01T09:00:00Z",
-        source="patient_checkin",
-        validation="ok",
-        trust_level="self_reported_validated",
+        measured_at=measured_at,
+        source=source,
+        validation=validation,
+        trust_level=trust_level,
         created_at="2026-11-14T12:00:00Z",
     )
     db.add(row)
@@ -2301,6 +2352,31 @@ def test_r01_genuine_stored_run_projects_every_accepted_producer(engine, tmp_pat
             measure="systolic_bp",
             value=121,
             unit="mmHg",
+        )
+        # GOLD-D-shaped history rows: an eligible warning row that becomes the
+        # latest prior, and a rejected row the bridge must exclude. Both are
+        # scripted synthetic fixtures, not producer output.
+        _add_checkin(
+            db,
+            observation_id=WARN_OBS,
+            patient_id=patient.id,
+            measure="systolic_bp",
+            value=150,
+            unit="mmHg",
+            measured_at="2026-10-20T09:00:00Z",
+            source="seed_fixture",
+            validation="ok_with_warning",
+        )
+        _add_checkin(
+            db,
+            observation_id=REJECTED_OBS,
+            patient_id=patient.id,
+            measure="systolic_bp",
+            value=999,
+            unit="mmHg",
+            measured_at="2026-09-01T09:00:00Z",
+            source="seed_fixture",
+            validation="rejected",
         )
         document = _add_verified_document(db, patient_id=patient.id, root=tmp_path, label="glucose")
         document_ids = (document.id,)
@@ -2454,36 +2530,114 @@ def test_r01_genuine_stored_run_projects_every_accepted_producer(engine, tmp_pat
             # The F2 ``ObservationV2`` carries no validation state and no verifier,
             # so those columns are projected from the authoritative stored row
             # (D-10) and the DTO is cross-checked against it, never assumed.
-            observations = []
-            for row in evidence.selected_observations:
-                stored_observation = check.get(Observation, row.observation_id)
-                assert stored_observation is not None, row.observation_id
-                assert stored_observation.measure_type == row.measure_type
-                assert stored_observation.unit == row.unit
-                assert stored_observation.measured_at == row.measured_at
-                assert stored_observation.source == row.source
-                assert stored_observation.trust_level == row.trust_level
-                assert Decimal(str(stored_observation.value)) == Decimal(str(row.value))
-                observations.append(
-                    S.ObservationView(
-                        observation_id=stored_observation.id,
-                        patient_id=stored_observation.patient_id,
-                        role=S.ObservationRole.SELECTED_CURRENT,
-                        measure_type=MeasureType(stored_observation.measure_type),
-                        value=Decimal(str(stored_observation.value)),
-                        unit=Unit(stored_observation.unit),
-                        measured_at=stored_observation.measured_at,
-                        source=ObservationSource(stored_observation.source),
-                        validation=ValidationState(stored_observation.validation),
-                        trust_level=TrustLevel(stored_observation.trust_level),
-                        verified_by=stored_observation.verified_by_user_id,
-                        verified_at=stored_observation.verified_at,
-                        source_fact_id=stored_observation.source_fact_id,
-                        source_document_id=row.source_document_id,
-                    )
+            def project_observation(row: Any, role: S.ObservationRole) -> S.ObservationView:
+                stored = check.get(Observation, row.observation_id)
+                assert stored is not None, row.observation_id
+                assert stored.measure_type == row.measure_type
+                assert stored.unit == row.unit
+                assert stored.measured_at == row.measured_at
+                assert stored.source == row.source
+                assert stored.trust_level == row.trust_level
+                assert Decimal(str(stored.value)) == Decimal(str(row.value))
+                return S.ObservationView(
+                    observation_id=stored.id,
+                    patient_id=stored.patient_id,
+                    role=role,
+                    measure_type=MeasureType(stored.measure_type),
+                    value=Decimal(str(stored.value)),
+                    unit=Unit(stored.unit),
+                    measured_at=stored.measured_at,
+                    source=ObservationSource(stored.source),
+                    validation=ValidationState(stored.validation),
+                    trust_level=TrustLevel(stored.trust_level),
+                    verified_by=stored.verified_by_user_id,
+                    verified_at=stored.verified_at,
+                    source_fact_id=stored.source_fact_id,
+                    source_document_id=row.source_document_id,
                 )
-            assert observations
 
+            observations = [
+                project_observation(row, S.ObservationRole.SELECTED_CURRENT)
+                for row in evidence.selected_observations
+            ]
+            assert len(observations) == len(evidence.selected_observations) == 1
+
+            # --- resolve the genuine comparison baselines from stored evidence ---
+            # ``ComparisonV2`` carries neither values nor a window label, so the
+            # baseline row is resolved from the authoritative store and the label
+            # comes from the bridge's pinned history version.
+            baseline_ids = sorted(
+                {
+                    comparison.baseline_observation_id
+                    for comparison in evidence.comparisons
+                    if comparison.baseline_observation_id
+                }
+            )
+            v5_baselines = {value for value in baseline_ids if _uuid_version(value) == 5}
+            assert v5_baselines, baseline_ids
+            history_rows: dict[str, S.ObservationView] = {}
+            for observation_id in baseline_ids:
+                stored = check.get(Observation, observation_id)
+                assert stored is not None, observation_id
+                history_rows[observation_id] = S.ObservationView(
+                    observation_id=stored.id,
+                    patient_id=stored.patient_id,
+                    role=S.ObservationRole.HISTORY,
+                    measure_type=MeasureType(stored.measure_type),
+                    value=Decimal(str(stored.value)),
+                    unit=Unit(stored.unit),
+                    measured_at=stored.measured_at,
+                    source=ObservationSource(stored.source),
+                    validation=ValidationState(stored.validation),
+                    trust_level=TrustLevel(stored.trust_level),
+                    verified_by=stored.verified_by_user_id,
+                    verified_at=stored.verified_at,
+                    source_fact_id=stored.source_fact_id,
+                )
+            assert set(history_rows) == set(baseline_ids)
+
+            # --- project the actual F2 comparisons with the correct label ------
+            comparisons = [
+                S.ComparisonResult(
+                    current_observation_id=comparison.current_observation_id,
+                    baseline_observation_id=comparison.baseline_observation_id,
+                    measure_type=MeasureType(comparison.measure_type),
+                    unit=Unit(comparison.unit),
+                    comparable=comparison.comparable,
+                    delta=comparison.delta,
+                    incomparable_reason=(
+                        S.IncomparableReason(comparison.incomparable_reason)
+                        if comparison.incomparable_reason
+                        else None
+                    ),
+                    trust_basis=S.TrustBasis(comparison.trust_basis),
+                    history_policy=S.ComparisonWindow.F2_365D,
+                    current_value=next(
+                        row.value
+                        for row in observations
+                        if row.observation_id == comparison.current_observation_id
+                    ),
+                    baseline_value=(
+                        history_rows[comparison.baseline_observation_id].value
+                        if comparison.baseline_observation_id
+                        else None
+                    ),
+                )
+                for comparison in evidence.comparisons
+            ]
+            assert len(comparisons) == len(evidence.comparisons) == 1
+
+            # --- project the actual F2 history exclusions ---------------------
+            exclusions = [
+                S.EvidenceExclusion(
+                    observation_id=item.observation_id,
+                    reason_code=S.ExclusionReason(item.reason_code),
+                )
+                for item in evidence.history_exclusions
+            ]
+            assert len(exclusions) == len(evidence.history_exclusions) == 1
+
+            # --- project the genuine F2 verified facts ------------------------
             verified = [
                 S.VerifiedFact(
                     fact_id=row.fact_id,
@@ -2492,18 +2646,11 @@ def test_r01_genuine_stored_run_projects_every_accepted_producer(engine, tmp_pat
                     normalized_value=row.normalized_value,
                     unit=row.unit,
                     corrected_from_fact_id=row.corrected_from_fact_id,
+                    verification_status=row.verification_status,
                 )
                 for row in evidence.verified_facts
             ]
-
-            # Genuine UUIDv5 baselines are accepted from real producer output.
-            baseline_ids = {
-                comparison.baseline_observation_id
-                for comparison in evidence.comparisons
-                if comparison.baseline_observation_id
-            }
-            v5_baselines = {value for value in baseline_ids if _uuid_version(value) == 5}
-            assert v5_baselines, baseline_ids
+            assert len(verified) == len(evidence.verified_facts) == 4
 
             # --- project the genuine RB3 receipts (first write and replay) -----
             def project(receipt: ReviewPersistenceReceiptV1) -> S.SealedReviewEvaluation:
@@ -2575,53 +2722,153 @@ def test_r01_genuine_stored_run_projects_every_accepted_producer(engine, tmp_pat
             assert first_sealed.evaluation_id == replay_sealed.evaluation_id
             assert first_sealed.audit_event_id == replay_sealed.audit_event_id
 
-            # --- and the whole thing assembles into one state -------------------
-            # The manifest members are projected from the authoritative stored
-            # rows (D-10): F0 stores only ids in its receipt.
-            from app.db.models import Document
-            from app.db.models import Observation as StoredObservation
+            # --- load the genuine F0 manifest rows (not substitutes) ------------
+            from app.db.models import RunSelectedDocument, RunSelectedObservation
 
-            manifest_documents = []
-            for document_id in evidence.selected_document_ids:
-                stored_document = check.get(Document, document_id)
-                assert stored_document is not None, document_id
-                manifest_documents.append(
-                    S.SelectedDocumentRef(
-                        document_id=stored_document.id,
-                        source_sha256=stored_document.sha256,
-                        source_status=stored_document.extraction_status,
-                    )
+            stored_documents = (
+                check.execute(
+                    select(RunSelectedDocument).where(RunSelectedDocument.workflow_run_id == run_id)
                 )
-            manifest_observations = []
-            for observation_id in evidence.selected_observation_ids:
-                stored_observation = check.get(StoredObservation, observation_id)
-                assert stored_observation is not None, observation_id
-                manifest_observations.append(
-                    S.SelectedObservationRef(
-                        observation_id=stored_observation.id,
-                        trust_level=TrustLevel(stored_observation.trust_level),
-                        source_fact_id=stored_observation.source_fact_id,
-                        observation_created_at=stored_observation.created_at,
-                    )
-                )
-            S.SharedGraphState(
-                identity=identity,
-                selection=S.SelectedSourceManifest.build(
-                    document_ids=list(evidence.selected_document_ids),
-                    documents=manifest_documents,
-                    observation_ids=list(evidence.selected_observation_ids),
-                    observations=manifest_observations,
-                ),
-                observations=observations,
-                verified_facts=verified,
-                verification_gate=gate_ref.model_copy(
-                    update={"gate_evaluation_id": stored_gate.id}
-                ),
-                evaluable_evidence=evidence_ref,
-                review_persistence=first_sealed,
-                last_validated_at_utc="2026-11-14T12:00:00Z",
-                updated_at="2026-11-14T12:00:00Z",
+                .scalars()
+                .all()
             )
+            stored_selections = (
+                check.execute(
+                    select(RunSelectedObservation).where(
+                        RunSelectedObservation.workflow_run_id == run_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert stored_documents and stored_selections
+            # The F0 manifest is the authoritative selection snapshot: it carries
+            # the source hash and the *selection-time* trust and creation stamps.
+            manifest_documents = [
+                S.SelectedDocumentRef(
+                    document_id=row.document_id,
+                    source_sha256=row.source_sha256,
+                    source_status=row.source_status,
+                )
+                for row in sorted(stored_documents, key=lambda item: item.document_id)
+            ]
+            manifest_observations = [
+                S.SelectedObservationRef(
+                    observation_id=row.observation_id,
+                    trust_level=TrustLevel(row.trust_level),
+                    source_fact_id=row.source_fact_id,
+                    observation_created_at=row.observation_created_at,
+                )
+                for row in sorted(stored_selections, key=lambda item: item.observation_id)
+            ]
+            assert [item.document_id for item in manifest_documents] == sorted(
+                evidence.selected_document_ids
+            )
+            assert [item.observation_id for item in manifest_observations] == sorted(
+                evidence.selected_observation_ids
+            )
+
+            # --- and the whole thing assembles into one state -------------------
+            def assemble(sealed: S.SealedReviewEvaluation) -> S.SharedGraphState:
+                return S.SharedGraphState(
+                    identity=identity,
+                    selection=S.SelectedSourceManifest.build(
+                        document_ids=[item.document_id for item in manifest_documents],
+                        documents=manifest_documents,
+                        observation_ids=[item.observation_id for item in manifest_observations],
+                        observations=manifest_observations,
+                    ),
+                    observations=[*observations, *history_rows.values()],
+                    comparisons=comparisons,
+                    evidence_exclusions=exclusions,
+                    verified_facts=verified,
+                    verification_gate=gate_ref.model_copy(
+                        update={"gate_evaluation_id": stored_gate.id}
+                    ),
+                    evaluable_evidence=evidence_ref,
+                    review_persistence=sealed,
+                    last_validated_at_utc="2026-11-14T12:00:00Z",
+                    updated_at="2026-11-14T12:00:00Z",
+                )
+
+            first_state = assemble(first_sealed)
+            assert first_state.review_evaluation_sealed is True
+            assert first_state.workflow_completed is False
+
+            # --- JSON round-trip and full revalidation ------------------------
+            round_tripped = S.SharedGraphState.model_validate_json(first_state.model_dump_json())
+            assert round_tripped == first_state
+            revalidated = S.SharedGraphState.revalidate(first_state)
+            assert revalidated == first_state
+            # Re-parsing is what catches a mutated container (D-08).
+            assert S.SharedGraphState.revalidate(round_tripped) == first_state
+
+            # --- the exact RB3 replay state -----------------------------------
+            replay_state = assemble(replay_sealed)
+            assert replay_state.review_persistence is not None
+            assert replay_state.review_persistence.replayed is True
+            assert replay_state.review_persistence.review_items_persisted == 0
+            assert replay_state.review_persistence.evidence_links_persisted == 0
+            # Unchanged sealed identity, zero per-call writes, same totals.
+            assert (
+                replay_state.review_persistence.evaluation_id
+                == first_state.review_persistence.evaluation_id
+            )
+            assert (
+                replay_state.review_persistence.audit_event_id
+                == first_state.review_persistence.audit_event_id
+            )
+            assert (
+                replay_state.review_persistence.input_fingerprint_sha256
+                == first_state.review_persistence.input_fingerprint_sha256
+            )
+            assert (
+                replay_state.review_persistence.exclusion_count
+                == first_state.review_persistence.exclusion_count
+            )
+            assert S.SharedGraphState.revalidate(replay_state) == replay_state
+
+            # --- the projected collections equal the actual producer outputs ----
+            assert [row.observation_id for row in first_state.observations] == sorted(
+                [item.observation_id for item in evidence.selected_observations],
+                key=str,
+            ) + sorted(baseline_ids)
+            assert [
+                (row.current_observation_id, row.baseline_observation_id, row.delta)
+                for row in first_state.comparisons
+            ] == [
+                (item.current_observation_id, item.baseline_observation_id, item.delta)
+                for item in evidence.comparisons
+            ]
+            assert [
+                (row.observation_id, row.reason_code.value)
+                for row in first_state.evidence_exclusions
+            ] == [(item.observation_id, item.reason_code) for item in evidence.history_exclusions]
+            assert [row.fact_id for row in first_state.verified_facts] == [
+                item.fact_id for item in evidence.verified_facts
+            ]
+            assert [row.document_id for row in first_state.selection.documents] == sorted(
+                evidence.selected_document_ids
+            )
+
+            # --- eligible OK_WITH_WARNING behaviour from genuine producer evidence
+            warning_baseline = history_rows[WARN_OBS]
+            assert warning_baseline.validation is S.ValidationState.OK_WITH_WARNING
+            assert warning_baseline.admissible is True
+            # The warning is neither promoted to doctor-verified nor hidden: the
+            # trust label stays what the stored row says.
+            assert warning_baseline.trust_level is TrustLevel.SELF_REPORTED_VALIDATED
+            assert first_state.comparisons[0].baseline_observation_id == WARN_OBS
+            assert first_state.comparisons[0].trust_basis is S.TrustBasis.SELF_REPORTED
+            # ... and the rejected row is excluded by the producer, not by us.
+            assert REJECTED_OBS not in {row.observation_id for row in first_state.observations}
+            assert first_state.evidence_exclusions[0].observation_id == REJECTED_OBS
+
+            # Deliberately *not* represented, and not claimed: RB3 review items and
+            # evidence links are counted by the sealed receipt but are not
+            # projected as state collections in S0.
+            assert first_state.review_persistence.review_items_total > 0
+            assert not hasattr(first_state, "review_items")
     finally:
         db.close()
 
@@ -2654,3 +2901,628 @@ def test_r01_genuine_seeded_observation_rows_are_representable(engine) -> None:
             assert projected.observation_id == row.id
     finally:
         db.close()
+
+
+# === R2-02: actual observation admissibility =========================================
+
+
+def test_r202_ok_with_warning_is_admissible_and_rejected_is_not() -> None:
+    """The accepted data check rejects only ``rejected``; a warning is kept."""
+    assert S.ValidationState.OK_WITH_WARNING.value == "ok_with_warning"
+    warning = _observation(validation=S.ValidationState.OK_WITH_WARNING)
+    assert warning.admissible is True
+    # The structural check neither promotes nor hides the warning.
+    assert warning.validation is S.ValidationState.OK_WITH_WARNING
+    assert warning.trust_level is TrustLevel.SELF_REPORTED_VALIDATED
+    assert _observation().admissible is True
+    assert _observation(validation=S.ValidationState.REJECTED).admissible is False
+
+
+def test_r202_eligible_warning_rows_participate_as_current_and_baseline() -> None:
+    """GOLD-D shape: an eligible warning row can be current *and* baseline.
+
+    ``diastolic_bp 250 mmHg`` is the accepted GOLD-D fixture row that carries
+    ``ok_with_warning``. Its trust is untouched by the data check, so both rows
+    stay self-reported and the comparison keeps its derived label.
+    """
+    warning_current = _observation(validation=S.ValidationState.OK_WITH_WARNING)
+    warning_baseline = _history(validation=S.ValidationState.OK_WITH_WARNING, value=Decimal("150"))
+    state = _state(
+        observations=[warning_current, warning_baseline],
+        comparisons=[_comparison(delta=Decimal("-10"), baseline_value=Decimal("150"))],
+        verification_gate=_gate(),
+        last_validated_at_utc=VALIDATED,
+    )
+    assert [row.validation for row in state.observations] == [
+        S.ValidationState.OK_WITH_WARNING,
+        S.ValidationState.OK_WITH_WARNING,
+    ]
+    assert state.comparisons[0].trust_basis is S.TrustBasis.SELF_REPORTED
+    # A rejected row is never eligible, whichever role it is given.
+    with pytest.raises(ValidationError, match="must pass the data check"):
+        _state(
+            observations=[
+                _observation(),
+                _history(validation=S.ValidationState.REJECTED, value=Decimal("128")),
+            ],
+            comparisons=[_comparison()],
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+        )
+
+
+# === R2-03: complete structural comparison binding ===================================
+
+
+def test_r203_delta_is_always_checked_against_the_resolved_rows() -> None:
+    """Omitting the optional projected values cannot hide an incorrect delta."""
+    current, baseline = _observation(), _history()
+    with pytest.raises(ValidationError, match="delta must equal"):
+        _state(
+            observations=[current, baseline],
+            comparisons=[_comparison(delta=Decimal("11"), current_value=None, baseline_value=None)],
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+        )
+    # The same wrong delta is rejected when the values are projected too.
+    with pytest.raises(ValidationError, match="delta must equal"):
+        _state(
+            observations=[current, baseline],
+            comparisons=[_comparison(delta=Decimal("11"))],
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+        )
+    # A correct delta with both projections omitted is accepted: the resolved
+    # rows are the authority, so nothing had to be invented.
+    state = _state(
+        observations=[current, baseline],
+        comparisons=[_comparison(current_value=None, baseline_value=None)],
+        verification_gate=_gate(),
+        last_validated_at_utc=VALIDATED,
+    )
+    assert state.comparisons[0].delta == Decimal("12")
+
+
+def test_r203_unselected_current_is_rejected_by_the_immutable_manifest() -> None:
+    """Selected-current roles are bound to the manifest, with or without an F2 ref."""
+    stray = _observation(observation_id=OBS_BASELINE_V5_B, role=S.ObservationRole.SELECTED_CURRENT)
+    with pytest.raises(ValidationError, match="immutable selected manifest"):
+        _state(observations=[_observation(), stray])
+    # The same holds when the state carries no F2 evidence reference at all.
+    with pytest.raises(ValidationError, match="immutable selected manifest"):
+        _state(
+            observations=[_observation(), stray],
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+        )
+
+
+def test_r203_baseline_must_lie_inside_the_labelled_window() -> None:
+    """F2 is 365 days, RB1 is 90 days; a baseline outside its window is not a member."""
+    with pytest.raises(ValidationError, match="inside the labelled comparison window"):
+        _state(
+            observations=[_observation(), _history(measured_at="2025-10-31T09:00:00Z")],
+            comparisons=[_comparison()],
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+        )
+    # Exactly 365 days before the current is inside the F2 window.
+    _state(
+        observations=[_observation(), _history(measured_at="2025-11-01T09:00:00Z")],
+        comparisons=[_comparison()],
+        verification_gate=_gate(),
+        last_validated_at_utc=VALIDATED,
+    )
+    # The RB1 label is checked against its own 90-day window, not F2's.
+    with pytest.raises(ValidationError, match="inside the labelled comparison window"):
+        _state(
+            observations=[_observation(), _history(measured_at="2026-08-02T09:00:00Z")],
+            comparisons=[_comparison(history_policy=S.ComparisonWindow.RB1_90D)],
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+        )
+    _state(
+        observations=[_observation(), _history(measured_at="2026-08-03T09:00:00Z")],
+        comparisons=[_comparison(history_policy=S.ComparisonWindow.RB1_90D)],
+        verification_gate=_gate(),
+        last_validated_at_utc=VALIDATED,
+    )
+
+
+def test_r203_contradictory_no_baseline_and_comparable_shapes_are_rejected() -> None:
+    """No baseline and ``comparable`` contradict each other at both levels."""
+    with pytest.raises(ValidationError, match="needs a baseline id and delta"):
+        _comparison(
+            baseline_observation_id=None,
+            comparable=True,
+            incomparable_reason=None,
+            trust_basis=S.TrustBasis.SELF_REPORTED,
+        )
+    # The row-level validator is the first line of defence, so the state-level
+    # re-check cannot be reached from a constructible ``ComparisonResult``: the
+    # contradiction is rejected before a state can even be assembled. The
+    # redundant state check stays as defence in depth for re-parsed payloads.
+    with pytest.raises(ValidationError, match="needs a baseline id and delta"):
+        _state(
+            comparisons=[
+                _comparison(
+                    baseline_observation_id=None,
+                    comparable=True,
+                    incomparable_reason=None,
+                    trust_basis=S.TrustBasis.SELF_REPORTED,
+                )
+            ],
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+        )
+
+
+def test_r203_structural_binding_does_not_claim_latest_prior_correctness() -> None:
+    """A resolved in-window history row is *a* baseline, not proven the latest prior.
+
+    The state carries a bounded projection, so it cannot know whether an
+    unprojected row sits between the baseline and the current. That selection is
+    the authoritative service's job; the schema only checks membership and
+    binding. This test pins the honesty of the claim, not a service behaviour.
+    """
+    older = _history(observation_id=OBS_BASELINE_V5_B, measured_at="2026-09-15T09:00:00Z")
+    state = _state(
+        observations=[_observation(), older, _history()],
+        comparisons=[_comparison()],
+        verification_gate=_gate(),
+        last_validated_at_utc=VALIDATED,
+    )
+    # The comparison binds to the projected baseline, and the older row is simply
+    # history the projection also carries.
+    assert state.comparisons[0].baseline_observation_id == OBS_BASELINE_V5
+    assert {row.observation_id for row in state.observations} == {
+        OBS_CURRENT,
+        OBS_BASELINE_V5,
+        OBS_BASELINE_V5_B,
+    }
+
+
+# === R2-04: typed trace contract and nested free text =================================
+
+
+def test_r204_gate_detail_projection_keeps_identity_and_drops_the_message() -> None:
+    """The trace keeps the blocker's identity; the message stays on the reference."""
+    halt = _gate(S.GateDecision.HALT, issues=[_issue()])
+    detail = S.GateDetail.from_gate_evaluation(halt)
+    assert detail.decision == "halt"
+    assert detail.blocking_fact_count == halt.blocking_fact_count
+    assert [item.semantic_key() for item in detail.issues] == [
+        item.semantic_key() for item in halt.issues
+    ]
+    # The typed trace payload has no message field at all - not an empty one.
+    assert "message" not in S.TraceGateIssue.model_fields
+    assert not hasattr(detail.issues[0], "message")
+    # The full F1 semantics remain on the gate/evidence reference (D-12).
+    assert "message" in S.GateIssueRef.model_fields
+    assert halt.issues[0].message == "A selected document carries an unverified fact."
+    # A proceed evaluation derives an empty issue list and a zero count.
+    proceed = S.GateDetail.from_gate_evaluation(_gate())
+    assert proceed.decision == "proceed"
+    assert proceed.issues == [] and proceed.blocking_fact_count == 0
+    # An unavailable evaluation is an evaluation failure, never a decision.
+    with pytest.raises(ValueError, match="no trace decision"):
+        S.GateDetail.from_gate_evaluation(
+            _gate(
+                S.GateDecision.UNAVAILABLE,
+                issues=[_issue()],
+                count=1,
+                reason=S.GateUnavailableReason.SOURCE_BYTES_UNAVAILABLE,
+            )
+        )
+
+
+def _assert_no_free_text(node: object, path: str = "$") -> None:
+    """Recursively reject arbitrary text in a serialized payload (R2-04)."""
+    import re as _re
+
+    typed_string = _re.compile(
+        r"^(?:"
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"  # UUID
+        r"|[0-9a-f]{64}"  # SHA-256
+        r"|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"  # UTC instant
+        r"|[a-z][a-z0-9_]*"  # closed-vocabulary machine token
+        r"|[A-Z][A-Z0-9_-]*"  # closed-vocabulary code such as VI-003
+        r")$"
+    )
+    forbidden_keys = {"message", "raw_text", "text", "note", "reason_text", "free_text"}
+    if isinstance(node, dict):
+        for key, value in node.items():
+            assert key not in forbidden_keys, f"{path}.{key} is a free-text field"
+            _assert_no_free_text(value, f"{path}.{key}")
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            _assert_no_free_text(item, f"{path}[{index}]")
+    elif isinstance(node, str):
+        assert typed_string.match(node), f"{path} carries non-typed text: {node!r}"
+
+
+def test_r204_every_nested_trace_payload_is_free_of_arbitrary_text() -> None:
+    """Walk the whole serialized payload, not just the top-level field names."""
+    details = [
+        S.TriageDetail(
+            path_selected=S.TriagePath.TEXT_LAYER,
+            path_reason=S.PathReason.TEXT_LAYER_AVAILABLE,
+            document_id=DOC_A,
+            attempt_index=1,
+            preprocessing_applied=False,
+        ),
+        S.ValidationDetail(validation_outcome=S.ValidationOutcome.ACCEPT, attempt_index=1),
+        S.GateDetail(
+            decision="halt",
+            blocking_fact_count=1,
+            issues=[_trace_issue()],
+        ),
+        S.FinalizeDetail(
+            approval_decision="approve", task_created=False, notification_created=False
+        ),
+    ]
+    for detail in details:
+        _assert_no_free_text(json.loads(detail.model_dump_json()))
+
+    # The same walk over a full node event, which nests a detail one level down.
+    for node, detail in zip(
+        (
+            S.NodeName.EXTRACTION_TRIAGE,
+            S.NodeName.DRAFT_VALIDATION,
+            S.NodeName.FACT_VERIFY_GATE,
+            S.NodeName.FINALIZE_ACTIONS,
+        ),
+        details,
+        strict=True,
+    ):
+        event = _event(node=node, detail=detail)
+        _assert_no_free_text(json.loads(event.model_dump_json()))
+
+    # Negative control: the gate *reference* does carry the rendered message, so
+    # the walk really does detect free text when it is present.
+    with pytest.raises(AssertionError, match="non-typed text"):
+        _assert_no_free_text(json.loads(halt_reference_json()))
+
+
+def halt_reference_json() -> str:
+    return _gate(S.GateDecision.HALT, issues=[_issue()]).model_dump_json()
+
+
+def test_r204_only_the_latest_gate_event_mirrors_the_current_evaluation() -> None:
+    """Current evaluation vs historical trace events (R2-04, S2 obligation recorded)."""
+    halt = _gate(S.GateDecision.HALT, issues=[_issue()])
+    historical = _event(
+        node=S.NodeName.FACT_VERIFY_GATE,
+        started_at="2026-11-14T11:30:00Z",
+        detail=S.GateDetail(decision="proceed", blocking_fact_count=0, issues=[]),
+    )
+    current = _event(
+        node=S.NodeName.FACT_VERIFY_GATE,
+        started_at="2026-11-14T11:40:00Z",
+        detail=S.GateDetail(decision="halt", blocking_fact_count=1, issues=[_trace_issue()]),
+    )
+    # An earlier event records an earlier evaluation; the latest one mirrors the
+    # current evaluation. The historical association is an S2 obligation.
+    state = _state(
+        verification_gate=halt,
+        last_validated_at_utc=VALIDATED,
+        events=[historical, current],
+    )
+    assert state.events[-1].detail is not None
+    # ... but the latest gate event must still mirror the current evaluation.
+    with pytest.raises(ValidationError, match="differs from the evaluation"):
+        _state(
+            verification_gate=halt,
+            last_validated_at_utc=VALIDATED,
+            events=[current, historical],
+        )
+
+
+# === R2-05: exact layered exclusion semantics ========================================
+
+
+def _exclusion(observation_id: str, reason_code: str) -> S.PersistedExclusionRef:
+    return S.PersistedExclusionRef(observation_id=observation_id, reason_code=reason_code)
+
+
+def test_r205_equal_length_contradictory_exclusion_lists_are_rejected() -> None:
+    """Lengths alone would accept a receipt whose content contradicts itself."""
+    l1 = [_exclusion(OBS_BASELINE_V5, "validation_rejected")]
+    l2 = [_exclusion(OBS_BASELINE_V5, "measurement_stale")]
+    merged = [
+        _exclusion(OBS_BASELINE_V5, "measurement_stale"),
+        _exclusion(OBS_BASELINE_V5, "validation_rejected"),
+    ]
+    good = _sealed(
+        excluded_evidence=merged,
+        layered_exclusions=_layered(l1_exclusions=l1, l2_exclusions=l2, l3_merged=merged),
+        exclusion_count=2,
+        l1_exclusion_count=1,
+        l2_exclusion_count=1,
+    )
+    assert good.excluded_evidence == merged
+
+    # Same lengths, one reason replaced.
+    forged_reason = [_exclusion(OBS_BASELINE_V5, "future_timestamp"), merged[1]]
+    with pytest.raises(ValidationError, match="canonical deduplicated union"):
+        _sealed(
+            excluded_evidence=forged_reason,
+            layered_exclusions=_layered(
+                l1_exclusions=l1, l2_exclusions=l2, l3_merged=forged_reason
+            ),
+            exclusion_count=2,
+            l1_exclusion_count=1,
+            l2_exclusion_count=1,
+        )
+    # Same lengths, one observation identity replaced.
+    forged_identity = [merged[0], _exclusion(OBS_BASELINE_V5_B, "validation_rejected")]
+    with pytest.raises(ValidationError, match="canonical deduplicated union"):
+        _sealed(
+            excluded_evidence=forged_identity,
+            layered_exclusions=_layered(
+                l1_exclusions=l1, l2_exclusions=l2, l3_merged=forged_identity
+            ),
+            exclusion_count=2,
+            l1_exclusion_count=1,
+            l2_exclusion_count=1,
+        )
+    # ``excluded_evidence`` must equal l3 exactly, not merely its length.
+    with pytest.raises(ValidationError, match="excluded_evidence must equal l3_merged"):
+        _sealed(
+            excluded_evidence=[merged[0], _exclusion(OBS_BASELINE_V5_B, "measurement_stale")],
+            layered_exclusions=_layered(l1_exclusions=l1, l2_exclusions=l2, l3_merged=merged),
+            exclusion_count=2,
+            l1_exclusion_count=1,
+            l2_exclusion_count=1,
+        )
+    # Canonical ordering is required, and duplicates are not canonical.
+    with pytest.raises(ValidationError, match="canonical order"):
+        _sealed(
+            excluded_evidence=merged,
+            layered_exclusions=_layered(
+                l1_exclusions=[l1[0], l1[0]], l2_exclusions=l2, l3_merged=merged
+            ),
+            exclusion_count=2,
+            l1_exclusion_count=2,
+            l2_exclusion_count=1,
+        )
+
+
+def test_r205_l0_lineage_checks_stay_separate_from_the_merged_layer() -> None:
+    """L0 is not merged into L3: an l0-only entry never appears in the union."""
+    l1 = [_exclusion(OBS_BASELINE_V5, "validation_rejected")]
+    l2 = [_exclusion(OBS_BASELINE_V5, "measurement_stale")]
+    merged = [
+        _exclusion(OBS_BASELINE_V5, "measurement_stale"),
+        _exclusion(OBS_BASELINE_V5, "validation_rejected"),
+    ]
+    l0_only = _exclusion(OBS_BASELINE_V5_B, "verified_lineage_unavailable")
+    sealed = _sealed(
+        excluded_evidence=merged,
+        layered_exclusions=_layered(
+            l0_lineage_checks=[l0_only],
+            l1_exclusions=l1,
+            l2_exclusions=l2,
+            l3_merged=merged,
+        ),
+        exclusion_count=2,
+        l1_exclusion_count=1,
+        l2_exclusion_count=1,
+    )
+    assert sealed.layered_exclusions.l0_lineage_checks == [l0_only]
+    assert l0_only not in sealed.excluded_evidence
+    assert OBS_BASELINE_V5_B not in {item.observation_id for item in sealed.excluded_evidence}
+
+
+def test_r205_first_write_and_zero_total_replay_arithmetic_are_preserved() -> None:
+    """The accepted bounds and replay arithmetic survive the semantic tightening."""
+    l1 = [_exclusion(OBS_BASELINE_V5, "validation_rejected")]
+    merged = [l1[0]]
+    first = _sealed(
+        excluded_evidence=merged,
+        layered_exclusions=_layered(l1_exclusions=l1, l3_merged=merged),
+        exclusion_count=1,
+        l1_exclusion_count=1,
+        review_items_persisted=2,
+        review_items_total=2,
+        evidence_links_persisted=4,
+        evidence_links_total=4,
+    )
+    assert first.replayed is False
+    replay = _sealed(
+        replayed=True,
+        excluded_evidence=merged,
+        layered_exclusions=_layered(l1_exclusions=l1, l3_merged=merged),
+        exclusion_count=1,
+        l1_exclusion_count=1,
+        review_items_persisted=0,
+        review_items_total=2,
+        evidence_links_persisted=0,
+        evidence_links_total=4,
+    )
+    assert replay.review_items_persisted == 0
+    assert replay.evidence_links_persisted == 0
+    assert replay.exclusion_count == first.exclusion_count
+    with pytest.raises(ValidationError, match="zero review items and zero evidence links"):
+        _sealed(
+            replayed=True,
+            excluded_evidence=merged,
+            layered_exclusions=_layered(l1_exclusions=l1, l3_merged=merged),
+            exclusion_count=1,
+            l1_exclusion_count=1,
+            review_items_persisted=1,
+        )
+    with pytest.raises(ValidationError):
+        _sealed(
+            excluded_evidence=[*_exclusions(S.MAX_MERGED_EXCLUSIONS + 1)],
+            layered_exclusions=_layered(
+                l1_exclusions=_exclusions(S.MAX_MERGED_EXCLUSIONS + 1),
+                l3_merged=_exclusions(S.MAX_MERGED_EXCLUSIONS + 1),
+            ),
+            exclusion_count=S.MAX_MERGED_EXCLUSIONS + 1,
+            l1_exclusion_count=S.MAX_MERGED_EXCLUSIONS + 1,
+        )
+
+
+def _exclusions(count: int) -> list[S.PersistedExclusionRef]:
+    return [
+        _exclusion(f"f0000000-0000-4000-8000-{index:012d}", "validation_rejected")
+        for index in range(count)
+    ]
+
+
+# === R2-06: remaining structural consistency ========================================
+
+
+def _decided_extracted(**overrides: Any) -> S.ExtractedFact:
+    fields: dict[str, Any] = {
+        "verification_status": S.VerificationStatus.VERIFIED,
+        "verified_by": DOCTOR,
+        "verified_at": VALIDATED,
+    }
+    fields.update(overrides)
+    return _extracted(**fields)
+
+
+def _fact_state(**overrides: Any) -> S.SharedGraphState:
+    fields: dict[str, Any] = {
+        "extraction_facts": [_decided_extracted()],
+        "verified_facts": [_verified_fact()],
+        "verification_gate": _gate(),
+        "last_validated_at_utc": VALIDATED,
+    }
+    fields.update(overrides)
+    return _state(**fields)
+
+
+def test_r206_extracted_and_verified_projections_must_agree() -> None:
+    """Value, unit, scope, lineage and supplied verification metadata all match."""
+    _fact_state()
+    for change, match in (
+        ({"normalized_value": "141"}, "must keep its normalized value"),
+        ({"unit": "kg"}, "must keep its unit"),
+        # A patient scope that differs from the run is caught by the run-scope
+        # check first; the projection check is defence in depth behind it.
+        (
+            {"patient_id": "99999999-9999-4999-8999-999999999999"},
+            "patient scope differs from the run",
+        ),
+        (
+            {
+                "verified_by": "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+                "verified_at": "2026-11-23T11:00:00Z",
+            },
+            "must keep its verifier",
+        ),
+        ({"document_id": DOC_B}, "must keep its source document"),
+        ({"field_name": FactField.TEST_NAME}, "must keep its source field"),
+        ({"corrected_from_fact_id": FACT_B}, "must keep its corrected lineage"),
+    ):
+        with pytest.raises(ValidationError, match=match):
+            _fact_state(verified_facts=[_verified_fact(**change)])
+
+
+def test_r206_absent_optional_projections_stay_absent() -> None:
+    """An omitted projection is absent, never fabricated to look complete."""
+    state = _fact_state(
+        verified_facts=[_verified_fact(patient_id=None, verified_by=None, verified_at=None)]
+    )
+    projected = state.verified_facts[0]
+    assert projected.patient_id is None
+    assert projected.verified_by is None
+    assert projected.verified_at is None
+    assert projected.evidence == []
+
+
+def test_r206_contradictory_provenance_document_identities_are_rejected() -> None:
+    """An observation's source document must be the document of the fact it cites."""
+    verified_selection = _manifest(
+        observations=[
+            _selected_observation(trust_level=TrustLevel.DOCTOR_VERIFIED, source_fact_id=FACT_A)
+        ]
+    )
+    observed = _verified_observation(source_fact_id=FACT_A, source_document_id=DOC_A)
+    _state(
+        observations=[observed],
+        extraction_facts=[_decided_extracted()],
+        selection=verified_selection,
+        verification_gate=_gate(),
+        last_validated_at_utc=VALIDATED,
+    )
+    with pytest.raises(ValidationError, match="contradicts its extracted fact"):
+        _state(
+            observations=[_verified_observation(source_fact_id=FACT_A, source_document_id=DOC_B)],
+            extraction_facts=[_decided_extracted()],
+            selection=verified_selection,
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+        )
+    with pytest.raises(ValidationError, match="contradicts its verified projection"):
+        _state(
+            observations=[_verified_observation(source_fact_id=FACT_A, source_document_id=DOC_B)],
+            verified_facts=[_verified_fact(document_id=DOC_A)],
+            selection=verified_selection,
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+        )
+
+
+def test_r206_historical_excluded_vi002_identities_are_bound() -> None:
+    """F1 and F2 must agree on the historical VI-002 exclusions."""
+    base = {
+        "verification_gate": _gate(historical_excluded_vi002_ids=[ISSUE_A]),
+        "last_validated_at_utc": VALIDATED,
+        "observations": [_observation()],
+    }
+    _state(evaluable_evidence=_evidence(historical_excluded_vi002_ids=[ISSUE_A]), **base)
+    with pytest.raises(ValidationError, match="historical excluded VI-002"):
+        _state(evaluable_evidence=_evidence(historical_excluded_vi002_ids=[]), **base)
+
+
+def test_r206_sealed_gate_identity_is_reconciled_honestly() -> None:
+    """The F2 gate identity is authoritative; an absent F1 row id is not a lie."""
+    base = {
+        "verification_gate": _gate(gate_evaluation_id=GATE_EVAL),
+        "last_validated_at_utc": VALIDATED,
+        "evaluable_evidence": _evidence(),
+        "observations": [_observation()],
+    }
+    _state(review_persistence=_sealed(), **base)
+    with pytest.raises(ValidationError, match="different F2 gate identity"):
+        _state(review_persistence=_sealed(gate_evaluation_id=ISSUE_A), **base)
+    # The F1 receipt genuinely exposes no row id: an absent projection is accepted.
+    _state(
+        review_persistence=_sealed(),
+        verification_gate=_gate(gate_evaluation_id=None),
+        last_validated_at_utc=VALIDATED,
+        evaluable_evidence=_evidence(),
+        observations=[_observation()],
+    )
+    # A present F1 row id that disagrees with the F2 identity is rejected.
+    with pytest.raises(ValidationError, match="different stored gate row"):
+        _state(
+            review_persistence=_sealed(),
+            verification_gate=_gate(gate_evaluation_id=ISSUE_A),
+            last_validated_at_utc=VALIDATED,
+            evaluable_evidence=_evidence(),
+            observations=[_observation()],
+        )
+
+
+def test_r206_inconsistent_selected_evidence_cannot_be_presented_as_bound() -> None:
+    """A selection that disagrees with the typed rows is not structurally bound."""
+    with pytest.raises(ValidationError, match="selected observation manifest differs"):
+        _state(
+            observations=[_verified_observation(source_fact_id=FACT_A, source_document_id=DOC_A)],
+            selection=_manifest(),
+        )
+    # A manifest that selects a row the state does not carry is refused by the
+    # selected-current binding first; the "must be present" check is the
+    # defence in depth behind it.
+    with pytest.raises(ValidationError, match="immutable selected manifest"):
+        _state(
+            selection=_manifest(
+                observation_ids=[OBS_BASELINE_V5_B],
+                observations=[_selected_observation(observation_id=OBS_BASELINE_V5_B)],
+            )
+        )

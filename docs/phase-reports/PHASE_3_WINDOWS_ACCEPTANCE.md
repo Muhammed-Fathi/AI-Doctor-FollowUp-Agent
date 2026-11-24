@@ -1143,3 +1143,7 @@ All historical P3 results, prior collection checkpoints (`1096`/`1116`/`1121`/`1
 ## P5-S0 Round 2 collection re-measurement (2026-11-24)
 
 Current collection, measured on the P5-S0 Round-2 tree before this note was written: **1447 collected**, of which **443** are the P3 suite. The P3 suite is unchanged at 443 and no test was deleted; the whole-backend total moved from 1420 to 1447 through the P5-S0 typed-state test rewrite (124 -> 150 collected) plus the owner-authorized D-14 rejection test and the parametrized typing cases that now cover the two authorized `backend/app/agents` modules. This is **collection evidence only**: it is not a passed-test count, not a new Windows acceptance and not a test result. Executed locally on Linux CPython 3.11.2 (CI uses 3.12); Windows `test_all.ps1` was not run by the agent.
+
+## P5-S0 Round 3 collection re-measurement (2026-11-24)
+
+Current collection, measured on the P5-S0 Round-3 tree before this note was written: **1466 collected**, of which **443** are the P3 suite. The P3 suite is unchanged at 443 and no test was deleted; the whole-backend total moved from 1447 to 1466 through 19 added P5-S0 typed-state tests (150 -> 169 collected). This is **collection evidence only**: it is not a passed-test count, not a new Windows acceptance and not a test result. Executed locally on Linux CPython 3.11.2 (CI uses 3.12); Windows `test_all.ps1` was not run by the agent.

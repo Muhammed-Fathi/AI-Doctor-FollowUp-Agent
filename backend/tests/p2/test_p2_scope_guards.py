@@ -158,14 +158,16 @@ AUTHORIZED_AGENT_MODULE_PATHS = ("__init__.py", "state.py")
 def _stray_agent_modules(app_root: Path) -> list[str]:
     """Every file under ``app_root/agents`` that the D-14 allowlist does not name.
 
-    Relative paths are compared, so a nested package (``agents/graph/nodes.py``)
-    is rejected exactly like a stray top-level module.
+    Relative paths are compared as canonical POSIX-style paths, so a nested
+    package (``agents/graph/nodes.py``) is rejected exactly like a stray
+    top-level module *and* the comparison does not depend on the platform's
+    path separator (a Windows run must not report ``agents\\state.py``).
     """
     agents_root = app_root / "agents"
     if not agents_root.exists():
         return []
     return sorted(
-        str(path.relative_to(app_root))
+        path.relative_to(app_root).as_posix()
         for path in agents_root.rglob("*")
         if path.is_file()
         and "__pycache__" not in path.parts
@@ -198,6 +200,14 @@ def test_no_later_phase_module_exists() -> None:
     assert stray == [], f"unauthorized module(s) under agents: {stray}"
     assert not (BACKEND_APP / "llm").exists()
 
+    # ``extraction.py`` may exist only as the P3 service module, never as a
+    # top-level router or an agent-side module.
+    extraction_modules = [path for path in app_sources() if path.name == "extraction.py"]
+    assert all(
+        path == BACKEND_APP / "services" / "documents" / "text_extraction.py"
+        for path in extraction_modules
+    )
+
 
 def test_d14_allowlist_rejects_every_other_agents_module(tmp_path: Path) -> None:
     """Rejection proof for the D-14 allowlist (owner decision, PR #47).
@@ -223,14 +233,9 @@ def test_d14_allowlist_rejects_every_other_agents_module(tmp_path: Path) -> None
     nested.parent.mkdir()
     nested.write_text("", encoding="utf-8")
     assert _stray_agent_modules(app_root) == ["agents/graph/nodes.py"]
-
-    # ``extraction.py`` may exist only as the P3 service module, never as a
-    # top-level router or an agent-side module.
-    extraction_modules = [path for path in app_sources() if path.name == "extraction.py"]
-    assert all(
-        path == BACKEND_APP / "services" / "documents" / "text_extraction.py"
-        for path in extraction_modules
-    )
+    # The reported path is canonical and POSIX-style on every platform, so this
+    # assertion compares no platform-dependent separator.
+    assert all("/" in item and "\\" not in item for item in _stray_agent_modules(app_root))
 
 
 def test_no_forbidden_import_appears_in_application_code() -> None:

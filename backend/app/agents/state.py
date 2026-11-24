@@ -54,7 +54,8 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime
+from collections.abc import Sequence
+from datetime import datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Context, Decimal, InvalidOperation
 from enum import StrEnum
 from hashlib import sha256
@@ -130,6 +131,13 @@ MAX_ERRORS = 10
 MAX_OBSERVATIONS = MAX_SELECTED_CURRENT + MAX_HISTORY_OBSERVATIONS
 #: At most one comparison per current observation per producer window.
 MAX_COMPARISONS = MAX_SELECTED_CURRENT * 2
+#: The accepted window widths. F2 implements ``HISTORY_LOOKBACK_DAYS = 365``
+#: (``p5_evidence_bridge``) and the RB1 run-bound preview implements
+#: ``POLICY_LOOKBACK_DAYS = 90`` (``p4_run_bound_preview``). They are pinned
+#: constants, never configuration, and a baseline outside the labelled window is
+#: not a member of that window at all (owner decision D-04).
+F2_HISTORY_LOOKBACK_DAYS = 365
+RB1_HISTORY_LOOKBACK_DAYS = 90
 
 # --- primitive types: real validation, not permissive regex ---------------------------#
 
@@ -185,6 +193,11 @@ def _utc_instant(value: str) -> str:
     if parsed.strftime(_UTC_FORMAT) != value:
         raise ValueError("non-canonical UTC instant (zero padding required)")
     return value
+
+
+def _parse_instant(value: str) -> datetime:
+    """Parse an already-validated ``YYYY-MM-DDTHH:MM:SSZ`` instant (no I/O)."""
+    return datetime.strptime(value, _UTC_FORMAT)
 
 
 def _calendar_date(value: str) -> str:
@@ -708,7 +721,18 @@ def _sorted_unique(values: list[str], label: str) -> None:
         raise ValueError(f"{label} must be in ascending canonical order")
 
 
-def _distinct_fact_count(issues: list[GateIssueRef]) -> int:
+def _sorted_exclusions(
+    items: Sequence[PersistedExclusionRef],
+) -> list[PersistedExclusionRef]:
+    """``sorted(set(...))`` over ``(observation_id, reason_code)``, as RB3 does."""
+    unique = {(item.observation_id, item.reason_code) for item in items}
+    return [
+        PersistedExclusionRef(observation_id=observation_id, reason_code=reason_code)
+        for observation_id, reason_code in sorted(unique)
+    ]
+
+
+def _distinct_fact_count(issues: Sequence[GateIssueRef | TraceGateIssue]) -> int:
     """``len({fact for item in ordered for fact in item.fact_ids})`` — the F1 recipe."""
     return len({fact for item in issues for fact in item.fact_ids})
 
@@ -892,11 +916,17 @@ class ObservationView(Strict):
     def admissible(self) -> bool:
         """Structural admissibility only: the deterministic data check passed.
 
+        ``OK`` and ``OK_WITH_WARNING`` are both admissible and only ``REJECTED``
+        is not — this mirrors the accepted ``monitoring.admissibility_reason``,
+        which returns ``"validation_rejected"`` and nothing else for the data
+        check. A warning is therefore never promoted and never hidden: the
+        stored ``validation`` value stays exactly as recorded on the row.
+
         This is *not* trust and *not* eligibility — patient scope, temporal
         ordering and window bounds are checked against the run in
         ``SharedGraphState``.
         """
-        return self.validation is ValidationState.OK
+        return self.validation is not ValidationState.REJECTED
 
 
 class ComparisonResult(Strict):
@@ -1157,6 +1187,35 @@ class GateIssueRef(Strict):
         return (self.issue_type, self.reason_code, self.document_id, tuple(self.fact_ids))
 
 
+class TraceGateIssue(Strict):
+    """Typed trace payload for one gate blocker - **no free text** (R2-04).
+
+    The accepted typed-trace boundary admits enums, identifiers, bounded counts
+    and probabilities, never arbitrary text. ``GateIssueRef`` keeps the full F1
+    blocker semantics *including the canonical rendered message*, because the
+    gate/evidence reference is where that message belongs. This projection keeps
+    the blocker's **identity** - ``issue_type``, ``reason_code``, ``document_id``
+    and ``fact_ids`` - and drops the message: a rendered message is presentation
+    text, not identity. ``semantic_key()`` is identical to
+    ``GateIssueRef.semantic_key()``, which is exactly the tuple the accepted F1
+    producer compares on replay.
+    """
+
+    issue_type: IssueType
+    reason_code: ReasonCode
+    document_id: Uuid
+    fact_ids: list[Uuid] = Field(default_factory=list, max_length=MAX_BLOCKING_FACTS)
+
+    @model_validator(mode="after")
+    def _bounded(self) -> Self:
+        _unique(self.fact_ids, "fact_ids")
+        return self
+
+    def semantic_key(self) -> tuple[object, ...]:
+        """The identity the accepted F1 producer compares on replay."""
+        return (self.issue_type, self.reason_code, self.document_id, tuple(self.fact_ids))
+
+
 # --- typed node trace (REQ-AUDIT-01, P0-R08) -------------------------------------------#
 
 
@@ -1216,15 +1275,24 @@ class GateDetail(Strict):
     (owner decision D-01). Routing an ``unavailable`` gate to a trace/error path
     is an S2 obligation, recorded in the S0 review.
 
-    ``issues`` carries the **full semantic identity** of each blocker — type,
-    reason code, document and fact identities, plus the canonical message — never
-    only the issue-type names (owner decision D-12).
+    ``issues`` carries the **typed identity** of each blocker - issue type, reason
+    code, document and fact identities - and never the rendered message text
+    (owner decision D-12 for the identity, R2-04 for the trace boundary). The
+    canonical message stays in ``GateEvaluationRef``, which is the gate/evidence
+    reference, not the trace.
+
+    ``verification_gate`` on ``SharedGraphState`` is the **current** evaluation;
+    ``events`` is an append-only historical record. Only the most recent gate
+    event is required to mirror the current evaluation. Binding an *earlier*
+    trace event to the evaluation that actually produced it needs a persisted
+    evaluation identity that S0 does not have, so that association remains an S2
+    obligation and is deliberately not implemented here.
     """
 
     kind: Literal["gate"] = "gate"
     decision: TraceGateDecision
     blocking_fact_count: int = Field(ge=0, le=MAX_BLOCKING_FACTS)
-    issues: list[GateIssueRef] = Field(default_factory=list, max_length=MAX_BLOCKING_FACTS)
+    issues: list[TraceGateIssue] = Field(default_factory=list, max_length=MAX_BLOCKING_FACTS)
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:
@@ -1236,6 +1304,31 @@ class GateDetail(Strict):
         if self.blocking_fact_count != _distinct_fact_count(self.issues):
             raise ValueError("blocking_fact_count must equal the distinct referenced fact count")
         return self
+
+    @classmethod
+    def from_gate_evaluation(cls, ref: GateEvaluationRef) -> GateDetail:
+        """Derive the trace projection from a matching gate outcome.
+
+        The projection is derived, never assembled by hand: a ``halt`` keeps its
+        blockers' identity and a ``proceed`` records none. An ``unavailable``
+        evaluation is an *evaluation failure*, not a decision, so it raises
+        instead of fabricating ``proceed`` or ``halt`` (owner decision D-01).
+        """
+        if ref.decision is GateDecision.UNAVAILABLE:
+            raise ValueError("an unavailable gate evaluation has no trace decision")
+        return cls(
+            decision=ref.decision.value,
+            blocking_fact_count=ref.blocking_fact_count,
+            issues=[
+                TraceGateIssue(
+                    issue_type=item.issue_type,
+                    reason_code=item.reason_code,
+                    document_id=item.document_id,
+                    fact_ids=list(item.fact_ids),
+                )
+                for item in ref.issues
+            ],
+        )
 
 
 class FinalizeDetail(Strict):
@@ -1658,15 +1751,28 @@ class SealedReviewEvaluation(Strict):
             raise ValueError("a first persistence writes every evidence link (one transaction)")
         if self.evidence_links_total < self.review_items_total:
             raise ValueError("evidence_links_total is never below review_items_total")
-        # Layered exclusion semantics: the merged count is deduplicated, so it is
-        # never assumed to be l1 + l2.
-        if self.exclusion_count != len(self.excluded_evidence):
+        # R2-05: the accepted service computes
+        # ``l3_merged = tuple(sorted(set(l1_exclusions) | set(l2_exclusions)))``
+        # and stores ``excluded_evidence = l3_merged``. Lengths alone would let
+        # equal-length contradictory lists through, so the content is validated.
+        l1 = self.layered_exclusions.l1_exclusions
+        l2 = self.layered_exclusions.l2_exclusions
+        if l1 != _sorted_exclusions(l1):
+            raise ValueError("l1_exclusions must be in canonical order")
+        if l2 != _sorted_exclusions(l2):
+            raise ValueError("l2_exclusions must be in canonical order")
+        merged = _sorted_exclusions([*l1, *l2])
+        if self.layered_exclusions.l3_merged != merged:
+            raise ValueError("l3_merged must be the canonical deduplicated union of l1 and l2")
+        if self.excluded_evidence != merged:
+            raise ValueError(
+                "excluded_evidence must equal l3_merged exactly, not merely its length"
+            )
+        if self.exclusion_count != len(merged):
             raise ValueError("exclusion_count must equal the merged exclusion entry count")
-        if self.exclusion_count != len(self.layered_exclusions.l3_merged):
-            raise ValueError("exclusion_count must equal len(l3_merged)")
-        if self.l1_exclusion_count != len(self.layered_exclusions.l1_exclusions):
+        if self.l1_exclusion_count != len(l1):
             raise ValueError("l1_exclusion_count must equal len(l1_exclusions)")
-        if self.l2_exclusion_count != len(self.layered_exclusions.l2_exclusions):
+        if self.l2_exclusion_count != len(l2):
             raise ValueError("l2_exclusion_count must equal len(l2_exclusions)")
         # Pinned exactly as the durable service and its DB CHECKs pin them.
         if self.policy_reference_sha256 != RB3_POLICY_REFERENCE_SHA256:
@@ -1917,6 +2023,14 @@ class SharedGraphState(Strict):
             for row in self.observations
             if row.role is ObservationRole.SELECTED_CURRENT
         }
+        # R2-03: the immutable selected manifest is authoritative for *what was
+        # selected*, and it is present whether or not the state carries an F2
+        # reference. A selected-current label that the manifest does not carry
+        # is a relabelled row, not a selection.
+        if current != set(self.selection.observation_ids):
+            raise ValueError(
+                "selected-current observations must equal the immutable selected manifest"
+            )
         evidence = self.evaluable_evidence
         if evidence is not None and current != set(evidence.selected_observation_ids):
             raise ValueError(
@@ -1942,6 +2056,7 @@ class SharedGraphState(Strict):
                 raise ValueError("selected observation manifest differs from the typed observation")
 
         extracted = {item.fact_id: item for item in self.extraction_facts}
+        verified_by_id = {item.fact_id: item for item in self.verified_facts}
         for verified in self.verified_facts:
             source = extracted.get(verified.fact_id)
             if source is None:
@@ -1954,6 +2069,46 @@ class SharedGraphState(Strict):
                 raise ValueError("a verified projection must keep its source field")
             if source.corrected_from_fact_id != verified.corrected_from_fact_id:
                 raise ValueError("a verified projection must keep its corrected lineage")
+            # R2-06: value, unit and every *supplied* optional projection must
+            # agree. An absent projection stays absent - it is never fabricated
+            # to make the pair look complete.
+            if source.normalized_value != verified.normalized_value:
+                raise ValueError("a verified projection must keep its normalized value")
+            if source.unit != verified.unit:
+                raise ValueError("a verified projection must keep its unit")
+            if (
+                verified.patient_id is not None
+                and source.patient_id is not None
+                and source.patient_id != verified.patient_id
+            ):
+                raise ValueError("a verified projection must keep its patient scope")
+            if (
+                verified.verified_by is not None
+                and source.verified_by is not None
+                and source.verified_by != verified.verified_by
+            ):
+                raise ValueError("a verified projection must keep its verifier")
+            if (
+                verified.verified_at is not None
+                and source.verified_at is not None
+                and source.verified_at != verified.verified_at
+            ):
+                raise ValueError("a verified projection must keep its decision time")
+
+        # R2-06: an observation's recorded source document must be the document
+        # of the fact it cites. Contradictory provenance identities are rejected
+        # instead of being presented as structurally bound.
+        for row in self.observations:
+            if row.source_document_id is None or row.source_fact_id is None:
+                continue
+            cited = extracted.get(row.source_fact_id)
+            if cited is not None and cited.document_id != row.source_document_id:
+                raise ValueError("observation source_document_id contradicts its extracted fact")
+            projected = verified_by_id.get(row.source_fact_id)
+            if projected is not None and projected.document_id != row.source_document_id:
+                raise ValueError(
+                    "observation source_document_id contradicts its verified projection"
+                )
 
         for comparison in self.comparisons:
             current = observations.get(comparison.current_observation_id)
@@ -1981,6 +2136,11 @@ class SharedGraphState(Strict):
                 raise ValueError("an F2 evidence reference cannot carry a 90-day RB1 comparison")
             baseline_id = comparison.baseline_observation_id
             if baseline_id is None:
+                # R2-03: "no baseline" and "comparable" are contradictory shapes;
+                # the row-level validator already forbids the pair, and the state
+                # re-checks it against the resolved evidence.
+                if comparison.comparable:
+                    raise ValueError("a comparable result needs a resolved baseline row")
                 # No baseline: the label can only follow the current trust level.
                 expected = derived_trust_basis(current.trust_level, None)
                 if comparison.trust_basis is not expected:
@@ -2007,16 +2167,31 @@ class SharedGraphState(Strict):
                 raise ValueError("a comparison baseline must pass the data check")
             if baseline.measured_at >= current.measured_at:
                 raise ValueError("a baseline must precede the current observation")
+            # R2-03: the baseline must lie inside the *labelled* window, using the
+            # accepted producer semantics (F2 365 days, RB1 90 days). This is a
+            # membership check only: the state carries a bounded history
+            # projection and cannot prove that the resolved row is the *latest
+            # prior* among all history - that selection belongs to the
+            # authoritative service, not to this structural check.
+            window_days = (
+                F2_HISTORY_LOOKBACK_DAYS
+                if comparison.history_policy is ComparisonWindow.F2_365D
+                else RB1_HISTORY_LOOKBACK_DAYS
+            )
+            if _parse_instant(current.measured_at) - _parse_instant(
+                baseline.measured_at
+            ) > timedelta(days=window_days):
+                raise ValueError("a baseline must lie inside the labelled comparison window")
             if comparison.trust_basis is not derived_trust_basis(
                 current.trust_level, baseline.trust_level
             ):
                 raise ValueError("trust_basis must follow both observations' trust levels")
-            if (
-                comparison.current_value is not None
-                and comparison.baseline_value is not None
-                and comparison.delta is not None
-                and comparison.delta
-                != exact_delta(comparison.current_value, comparison.baseline_value)
+            # R2-03: a comparable delta is always validated against the *resolved*
+            # observation values. The optional projected values are a cross-check
+            # on the rows, never a substitute for them, so a comparison that
+            # omits them can no longer carry an incorrect delta.
+            if comparison.delta is not None and comparison.delta != exact_delta(
+                current.value, baseline.value
             ):
                 raise ValueError("delta must equal current_value - baseline_value exactly")
         return self
@@ -2077,6 +2252,11 @@ class SharedGraphState(Strict):
                 raise ValueError("evidence reference is bound to a different stored gate row")
             if gate.decision is not GateDecision.PROCEED:
                 raise ValueError("evaluable evidence can only follow a proceed decision")
+            # R2-06: F1 and F2 must agree on the historical VI-002 exclusions.
+            if evidence.historical_excluded_vi002_ids != list(gate.historical_excluded_vi002_ids):
+                raise ValueError(
+                    "evidence and gate disagree on the historical excluded VI-002 identities"
+                )
         persistence = self.review_persistence
         if isinstance(persistence, SealedReviewEvaluation):
             if (persistence.run_id, persistence.patient_id, persistence.doctor_id) != (
@@ -2089,9 +2269,25 @@ class SharedGraphState(Strict):
                 raise ValueError("sealed evaluation was computed at a different as-of clock")
             if persistence.policy_version != ident.policy_version:
                 raise ValueError("sealed evaluation used a different policy version")
+            # R2-06: the sealed evaluation's stored gate identity is checked
+            # directly against the F2 gate identity (which always carries it) and
+            # only conditionally against the F1 *row id*, because the F1 receipt
+            # genuinely does not expose one: an absent row-id projection is not a
+            # contradiction and is never invented to satisfy this check.
+            if evidence is not None and (
+                persistence.gate_evaluation_id != evidence.gate_evaluation_id
+                or persistence.gate_version != evidence.gate_version
+                or persistence.gate_input_fingerprint_sha256
+                != evidence.gate_input_fingerprint_sha256
+            ):
+                raise ValueError("sealed evaluation is bound to a different F2 gate identity")
             if gate is not None and (
-                persistence.gate_evaluation_id != gate.gate_evaluation_id
-                or persistence.gate_version != gate.gate_version
+                gate.gate_evaluation_id is not None
+                and persistence.gate_evaluation_id != gate.gate_evaluation_id
+            ):
+                raise ValueError("sealed evaluation is bound to a different stored gate row")
+            if gate is not None and (
+                persistence.gate_version != gate.gate_version
                 or persistence.gate_input_fingerprint_sha256 != gate.input_fingerprint_sha256
             ):
                 raise ValueError("sealed evaluation is bound to a different gate evaluation")
@@ -2216,28 +2412,37 @@ class SharedGraphState(Strict):
 
     @model_validator(mode="after")
     def _trace_gate_consistency(self) -> Self:
-        """A gate trace must mirror the evaluation; ``unavailable`` gets no trace (R03)."""
+        """The **current** gate evaluation is mirrored by the latest trace event (R03).
+
+        ``verification_gate`` is the current evaluation; ``events`` is an
+        append-only historical record (R2-04). Only the most recent gate event is
+        required to mirror the current evaluation - an earlier event records an
+        earlier evaluation and is a historical trace, not a claim about the
+        present gate. Binding a historical event to the evaluation that actually
+        produced it needs a persisted evaluation identity that S0 does not have,
+        so that association remains an S2 obligation and is not implemented here.
+        """
         gate = self.verification_gate
-        for event in self.events:
-            if event.node is not NodeName.FACT_VERIFY_GATE:
-                continue
-            detail = event.detail
-            if not isinstance(detail, GateDetail):  # pragma: no cover - NodeEvent guarantees it
-                raise ValueError("fact_verify_gate event must carry a gate detail")
-            if gate is None:
-                raise ValueError("a gate trace requires the gate evaluation it mirrors")
-            if gate.decision is GateDecision.UNAVAILABLE:
-                # Never fabricate a proceed/halt trace decision for an
-                # evaluation failure (owner decision D-01).
-                raise ValueError("an unavailable gate produces no proceed/halt trace decision")
-            if detail.decision != gate.decision.value:
-                raise ValueError("gate trace decision differs from the evaluation")
-            if detail.blocking_fact_count != gate.blocking_fact_count:
-                raise ValueError("gate trace blocking_fact_count differs from the evaluation")
-            if [item.semantic_key() for item in detail.issues] != [
-                item.semantic_key() for item in gate.issues
-            ]:
-                raise ValueError("gate trace blockers differ from the evaluation's blockers")
+        gate_events = [event for event in self.events if event.node is NodeName.FACT_VERIFY_GATE]
+        if not gate_events:
+            return self
+        detail = gate_events[-1].detail
+        if not isinstance(detail, GateDetail):  # pragma: no cover - NodeEvent guarantees it
+            raise ValueError("fact_verify_gate event must carry a gate detail")
+        if gate is None:
+            raise ValueError("a gate trace requires the gate evaluation it mirrors")
+        if gate.decision is GateDecision.UNAVAILABLE:
+            # Never fabricate a proceed/halt trace decision for an
+            # evaluation failure (owner decision D-01).
+            raise ValueError("an unavailable gate produces no proceed/halt trace decision")
+        if detail.decision != gate.decision.value:
+            raise ValueError("gate trace decision differs from the evaluation")
+        if detail.blocking_fact_count != gate.blocking_fact_count:
+            raise ValueError("gate trace blocking_fact_count differs from the evaluation")
+        if [item.semantic_key() for item in detail.issues] != [
+            item.semantic_key() for item in gate.issues
+        ]:
+            raise ValueError("gate trace blockers differ from the evaluation's blockers")
         return self
 
 
