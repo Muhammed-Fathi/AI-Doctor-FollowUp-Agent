@@ -1356,7 +1356,9 @@ def test_m13_gate_decision_combinations() -> None:
 
 
 def test_m13_unavailable_reason_vocabulary_matches_the_f1_service() -> None:
-    source = (REPO_ROOT / "backend" / "app" / "services" / "p5_run_gate.py").read_text()
+    source = (REPO_ROOT / "backend" / "app" / "services" / "p5_run_gate.py").read_text(
+        encoding="utf-8"
+    )
     emitted = set(re.findall(r'unavailable = "([a-z0-9_]+)"', source))
     assert emitted == {reason.value for reason in S.GateUnavailableReason}
 
@@ -1557,7 +1559,9 @@ def test_m14_tool_allowlist_is_per_node() -> None:
 
 
 def test_m14_trace_path_vocabulary_matches_the_openapi_contract() -> None:
-    contract = (REPO_ROOT / "docs" / "contracts" / "openapi.phase0.yaml").read_text()
+    contract = (REPO_ROOT / "docs" / "contracts" / "openapi.phase0.yaml").read_text(
+        encoding="utf-8"
+    )
     match = re.search(r"^\s{4}TriageEventDetail:\s*$", contract, re.MULTILINE)
     assert match, "TriageEventDetail schema definition not found"
     block = contract[match.start() :]
@@ -1977,13 +1981,14 @@ def test_m20_importing_the_state_module_loads_no_service_or_runtime_module() -> 
         cwd=str(REPO_ROOT / "backend"),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     )
     assert out.stdout.strip() == "[]"
 
 
 def test_m20_state_source_has_no_runtime_or_io_imports_or_calls() -> None:
-    source = (REPO_ROOT / "backend" / "app" / "agents" / "state.py").read_text()
+    source = (REPO_ROOT / "backend" / "app" / "agents" / "state.py").read_text(encoding="utf-8")
     # Import statements only — a provider *value* such as ``ollama`` is data, not
     # an import (the repository safety guard scans the same way).
     for module in (
@@ -2292,7 +2297,9 @@ def _add_verified_document(db: Session, *, patient_id: str, root: Path, label: s
 
 def test_r01_genuine_stored_identities_include_uuid5_observations() -> None:
     """R01: accepted GOLD/RB4 data uses UUIDv5 observation identities."""
-    data = json.loads((REPO_ROOT / "data" / "synthetic" / "observations.json").read_text())
+    data = json.loads(
+        (REPO_ROOT / "data" / "synthetic" / "observations.json").read_text(encoding="utf-8")
+    )
     rows = data["observations"]
     versions = {_uuid_version(row["id"]) for row in rows}
     assert versions == {5}, versions
@@ -3148,7 +3155,9 @@ def test_r204_gate_detail_is_the_normative_contract_shape() -> None:
         "issue_types",
     }
     # ... and the OpenAPI contract's property names and issue vocabulary match.
-    contract = (REPO_ROOT / "docs" / "contracts" / "openapi.phase0.yaml").read_text()
+    contract = (REPO_ROOT / "docs" / "contracts" / "openapi.phase0.yaml").read_text(
+        encoding="utf-8"
+    )
     match = re.search(r"^\s{4}GateEventDetail:\s*$", contract, re.MULTILINE)
     assert match, "GateEventDetail schema definition not found"
     block = contract[match.start() :]
@@ -3159,7 +3168,9 @@ def test_r204_gate_detail_is_the_normative_contract_shape() -> None:
     for member in S.IssueType:
         assert member.value in block, member.value
     # The STATE_AND_GRAPH_CONTRACT.md shape names the same field.
-    markdown = (REPO_ROOT / "docs" / "contracts" / "STATE_AND_GRAPH_CONTRACT.md").read_text()
+    markdown = (REPO_ROOT / "docs" / "contracts" / "STATE_AND_GRAPH_CONTRACT.md").read_text(
+        encoding="utf-8"
+    )
     gate_block = markdown[markdown.index("class GateDetail(") :][:400]
     assert "issue_types" in gate_block
     assert "issues" not in gate_block

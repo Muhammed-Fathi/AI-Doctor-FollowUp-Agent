@@ -494,3 +494,57 @@ Focused S0 **173 passed / 0 failed**; P5 **232 passed**; P2 **282 passed**; P3 *
 ### 12.5 Projection scope, restated unchanged
 
 The genuine Round-3 integration evidence stands: the real F0 → F1 → F2 → RB3 (write and replay) producers are driven, their receipts are projected, and the complete state round-trips and revalidates. **RB3 review items and evidence links remain counted by the sealed receipt but are not projected as state collections**, and the test asserts that rather than implying completeness.
+
+---
+
+## 13. Windows UTF-8 portability fix (2026-11-24) — append-only
+
+### 13.1 Actual owner Windows verification at the reviewed HEAD — a failed run, recorded honestly
+
+Independent owner verification ran on Windows PowerShell 5.1 against exact HEAD `5831c44557a48d7e03781fe3871f2241b4aa2f89`:
+
+- Setup exit code: **0**.
+- Quality gate: **PASS 11 / FAIL 1 / SKIPPED 1**.
+- Duration: **774.5 seconds**.
+- **Backend pytest failed.** All other mandatory gates passed. The optional Playwright smoke was skipped. Frontend: **13 tests passed**. Scanner: **PASS**, 303 tracked files.
+- Failing test: `backend/tests/p5/test_p5_state.py::test_m20_state_source_has_no_runtime_or_io_imports_or_calls`.
+- Exception: `UnicodeDecodeError: 'charmap' codec can't decode byte 0x90 in position 37394: character maps to <undefined>`.
+
+This is a **failed** Windows run. **No Windows acceptance is claimed.**
+
+### 13.2 Root cause
+
+`Path.read_text()` without an `encoding` argument decodes with the platform default (`locale.getpreferredencoding(False)`): UTF-8 on the Linux local and CI runs, but **cp1252** in the owner's Windows environment. `backend/app/agents/state.py` is UTF-8 source containing non-ASCII punctuation, and cp1252 cannot decode byte `0x90` (a UTF-8 continuation byte), so the read raised.
+
+### 13.3 Correction — test file only, no production change
+
+All six implicit reads in the S0 test file now use `read_text(encoding="utf-8")`:
+
+| Line | File read |
+|---|---|
+| 1359 | `backend/app/services/p5_run_gate.py` |
+| 1562 | `docs/contracts/openapi.phase0.yaml` |
+| 1991 | `backend/app/agents/state.py` |
+| 2301 | `data/synthetic/observations.json` |
+| 3158 | `docs/contracts/openapi.phase0.yaml` |
+| 3171 | `docs/contracts/STATE_AND_GRAPH_CONTRACT.md` |
+
+The audit of the rest of the S0 test file for equivalent implicit text-encoding assumptions found one more: the `subprocess.run(..., text=True)` at lines 1979–1984 decodes child output with the same platform-default codec. It now passes `encoding="utf-8"` (line 1984). The child process prints ASCII only, so behaviour is unchanged, but the assumption is explicit. The remaining text operations are already platform-independent: `str.encode()` defaults to UTF-8, `write_bytes` is binary, and `json.loads` operates on in-memory strings. No assertion or test case was changed, removed or skipped; no Unicode character was removed; no decoding error is suppressed; `PYTHONUTF8` and `PYTHONIOENCODING` are not used.
+
+### 13.4 Encoding evidence
+
+The original failure was reproduced with explicit cp1252 decoding of `backend/app/agents/state.py`:
+
+- `open(path, encoding="cp1252")` raises `UnicodeDecodeError: 'charmap' codec can't decode byte 0x90 in position 36506: character maps to <undefined>`.
+- The byte is the final byte of the UTF-8 sequence `e2 86 90` = `←` (U+2190) inside a docstring.
+- `state.py` has 888 LF newlines before that byte; the owner's Windows checkout used CRLF, so `36506 + 888 = 37394`, exactly the position in the owner's exception. It is byte-for-byte the same failure.
+- `read_text(encoding="utf-8")` succeeds for all six reads: `p5_run_gate.py` 34,207 characters, `openapi.phase0.yaml` 62,424, `state.py` 113,864, `observations.json` 6,873, `STATE_AND_GRAPH_CONTRACT.md` 53,257.
+- The hazard is not only the crash. The other three non-ASCII files decode under cp1252 **without an error but with mojibake**: `openapi.phase0.yaml` differs at 54,609 characters, `observations.json` at 5,882 and `STATE_AND_GRAPH_CONTRACT.md` at 50,132. Explicit UTF-8 therefore also protects the assertions that inspect those documents.
+
+### 13.5 Local re-verification (Linux CPython 3.11.2 — disclosed deviation from CI 3.12; no Windows execution)
+
+Focused S0 **173 passed / 0 failed**; P5 **232**; P2 **282**; P3 **443**; **full backend 1470 passed / 0 failed** (242 s); Ruff lint and format PASS (149 files); Alembic smoke PASS at head `0008_p4_rb3_review_persistence`; OpenAPI PASS (17 paths / 18 operations / 43 schemas); repository scan PASS (303 tracked files, 7 secret patterns, 4 claim patterns). **Collection unchanged: 1470 / 443 / 232, focused S0 173.** No collection handoff edit was needed or made.
+
+### 13.6 Status
+
+P5-S0 remains **IN_REVIEW pending independent verification and actual owner Windows re-verification**; issue #14 **OPEN**; P4 **`CONDITIONALLY_ACCEPTED_SYNTHETIC`**; GOLD-EX-11 **FAIL / NOT PROVEN**; RB3-75..77 **deferred / NOT EXECUTED**; DR-006 persistence **prohibited**; runtime demo policy **not activated / unapproved**. No P5-S1 work. PR #47 stays **OPEN / DRAFT / NOT MERGED**; no merge, auto-merge, direct main edit or self-approval. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
