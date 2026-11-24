@@ -225,3 +225,23 @@ The delta is **+37** = 35 new S1 tests + 1 new D-15 scope-guard test + 1 new par
 - **Guard re-run after the edit:** `pytest backend/tests/p3/test_windows_ocr_acceptance.py::test_handoff_test_count_matches_the_suite_it_describes` → **passed**. The guard itself was not modified.
 - **Whole-backend re-run after the edit:** `pytest backend/tests` → **1507 passed / 0 failed** in 243 s. The suite is green at this head; the earlier "held for D-09" statements in §5.1 and in `PHASE_5_REPORT.md` §12 / `PHASE_PROGRESS.md` describe the state *before* this authorization and are superseded by this section.
 - **Status unchanged:** P5 **IN_REVIEW / NOT ACCEPTED**; issue #14 **OPEN**; draft PR only; no merge, auto-merge, self-approval, main change or S2 work.
+
+---
+
+## 10. Exact-head GitHub Actions (2026-11-24)
+
+Pushed head `08b457fb80bbf1c1150c3552444f52e4af49e7b7` — draft PR [#48](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/48), run [#45480318202](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45480318202): **COMPLETED / SUCCESS**.
+
+| Job | Result |
+|---|---|
+| Frontend (Node 22) | **SUCCESS** |
+| Backend (Python 3.12) — Ruff lint | **SUCCESS** |
+| Backend (Python 3.12) — Ruff format check | **SUCCESS** |
+| Backend (Python 3.12) — Backend tests | **SUCCESS** |
+| Backend — Alembic smoke (upgrade, downgrade, upgrade) | **SUCCESS** |
+| Backend — Generated OpenAPI contract check | **SUCCESS** |
+| Backend — Repository secret and artefact scan | **SUCCESS** |
+
+This is the first green exact-head run for the slice. It was read from the Actions API, not inferred. Windows `test_all.ps1` was **not** run by the agent; owner Windows acceptance remains outstanding.
+
+**Status:** PR #48 **OPEN / DRAFT / NOT MERGED**; P5 **IN_REVIEW / NOT ACCEPTED**; issue #14 **OPEN**; no merge, auto-merge, self-approval, main change or P5-S2 work. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
