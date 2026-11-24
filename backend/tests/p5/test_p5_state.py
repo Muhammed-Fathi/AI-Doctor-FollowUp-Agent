@@ -249,18 +249,6 @@ def _issue(
     )
 
 
-def _trace_issue(**overrides: Any) -> S.TraceGateIssue:
-    """Typed trace payload for one blocker: identity only, no message (R2-04)."""
-    fields: dict[str, Any] = {
-        "issue_type": S.IssueType.VI_003,
-        "reason_code": "unverified_fact",
-        "document_id": DOC_A,
-        "fact_ids": [FACT_A],
-    }
-    fields.update(overrides)
-    return S.TraceGateIssue(**fields)
-
-
 def _gate(
     decision: S.GateDecision = S.GateDecision.PROCEED,
     issues: list[S.GateIssueRef] | None = None,
@@ -1435,7 +1423,9 @@ def test_m13_gate_trace_consistency_without_fabricated_decisions() -> None:
             _event(
                 node=S.NodeName.FACT_VERIFY_GATE,
                 detail=S.GateDetail(
-                    decision="halt", blocking_fact_count=1, issues=[_trace_issue()]
+                    decision="halt",
+                    blocking_fact_count=1,
+                    issue_types=[S.IssueType.VI_003],
                 ),
             )
         ],
@@ -1448,7 +1438,7 @@ def test_m13_gate_trace_consistency_without_fabricated_decisions() -> None:
             events=[
                 _event(
                     node=S.NodeName.FACT_VERIFY_GATE,
-                    detail=S.GateDetail(decision="proceed", blocking_fact_count=0, issues=[]),
+                    detail=S.GateDetail(decision="proceed", blocking_fact_count=0, issue_types=[]),
                 )
             ],
         )
@@ -1465,13 +1455,15 @@ def test_m13_gate_trace_consistency_without_fabricated_decisions() -> None:
                 _event(
                     node=S.NodeName.FACT_VERIFY_GATE,
                     detail=S.GateDetail(
-                        decision="halt", blocking_fact_count=1, issues=[_trace_issue()]
+                        decision="halt",
+                        blocking_fact_count=1,
+                        issue_types=[S.IssueType.VI_003],
                     ),
                 )
             ],
         )
-    # A trace whose blockers differ in full identity is rejected (D-12).
-    with pytest.raises(ValidationError, match="blockers differ"):
+    # A trace whose issue-type vocabulary differs is rejected (D-12).
+    with pytest.raises(ValidationError, match="issue_types differ"):
         _state(
             verification_gate=halt,
             last_validated_at_utc=VALIDATED,
@@ -1481,7 +1473,7 @@ def test_m13_gate_trace_consistency_without_fabricated_decisions() -> None:
                     detail=S.GateDetail(
                         decision="halt",
                         blocking_fact_count=1,
-                        issues=[_trace_issue(reason_code="forged")],
+                        issue_types=[S.IssueType.VI_002],
                     ),
                 )
             ],
@@ -1542,7 +1534,7 @@ def test_m14_trace_details_carry_no_free_text_or_unbounded_fields() -> None:
             preprocessing_applied=False,
         ),
         S.ValidationDetail(validation_outcome=S.ValidationOutcome.ACCEPT, attempt_index=1),
-        S.GateDetail(decision="halt", blocking_fact_count=1, issues=[_trace_issue()]),
+        S.GateDetail(decision="halt", blocking_fact_count=1, issue_types=[S.IssueType.VI_003]),
         S.FinalizeDetail(
             approval_decision="approve", task_created=False, notification_created=False
         ),
@@ -2048,6 +2040,7 @@ def test_m20_vocabulary_single_sources_of_truth() -> None:
     assert checks, "review_item_rule_allowed CHECK not found"
     assert {e.value for e in S.ReviewRuleId} == set(re.findall(r"DR-\d{3}", checks[0]))
 
+    from app.core.clock import MAX_FUTURE_SKEW_MINUTES
     from app.services.p4_rb3_review_persistence import (
         MAX_EXCLUSIONS,
         MAX_PERSISTED_ITEMS,
@@ -2074,6 +2067,9 @@ def test_m20_vocabulary_single_sources_of_truth() -> None:
 
     assert get_args(S.F2_HISTORY_POLICY) == (COMPARISON_HISTORY_VERSION,)
     assert HISTORY_LOOKBACK_DAYS == 365
+    # The temporal boundary is the accepted clock module's allowance, not a new
+    # policy parameter introduced by the state module.
+    assert S.MAX_FUTURE_SKEW_MINUTES == MAX_FUTURE_SKEW_MINUTES == 5
     assert get_args(S.RB1_LOOKBACK_DAYS) == (POLICY_LOOKBACK_DAYS,)
 
 
@@ -3085,25 +3081,122 @@ def test_r203_structural_binding_does_not_claim_latest_prior_correctness() -> No
 # === R2-04: typed trace contract and nested free text =================================
 
 
-def test_r204_gate_detail_projection_keeps_identity_and_drops_the_message() -> None:
-    """The trace keeps the blocker's identity; the message stays on the reference."""
-    halt = _gate(S.GateDecision.HALT, issues=[_issue()])
+def _trace_vocabulary() -> frozenset[str]:
+    """The *actual* closed vocabularies a trace may serialize (R2-04).
+
+    A string that merely looks like a machine token is not enough: it must be a
+    member of one of these enums (or one of the module's bounded literals), or a
+    UUID / SHA-256 / UTC instant. This is what stops a regex-conforming token
+    from being treated as a closed vocabulary.
+    """
+    from app.core.enums import ExtractionPath, Preprocessing, QualityFlag
+
+    values: set[str] = set()
+    for enum in (
+        S.IssueType,
+        S.DetailKind,
+        S.NodeName,
+        S.NodeOutcome,
+        S.ToolName,
+        S.TriagePath,
+        S.PathReason,
+        S.ValidationOutcome,
+        S.ViolationCode,
+        ExtractionPath,
+        Preprocessing,
+        QualityFlag,
+    ):
+        values |= {member.value for member in enum}
+    # Bounded trace literals that are not enums in this module.
+    values |= {"approve", "edit", "reject", "proceed", "halt"}
+    return frozenset(values)
+
+
+def _assert_trace_strings_are_closed(node: object, path: str = "$") -> None:
+    """Recursively require every serialized string to be closed vocabulary or an id."""
+    import re as _re
+
+    identifier = _re.compile(
+        r"^(?:"
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+        r"|[0-9a-f]{64}"
+        r"|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"
+        r")$"
+    )
+    allowed = _trace_vocabulary()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            assert key not in {"message", "raw_text", "text", "note", "issues", "reason_code"}, (
+                f"{path}.{key} is a non-normative trace field"
+            )
+            _assert_trace_strings_are_closed(value, f"{path}.{key}")
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            _assert_trace_strings_are_closed(item, f"{path}[{index}]")
+    elif isinstance(node, str):
+        assert identifier.match(node) or node in allowed, (
+            f"{path} carries a string outside the closed vocabularies: {node!r}"
+        )
+
+
+def test_r204_gate_detail_is_the_normative_contract_shape() -> None:
+    """``GateDetail`` is exactly ``GateEventDetail`` in the phase-0 contract."""
+    assert set(S.GateDetail.model_fields) == {
+        "kind",
+        "decision",
+        "blocking_fact_count",
+        "issue_types",
+    }
+    # ... and the OpenAPI contract's property names and issue vocabulary match.
+    contract = (REPO_ROOT / "docs" / "contracts" / "openapi.phase0.yaml").read_text()
+    match = re.search(r"^\s{4}GateEventDetail:\s*$", contract, re.MULTILINE)
+    assert match, "GateEventDetail schema definition not found"
+    block = contract[match.start() :]
+    block = block[: re.search(r"^\s{4}\w+:\s*$", block[10:], re.MULTILINE).start() + 10]
+    for name in ("kind", "decision", "blocking_fact_count", "issue_types"):
+        assert re.search(rf"^\s{{8}}{name}:\s*$", block, re.MULTILINE), name
+    assert "additionalProperties: false" in block
+    for member in S.IssueType:
+        assert member.value in block, member.value
+    # The STATE_AND_GRAPH_CONTRACT.md shape names the same field.
+    markdown = (REPO_ROOT / "docs" / "contracts" / "STATE_AND_GRAPH_CONTRACT.md").read_text()
+    gate_block = markdown[markdown.index("class GateDetail(") :][:400]
+    assert "issue_types" in gate_block
+    assert "issues" not in gate_block
+
+
+def test_r204_projection_keeps_the_closed_vocabulary_and_no_blocker_text() -> None:
+    """The trace keeps only closed issue types; identity and text stay on the reference."""
+    halt = _gate(
+        S.GateDecision.HALT,
+        issues=[
+            _issue(issue_type=S.IssueType.VI_003),
+            _issue(issue_type=S.IssueType.VI_003, reason_code="other"),
+            _issue(issue_type=S.IssueType.VI_001),
+        ],
+        count=1,
+    )
     detail = S.GateDetail.from_gate_evaluation(halt)
+    # Canonical: unique and ordered, derived from the evaluation.
+    assert detail.issue_types == [S.IssueType.VI_001, S.IssueType.VI_003]
     assert detail.decision == "halt"
     assert detail.blocking_fact_count == halt.blocking_fact_count
-    assert [item.semantic_key() for item in detail.issues] == [
-        item.semantic_key() for item in halt.issues
+    # The reference keeps the full semantic identity and the rendered message.
+    assert [item.semantic_key() for item in halt.issues] == [
+        (S.IssueType.VI_003, "unverified_fact", DOC_A, (FACT_A,)),
+        (S.IssueType.VI_003, "other", DOC_A, (FACT_A,)),
+        (S.IssueType.VI_001, "unverified_fact", DOC_A, (FACT_A,)),
     ]
-    # The typed trace payload has no message field at all - not an empty one.
-    assert "message" not in S.TraceGateIssue.model_fields
-    assert not hasattr(detail.issues[0], "message")
-    # The full F1 semantics remain on the gate/evidence reference (D-12).
-    assert "message" in S.GateIssueRef.model_fields
-    assert halt.issues[0].message == "A selected document carries an unverified fact."
-    # A proceed evaluation derives an empty issue list and a zero count.
+    assert all(item.message for item in halt.issues)
+    # A document-only HALT keeps a blocking issue with zero distinct facts.
+    document_only = _gate(S.GateDecision.HALT, issues=[_issue(fact_ids=[])], count=0)
+    document_only_detail = S.GateDetail.from_gate_evaluation(document_only)
+    assert document_only_detail.issue_types == [S.IssueType.VI_003]
+    assert document_only_detail.blocking_fact_count == 0
+    # A proceed evaluation derives an empty vocabulary and a zero count.
     proceed = S.GateDetail.from_gate_evaluation(_gate())
     assert proceed.decision == "proceed"
-    assert proceed.issues == [] and proceed.blocking_fact_count == 0
+    assert proceed.issue_types == [] and proceed.blocking_fact_count == 0
     # An unavailable evaluation is an evaluation failure, never a decision.
     with pytest.raises(ValueError, match="no trace decision"):
         S.GateDetail.from_gate_evaluation(
@@ -3116,32 +3209,32 @@ def test_r204_gate_detail_projection_keeps_identity_and_drops_the_message() -> N
         )
 
 
-def _assert_no_free_text(node: object, path: str = "$") -> None:
-    """Recursively reject arbitrary text in a serialized payload (R2-04)."""
-    import re as _re
+def test_r204_unexpected_nested_text_and_token_fields_are_rejected() -> None:
+    """Extra nested payloads and non-vocabulary tokens are refused, not ignored."""
+    base = {
+        "kind": "gate",
+        "decision": "halt",
+        "blocking_fact_count": 1,
+        "issue_types": ["VI-003"],
+    }
+    for payload in (
+        {**base, "issues": [{"issue_type": "VI-003", "message": "free text"}]},
+        {**base, "issue_types": [{"issue_type": "VI-003"}]},
+        {**base, "message": "free text"},
+        {**base, "reason_code": "some_machine_token"},
+        {**base, "issue_types": ["VI-003", "VI-999"]},
+        {**base, "issue_types": ["not_a_closed_vocabulary_token"]},
+        {**base, "issue_types": ["VI-003", "VI-003"]},
+        {**base, "issue_types": ["VI-003", "VI-001"]},
+    ):
+        with pytest.raises(ValidationError):
+            S.GateDetail.model_validate_json(json.dumps(payload))
+    # ``additionalProperties: false`` is real: an unknown nested key is refused.
+    with pytest.raises(ValidationError):
+        S.GateDetail.model_validate_json(json.dumps({**base, "extra": {"a": 1}}))
 
-    typed_string = _re.compile(
-        r"^(?:"
-        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"  # UUID
-        r"|[0-9a-f]{64}"  # SHA-256
-        r"|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"  # UTC instant
-        r"|[a-z][a-z0-9_]*"  # closed-vocabulary machine token
-        r"|[A-Z][A-Z0-9_-]*"  # closed-vocabulary code such as VI-003
-        r")$"
-    )
-    forbidden_keys = {"message", "raw_text", "text", "note", "reason_text", "free_text"}
-    if isinstance(node, dict):
-        for key, value in node.items():
-            assert key not in forbidden_keys, f"{path}.{key} is a free-text field"
-            _assert_no_free_text(value, f"{path}.{key}")
-    elif isinstance(node, list):
-        for index, item in enumerate(node):
-            _assert_no_free_text(item, f"{path}[{index}]")
-    elif isinstance(node, str):
-        assert typed_string.match(node), f"{path} carries non-typed text: {node!r}"
 
-
-def test_r204_every_nested_trace_payload_is_free_of_arbitrary_text() -> None:
+def test_r204_every_nested_trace_payload_is_closed_vocabulary() -> None:
     """Walk the whole serialized payload, not just the top-level field names."""
     details = [
         S.TriageDetail(
@@ -3155,14 +3248,14 @@ def test_r204_every_nested_trace_payload_is_free_of_arbitrary_text() -> None:
         S.GateDetail(
             decision="halt",
             blocking_fact_count=1,
-            issues=[_trace_issue()],
+            issue_types=[S.IssueType.VI_003],
         ),
         S.FinalizeDetail(
             approval_decision="approve", task_created=False, notification_created=False
         ),
     ]
     for detail in details:
-        _assert_no_free_text(json.loads(detail.model_dump_json()))
+        _assert_trace_strings_are_closed(json.loads(detail.model_dump_json()))
 
     # The same walk over a full node event, which nests a detail one level down.
     for node, detail in zip(
@@ -3176,12 +3269,12 @@ def test_r204_every_nested_trace_payload_is_free_of_arbitrary_text() -> None:
         strict=True,
     ):
         event = _event(node=node, detail=detail)
-        _assert_no_free_text(json.loads(event.model_dump_json()))
+        _assert_trace_strings_are_closed(json.loads(event.model_dump_json()))
 
     # Negative control: the gate *reference* does carry the rendered message, so
-    # the walk really does detect free text when it is present.
-    with pytest.raises(AssertionError, match="non-typed text"):
-        _assert_no_free_text(json.loads(halt_reference_json()))
+    # the walk really does detect non-vocabulary text when it is present.
+    with pytest.raises(AssertionError, match="outside the closed vocabularies"):
+        _assert_trace_strings_are_closed(json.loads(halt_reference_json()))
 
 
 def halt_reference_json() -> str:
@@ -3194,12 +3287,14 @@ def test_r204_only_the_latest_gate_event_mirrors_the_current_evaluation() -> Non
     historical = _event(
         node=S.NodeName.FACT_VERIFY_GATE,
         started_at="2026-11-14T11:30:00Z",
-        detail=S.GateDetail(decision="proceed", blocking_fact_count=0, issues=[]),
+        detail=S.GateDetail(decision="proceed", blocking_fact_count=0, issue_types=[]),
     )
     current = _event(
         node=S.NodeName.FACT_VERIFY_GATE,
         started_at="2026-11-14T11:40:00Z",
-        detail=S.GateDetail(decision="halt", blocking_fact_count=1, issues=[_trace_issue()]),
+        detail=S.GateDetail(
+            decision="halt", blocking_fact_count=1, issue_types=[S.IssueType.VI_003]
+        ),
     )
     # An earlier event records an earlier evaluation; the latest one mirrors the
     # current evaluation. The historical association is an S2 obligation.
@@ -3526,3 +3621,43 @@ def test_r206_inconsistent_selected_evidence_cannot_be_presented_as_bound() -> N
                 observations=[_selected_observation(observation_id=OBS_BASELINE_V5_B)],
             )
         )
+
+
+# === R2-02 (temporal): accepted future-skew eligibility boundary ====================
+
+
+def test_r202_temporal_eligibility_mirrors_the_accepted_future_skew_boundary() -> None:
+    """A measurement beyond ``as_of + 5 minutes`` is not eligible (R2-02)."""
+    assert S.MAX_FUTURE_SKEW_MINUTES == 5
+    # The accepted predicate checks only the upper bound.
+    assert S._beyond_future_skew("2026-11-14T12:05:00Z", AS_OF) is False
+    assert S._beyond_future_skew("2026-11-14T12:05:01Z", AS_OF) is True
+    # A past measurement is never "future", however old it is; window membership
+    # is a separate, labelled check.
+    assert S._beyond_future_skew("2020-01-01T00:00:00Z", AS_OF) is False
+
+    # Selected current: exactly at the boundary is eligible ...
+    _state(observations=[_observation(measured_at="2026-11-14T12:05:00Z")])
+    # ... one second beyond it is not.
+    with pytest.raises(ValidationError, match="authorized future-skew allowance"):
+        _state(observations=[_observation(measured_at="2026-11-14T12:05:01Z")])
+    # The comparison current follows the same boundary.
+    with pytest.raises(ValidationError, match="authorized future-skew allowance"):
+        _state(
+            observations=[_observation(measured_at="2026-11-14T12:05:01Z")],
+            comparisons=[_comparison(current_value=Decimal("140"))],
+            verification_gate=_gate(),
+            last_validated_at_utc=VALIDATED,
+        )
+    # The baseline rule is defence in depth: a baseline must precede its current,
+    # so a current inside the boundary already forces the baseline inside it. The
+    # predicate is nevertheless applied to the baseline row on every pass.
+    assert S._beyond_future_skew("2026-11-14T12:05:01Z", AS_OF) is True
+
+
+def test_r202_structural_eligibility_grants_no_runtime_authority() -> None:
+    """Eligibility is a shape check; it selects nothing and authorizes nothing."""
+    eligible = _state(observations=[_observation(measured_at="2026-11-14T12:05:00Z")])
+    assert eligible.runtime_evaluable is False
+    assert eligible.policy_status == "unapproved"
+    assert eligible.workflow_completed is False

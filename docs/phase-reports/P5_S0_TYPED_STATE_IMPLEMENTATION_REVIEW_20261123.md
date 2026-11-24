@@ -436,3 +436,61 @@ Executed against the **real accepted services** (`seed_demo_data` → F0 → F1 
 ### 11.4 Executed verification (Linux CPython 3.11.2 — disclosed deviation from CI 3.12; no Windows execution)
 
 Focused S0 **169 passed / 0 failed**; P5 **228 passed**; P2 **282 passed**; P3 **443 passed** (D-09 guard green after the authorized append); P4 green; **full backend 1466 passed / 0 failed in 237 s**; Ruff lint and format PASS (149 files); Alembic smoke PASS at head `0008_p4_rb3_review_persistence` (upgrade → downgrade → upgrade); OpenAPI PASS (17 paths / 18 operations / 43 schemas); repository scan PASS (303 tracked files, 7 secret patterns, 4 claim patterns). **Collection measured: 1466 / 443 / 228** (+19 P5-S0 tests versus Round 2; P3 and P2 unchanged; nothing deleted).
+
+---
+
+## 12. Final narrow contract correction (2026-11-24) — append-only clarification
+
+This section **corrects** the Round-3 description of the gate trace in §11.1/§11.2 and records the two narrow corrections that follow the Round-3 independent review. §11's executed evidence, its genuine producer integration results and its explicitly limited projection scope **remain valid and unchanged**; only the description of `GateDetail` was stale and is superseded here.
+
+### 12.1 Correction: `GateDetail` is the normative contract shape (supersedes §11.1 R2-04)
+
+§11.1 described `GateDetail` as carrying `issues: list[TraceGateIssue]`. That was **not** the normative shape. The authoritative definition is `GateEventDetail` in `docs/contracts/openapi.phase0.yaml` (`additionalProperties: false`) and `GateDetail` in `docs/contracts/STATE_AND_GRAPH_CONTRACT.md`, both of which specify exactly four fields:
+
+| Field | Contract | Implementation now |
+|---|---|---|
+| `kind` | `const: gate` | `Literal["gate"] = "gate"` |
+| `decision` | `enum: [proceed, halt]` | `TraceGateDecision` (two-valued) |
+| `blocking_fact_count` | `integer 0..40` | `Field(ge=0, le=MAX_BLOCKING_FACTS)` with `MAX_BLOCKING_FACTS = 40` |
+| `issue_types` | `array maxItems 6`, items `enum: [VI-001 … VI-006]` | `list[IssueType] = Field(max_length=6)` — the **closed** enum, unique and canonically ordered |
+
+Consequences, all intentional:
+
+- **`issue_types` replaced `issues`.** The non-normative `TraceGateIssue` payload was **removed** from the module. Full blocker semantic identities (`issue_type`, `reason_code`, `document_id`, `fact_ids`) and the canonical rendered `message` live only in `GateEvaluationRef`, which is the gate/evidence reference and is not a trace event.
+- **No arbitrary reason-code text is serialized in the trace.** `GateIssueRef.reason_code` remains a bounded machine token that mirrors the F1 producer; it is **not** presented as a closed vocabulary anywhere, and it no longer reaches the trace at all.
+- **A regex-conforming token is not a vocabulary.** `issue_types` is an enum list, so a string that merely matches a token pattern is rejected. The recursive trace test in §12.3 asserts membership in the *actual* closed vocabularies rather than a token regex.
+- **`GateDetail.from_gate_evaluation()`** derives `issue_types` as the canonical (unique, ordered) set of the evaluation's blocker types, so a forged or reordered list cannot be substituted, and raises for `unavailable` instead of fabricating `proceed`/`halt`.
+- **Document-only HALT with zero blocking facts is preserved and asserted**: `issue_types` is non-empty while `blocking_fact_count` may be `0`, because a document-level blocker references no distinct fact.
+- **Historical-event association and `unavailable` routing stay assigned to S2.** Only the *latest* gate event must mirror the current evaluation; binding an earlier event to the evaluation that produced it, and routing an `unavailable` evaluation, are recorded S2 obligations and are not implemented here. No graph execution exists in S0.
+- No OpenAPI, database schema or F1 change was made.
+
+### 12.2 Correction: temporal structural eligibility
+
+`monitoring.admissibility_reason` rejects a measurement beyond `as_of_utc + MAX_FUTURE_SKEW_MINUTES` (`"future_timestamp"`). The Round-3 selected-current validator checked the validation label but not this temporal condition. It now mirrors the accepted boundary for **selected-current** and **comparison current/baseline** rows:
+
+- `MAX_FUTURE_SKEW_MINUTES = 5` is pinned in the state module (which imports no service) and drift-checked against `app.core.clock.MAX_FUTURE_SKEW_MINUTES` by `test_m20_vocabulary_single_sources_of_truth`. It is the accepted boundary, **not a new policy parameter**, and it grants no runtime authorization.
+- Only the upper bound is enforced, exactly as the service does: a past measurement stays eligible however old it is, because window membership is a separate, labelled check (`R2-03`).
+- The baseline rule is **defence in depth**: a baseline must precede its current, so a current inside the boundary already forces the baseline inside it. The predicate is nevertheless applied to the baseline row on every pass, and the test says so rather than pretending to exercise an unreachable path.
+- **Structural eligibility is not authoritative selection.** Nothing here selects a baseline, proves it is the latest prior, or authorizes a runtime decision (`test_r202_structural_eligibility_grants_no_runtime_authority`).
+
+### 12.3 Closure evidence for the final correction
+
+| Requirement | Code | Test |
+|---|---|---|
+| Normative four-field shape | `GateDetail` fields; `TraceGateIssue` removed | `test_r204_gate_detail_is_the_normative_contract_shape` (asserts the field set, the OpenAPI `GateEventDetail` property names, `additionalProperties: false`, the `VI-00x` enum and the markdown contract block) |
+| Canonical unique `issue_types` from the evaluation | `GateDetail.from_gate_evaluation()` | `test_r204_projection_keeps_the_closed_vocabulary_and_no_blocker_text` |
+| No blocker text in the trace | identity/message only on `GateEvaluationRef` | same test — asserts `semantic_key()` and `message` remain on the reference |
+| Closed vocabulary, not a token regex | `list[IssueType]` | `test_r204_every_nested_trace_payload_is_closed_vocabulary` (recursive walk over every detail and nesting event, with a negative control) |
+| Reject unexpected nested text/token fields | `extra="forbid"` + enum list | `test_r204_unexpected_nested_text_and_token_fields_are_rejected` (8 payloads incl. `issues`, nested objects, `message`, `reason_code`, `VI-999`, duplicates, non-canonical order) |
+| Document-only HALT with zero facts | `_consistent` no longer couples count to issue count | `test_r204_projection_keeps_the_closed_vocabulary_and_no_blocker_text` |
+| Never fabricate `proceed`/`halt` | `from_gate_evaluation()` raises | same test |
+| Latest-event-only mirroring (S2 association recorded) | `_trace_gate_consistency` | `test_r204_only_the_latest_gate_event_mirrors_the_current_evaluation` |
+| Temporal boundary mirrored | `_beyond_future_skew` + `_selected_current_roles` / `_evidence_binding` | `test_r202_temporal_eligibility_mirrors_the_accepted_future_skew_boundary`, `test_r202_structural_eligibility_grants_no_runtime_authority` |
+
+### 12.4 Executed verification for this correction (Linux CPython 3.11.2 — disclosed deviation from CI 3.12; no Windows execution)
+
+Focused S0 **173 passed / 0 failed**; P5 **232 passed**; P2 **282 passed**; P3 **443 passed** (D-09 guard green after the authorized append); P4 green; **full backend 1470 passed / 0 failed**; Ruff lint and format PASS (149 files); Alembic smoke PASS at head `0008_p4_rb3_review_persistence`; OpenAPI PASS (17 paths / 18 operations / 43 schemas); repository scan PASS (303 tracked files, 7 secret patterns, 4 claim patterns). **Collection measured: 1470 / 443 / 232.**
+
+### 12.5 Projection scope, restated unchanged
+
+The genuine Round-3 integration evidence stands: the real F0 → F1 → F2 → RB3 (write and replay) producers are driven, their receipts are projected, and the complete state round-trips and revalidates. **RB3 review items and evidence links remain counted by the sealed receipt but are not projected as state collections**, and the test asserts that rather than implying completeness.

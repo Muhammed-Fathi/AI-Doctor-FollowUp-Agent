@@ -131,6 +131,13 @@ MAX_ERRORS = 10
 MAX_OBSERVATIONS = MAX_SELECTED_CURRENT + MAX_HISTORY_OBSERVATIONS
 #: At most one comparison per current observation per producer window.
 MAX_COMPARISONS = MAX_SELECTED_CURRENT * 2
+#: ``app.core.clock.MAX_FUTURE_SKEW_MINUTES`` — the accepted future-skew allowance
+#: for a measurement timestamp. ``monitoring.admissibility_reason`` returns
+#: ``"future_timestamp"`` for anything beyond ``as_of_utc + 5 minutes``. Pinned
+#: here because this module imports no service, and drift-checked against the
+#: clock module by the vocabulary test. It is the accepted boundary, not a new
+#: policy parameter, and it grants no runtime authorization.
+MAX_FUTURE_SKEW_MINUTES = 5
 #: The accepted window widths. F2 implements ``HISTORY_LOOKBACK_DAYS = 365``
 #: (``p5_evidence_bridge``) and the RB1 run-bound preview implements
 #: ``POLICY_LOOKBACK_DAYS = 90`` (``p4_run_bound_preview``). They are pinned
@@ -198,6 +205,18 @@ def _utc_instant(value: str) -> str:
 def _parse_instant(value: str) -> datetime:
     """Parse an already-validated ``YYYY-MM-DDTHH:MM:SSZ`` instant (no I/O)."""
     return datetime.strptime(value, _UTC_FORMAT)
+
+
+def _beyond_future_skew(measured_at: str, as_of_utc: str) -> bool:
+    """``measured_at > as_of_utc + MAX_FUTURE_SKEW_MINUTES`` — the accepted rule.
+
+    Mirrors ``monitoring.admissibility_reason`` exactly: only the upper bound is
+    checked, so a past measurement stays eligible however old it is (its window
+    membership is a separate, labelled check).
+    """
+    return _parse_instant(measured_at) > _parse_instant(as_of_utc) + timedelta(
+        minutes=MAX_FUTURE_SKEW_MINUTES
+    )
 
 
 def _calendar_date(value: str) -> str:
@@ -732,7 +751,7 @@ def _sorted_exclusions(
     ]
 
 
-def _distinct_fact_count(issues: Sequence[GateIssueRef | TraceGateIssue]) -> int:
+def _distinct_fact_count(issues: Sequence[GateIssueRef]) -> int:
     """``len({fact for item in ordered for fact in item.fact_ids})`` — the F1 recipe."""
     return len({fact for item in issues for fact in item.fact_ids})
 
@@ -1187,35 +1206,6 @@ class GateIssueRef(Strict):
         return (self.issue_type, self.reason_code, self.document_id, tuple(self.fact_ids))
 
 
-class TraceGateIssue(Strict):
-    """Typed trace payload for one gate blocker - **no free text** (R2-04).
-
-    The accepted typed-trace boundary admits enums, identifiers, bounded counts
-    and probabilities, never arbitrary text. ``GateIssueRef`` keeps the full F1
-    blocker semantics *including the canonical rendered message*, because the
-    gate/evidence reference is where that message belongs. This projection keeps
-    the blocker's **identity** - ``issue_type``, ``reason_code``, ``document_id``
-    and ``fact_ids`` - and drops the message: a rendered message is presentation
-    text, not identity. ``semantic_key()`` is identical to
-    ``GateIssueRef.semantic_key()``, which is exactly the tuple the accepted F1
-    producer compares on replay.
-    """
-
-    issue_type: IssueType
-    reason_code: ReasonCode
-    document_id: Uuid
-    fact_ids: list[Uuid] = Field(default_factory=list, max_length=MAX_BLOCKING_FACTS)
-
-    @model_validator(mode="after")
-    def _bounded(self) -> Self:
-        _unique(self.fact_ids, "fact_ids")
-        return self
-
-    def semantic_key(self) -> tuple[object, ...]:
-        """The identity the accepted F1 producer compares on replay."""
-        return (self.issue_type, self.reason_code, self.document_id, tuple(self.fact_ids))
-
-
 # --- typed node trace (REQ-AUDIT-01, P0-R08) -------------------------------------------#
 
 
@@ -1266,20 +1256,30 @@ class ValidationDetail(Strict):
 
 
 class GateDetail(Strict):
-    """Bounded gate decision recorded in the trace.
+    """Bounded gate decision recorded in the trace - the **normative** contract shape.
+
+    ``kind``, ``decision``, ``blocking_fact_count`` and ``issue_types`` are
+    exactly the fields of ``GateEventDetail`` in
+    ``docs/contracts/openapi.phase0.yaml`` (``additionalProperties: false``) and
+    of ``GateDetail`` in ``STATE_AND_GRAPH_CONTRACT.md``. Nothing else is
+    serialized: full blocker semantic identities and canonical rendered messages
+    belong to ``GateEvaluationRef``, never to the trace (R2-04, final narrow
+    correction).
+
+    ``issue_types`` is the **closed** ``VI-001``...``VI-006`` vocabulary, unique
+    and canonically ordered. A regex-conforming machine token is not accepted in
+    its place: the field is an enum list, not a string list.
 
     ``decision`` is the **two-valued** normative trace contract
     (``node_event.gate_decision CHECK IN ('proceed','halt')``). The F1
     ``unavailable`` outcome is an *evaluation failure*: it never becomes a trace
     decision, so no proceed/halt value is fabricated to satisfy this schema
-    (owner decision D-01). Routing an ``unavailable`` gate to a trace/error path
-    is an S2 obligation, recorded in the S0 review.
+    (owner decision D-01). Routing an ``unavailable`` evaluation is an S2
+    obligation, recorded in the S0 review and not implemented here.
 
-    ``issues`` carries the **typed identity** of each blocker - issue type, reason
-    code, document and fact identities - and never the rendered message text
-    (owner decision D-12 for the identity, R2-04 for the trace boundary). The
-    canonical message stays in ``GateEvaluationRef``, which is the gate/evidence
-    reference, not the trace.
+    A document-only HALT is representable: ``issue_types`` is non-empty while
+    ``blocking_fact_count`` may be **zero**, because a document-level blocker
+    references no distinct fact.
 
     ``verification_gate`` on ``SharedGraphState`` is the **current** evaluation;
     ``events`` is an append-only historical record. Only the most recent gate
@@ -1292,25 +1292,28 @@ class GateDetail(Strict):
     kind: Literal["gate"] = "gate"
     decision: TraceGateDecision
     blocking_fact_count: int = Field(ge=0, le=MAX_BLOCKING_FACTS)
-    issues: list[TraceGateIssue] = Field(default_factory=list, max_length=MAX_BLOCKING_FACTS)
+    issue_types: list[IssueType] = Field(default_factory=list, max_length=6)
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:
+        if len(set(self.issue_types)) != len(self.issue_types):
+            raise ValueError("issue_types must be unique")
+        if self.issue_types != sorted(self.issue_types):
+            raise ValueError("issue_types must be in canonical order")
         if self.decision == "proceed":
-            if self.issues or self.blocking_fact_count != 0:
+            if self.issue_types or self.blocking_fact_count != 0:
                 raise ValueError("proceed records no blocking issue and zero blocking facts")
-        elif not self.issues:
-            raise ValueError("halt records at least one blocking issue")
-        if self.blocking_fact_count != _distinct_fact_count(self.issues):
-            raise ValueError("blocking_fact_count must equal the distinct referenced fact count")
+        elif not self.issue_types:
+            raise ValueError("halt records at least one blocking issue type")
         return self
 
     @classmethod
     def from_gate_evaluation(cls, ref: GateEvaluationRef) -> GateDetail:
-        """Derive the trace projection from a matching gate outcome.
+        """Derive the normative trace projection from a matching gate outcome.
 
-        The projection is derived, never assembled by hand: a ``halt`` keeps its
-        blockers' identity and a ``proceed`` records none. An ``unavailable``
+        The projection is derived, never assembled by hand: ``issue_types`` is the
+        canonical (unique, ordered) set of the evaluation's blocker types, so a
+        forged or reordered list cannot be substituted. An ``unavailable``
         evaluation is an *evaluation failure*, not a decision, so it raises
         instead of fabricating ``proceed`` or ``halt`` (owner decision D-01).
         """
@@ -1319,15 +1322,7 @@ class GateDetail(Strict):
         return cls(
             decision=ref.decision.value,
             blocking_fact_count=ref.blocking_fact_count,
-            issues=[
-                TraceGateIssue(
-                    issue_type=item.issue_type,
-                    reason_code=item.reason_code,
-                    document_id=item.document_id,
-                    fact_ids=list(item.fact_ids),
-                )
-                for item in ref.issues
-            ],
+            issue_types=sorted({item.issue_type for item in ref.issues}),
         )
 
 
@@ -2037,8 +2032,17 @@ class SharedGraphState(Strict):
                 "selected-current observations must equal the F2 selected_observation_ids"
             )
         for row in self.observations:
-            if row.role is ObservationRole.SELECTED_CURRENT and not row.admissible:
+            if row.role is not ObservationRole.SELECTED_CURRENT:
+                continue
+            if not row.admissible:
                 raise ValueError("a selected-current observation must pass the data check")
+            # R2-02 (temporal): the accepted monitoring boundary rejects a
+            # measurement beyond as_of + the authorized future-skew allowance.
+            if _beyond_future_skew(row.measured_at, self.identity.as_of_utc):
+                raise ValueError(
+                    "a selected-current observation must not be measured beyond the "
+                    "run's as-of clock plus the authorized future-skew allowance"
+                )
         return self
 
     @model_validator(mode="after")
@@ -2125,6 +2129,11 @@ class SharedGraphState(Strict):
                 raise ValueError("comparison current value differs from the typed observation")
             if not current.admissible:
                 raise ValueError("a comparison current must pass the data check")
+            if _beyond_future_skew(current.measured_at, self.identity.as_of_utc):
+                raise ValueError(
+                    "a comparison current must not be measured beyond the run's as-of "
+                    "clock plus the authorized future-skew allowance"
+                )
             # D-04: the window label is typed and never relabelled. ``p5_evidence_bridge``
             # is the only producer of comparisons in an F2-shaped state and it pins
             # ``f2-history-365d-v1``; a 90-day RB1 label beside an F2 evidence
@@ -2165,6 +2174,11 @@ class SharedGraphState(Strict):
                 raise ValueError("comparison baseline value differs from the typed observation")
             if not baseline.admissible:
                 raise ValueError("a comparison baseline must pass the data check")
+            if _beyond_future_skew(baseline.measured_at, self.identity.as_of_utc):
+                raise ValueError(
+                    "a comparison baseline must not be measured beyond the run's as-of "
+                    "clock plus the authorized future-skew allowance"
+                )
             if baseline.measured_at >= current.measured_at:
                 raise ValueError("a baseline must precede the current observation")
             # R2-03: the baseline must lie inside the *labelled* window, using the
@@ -2439,10 +2453,10 @@ class SharedGraphState(Strict):
             raise ValueError("gate trace decision differs from the evaluation")
         if detail.blocking_fact_count != gate.blocking_fact_count:
             raise ValueError("gate trace blocking_fact_count differs from the evaluation")
-        if [item.semantic_key() for item in detail.issues] != [
-            item.semantic_key() for item in gate.issues
-        ]:
-            raise ValueError("gate trace blockers differ from the evaluation's blockers")
+        # The trace carries the closed issue-type vocabulary only; the full
+        # semantic identities stay on the reference (R2-04).
+        if detail.issue_types != sorted({item.issue_type for item in gate.issues}):
+            raise ValueError("gate trace issue_types differ from the evaluation's blockers")
         return self
 
 
