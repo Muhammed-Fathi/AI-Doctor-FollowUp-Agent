@@ -342,3 +342,39 @@ Drift is produced by a **real** second session committing after the genuine brid
 Correction head `8cb05d08788c6510211d11156584464c59f67a9a` — push [#45649051373](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45649051373) and pull_request [#45649044112](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45649044112): both **COMPLETED / SUCCESS** (Frontend Node 22; Backend Python 3.12 with Ruff lint, Ruff format, backend tests, Alembic smoke, OpenAPI and repository scan). Read from the Actions API. This section is a documentation-only append; no application or test blob changes after `8cb05d0`.
 
 Windows `test_all.ps1` remains **not run** by the agent; no Windows acceptance is claimed. PR #48 **OPEN / DRAFT / NOT MERGED**; P5 **IN_REVIEW / NOT ACCEPTED**; issue #14 **OPEN**; no merge, auto-merge, self-approval, main change or P5-S2 work. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
+
+---
+
+## 17. S1-R3 — baseline window drift closed (2026-11-24)
+
+**Finding (independent review).** The accepted F2 producer calls `compare_explicit_current_with_history` with `HISTORY_LOOKBACK_DAYS = 365`, and its baseline eligibility is inclusive at the lower boundary and exclusive at the upper one: `current - 365d <= baseline < current`. `compare_observations` re-checked only the upper bound ("earlier than its current"), so a second writer could move the stored baseline before the 365-day window after the genuine bridge returned; with value, unit and trust label unchanged, the original F2 delta would still be emitted although the stored baseline was no longer temporally eligible.
+
+**Correction (in `backend/app/agents/tools.py` only).**
+
+- The baseline block now validates the accepted window against the reconciled stored timestamps:
+  `current_stamp - timedelta(days=HISTORY_LOOKBACK_DAYS) <= baseline_stamp < current_stamp`.
+- `HISTORY_LOOKBACK_DAYS` is imported from the accepted F2 bridge module. **No new configurable period is introduced** and no new policy parameter appears.
+- An out-of-window baseline raises the existing typed `producer_evidence_inconsistent` error and returns **no payload**.
+- The F2 `delta`, `baseline_observation_id`, `trust_basis` and the `no_baseline` semantics are untouched: the window is only re-validated, never reselected.
+- Transaction cleanup is unchanged: the `finally` rollback still runs on this rejection path.
+
+**Proof (new tests).**
+
+| Test | Proves |
+|---|---|
+| `test_s1_compare_rejects_a_baseline_outside_the_365_day_window` | the genuine F2 bridge runs, then a separate session commits a baseline timestamp of `2025-06-01` (earlier than the current, outside 365 days); the adapter returns `producer_evidence_inconsistent`, no data, `in_transaction() is False` and empty `new`/`dirty`/`deleted` |
+| `test_s1_compare_accepts_the_exact_inclusive_365_day_boundary` | a baseline committed at exactly `current - 365 days` (`2025-11-01T09:00:00Z` vs current `2026-11-01T09:00:00Z`) is still accepted, with `baseline_observation_id`, `comparable`, `delta == -29`, `delta == exact_delta(121, 150)` and the `f2-history-365d-v1` label intact |
+| existing `test_s1_compare_rejects_a_baseline_measured_after_its_current` | the exclusive upper bound is still rejected (now through the same window check) |
+
+Both new tests use `_write_after_bridge`, i.e. the genuine bridge plus a real second committed session, not a fabricated envelope.
+
+**Explicit non-claim.** This closes the *detectable* lower-bound drift. It still does not make the bridge snapshot and the adapter's read one atomic snapshot, and it does not re-derive the F2 delta — the delta remains the producer's output.
+
+---
+
+## 18. D-09 fresh authorization obtained for S1-R3 (2026-11-24)
+
+- **Authorization (disclosed channel):** the repository owner selected the explicit option *Authorize the append-only edit* in this Arena working session on 2026-11-24, for exactly `**1526 collected**, of which **443** are the P3 suite`. Given in reply to a direct question in the session; **no** new signed GitHub comment exists for it. Recorded in `docs/roadmap/PHASE_PROGRESS.md` before the handoff was edited.
+- **Edit executed:** one append-only section at the end of `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md`. No other line of that file changed; every historical P3 result, every earlier collection checkpoint and the real `GOLD-EX-11 FAIL / NOT PROVEN` outcome remain verbatim.
+- **Guard re-run after the edit:** `test_handoff_test_count_matches_the_suite_it_describes` → **passed**. The guard itself was not modified.
+- **Status unchanged:** P5 **IN_REVIEW / NOT ACCEPTED**; PR #48 **OPEN / DRAFT / NOT MERGED**; issue #14 **OPEN**; no merge, auto-merge, self-approval, main change, S2 work or Windows acceptance claim.

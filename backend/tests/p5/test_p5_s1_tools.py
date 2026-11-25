@@ -1443,3 +1443,71 @@ def test_s1_read_observations_rejects_a_selected_row_beyond_the_future_skew(
     assert result.ok is False
     assert result.error is not None
     assert result.error.reason is T.ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT
+
+
+# --------------------------------------------------------------------------- #
+# S1-R3: baseline window drift
+# --------------------------------------------------------------------------- #
+
+
+def test_s1_compare_rejects_a_baseline_outside_the_365_day_window(
+    engine, tmp_path, monkeypatch
+) -> None:
+    """S1-R3: a baseline that drifted before the window fails closed, cleanly."""
+    run = _make_run(engine, tmp_path, documents=1, observations=1, history=True)
+    # Earlier than the current row but outside the accepted 365-day window.
+    _write_after_bridge(
+        monkeypatch,
+        engine,
+        lambda writer: writer.execute(
+            update(Observation)
+            .where(Observation.id == WARN_OBS)
+            .values(measured_at="2025-06-01T09:00:00Z")
+        ),
+    )
+    ctx = _context(engine, run, tmp_path, S.NodeName.MONITOR_COMPARE)
+    try:
+        result = T.compare_observations(ctx)
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code is T.ToolErrorCode.VALIDATION
+        assert result.error.reason is T.ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT
+        assert result.data is None
+        assert ctx.db.in_transaction() is False
+        assert len(ctx.db.new) == len(ctx.db.dirty) == len(ctx.db.deleted) == 0
+    finally:
+        ctx.db.close()
+
+
+def test_s1_compare_accepts_the_exact_inclusive_365_day_boundary(
+    engine, tmp_path, monkeypatch
+) -> None:
+    """S1-R3: the inclusive lower bound stays acceptable, with F2's delta intact."""
+    run = _make_run(engine, tmp_path, documents=1, observations=1, history=True)
+    # Exactly current - 365 days: the accepted lower boundary is inclusive.
+    _write_after_bridge(
+        monkeypatch,
+        engine,
+        lambda writer: writer.execute(
+            update(Observation)
+            .where(Observation.id == WARN_OBS)
+            .values(measured_at="2025-11-01T09:00:00Z")
+        ),
+    )
+    ctx = _context(engine, run, tmp_path, S.NodeName.MONITOR_COMPARE)
+    try:
+        result = T.compare_observations(ctx)
+        assert result.ok is True, result.error
+        assert isinstance(result.data, list)
+        (comparison,) = result.data
+        assert comparison.baseline_observation_id == WARN_OBS
+        assert comparison.comparable is True
+        assert comparison.current_value == Decimal("121")
+        assert comparison.baseline_value == Decimal("150")
+        # The F2 delta is preserved, never recalculated from the drifted row.
+        assert comparison.delta == Decimal("-29")
+        assert comparison.delta == S.exact_delta(Decimal("121"), Decimal("150"))
+        assert comparison.history_policy is S.ComparisonWindow.F2_365D
+        assert ctx.db.in_transaction() is False
+    finally:
+        ctx.db.close()

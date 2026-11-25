@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Generic, Literal, Self, TypeVar
@@ -82,6 +82,7 @@ from app.schemas.p5_review_evidence import EvaluableReviewEvidenceV2, Observatio
 from app.services.monitoring import MonitoringInputError, admissibility_reason
 from app.services.p5_evidence_bridge import (
     COMPARISON_HISTORY_VERSION,
+    HISTORY_LOOKBACK_DAYS,
     build_run_evaluable_review_evidence,
 )
 
@@ -806,11 +807,22 @@ def compare_observations(ctx: ToolContext) -> ToolResult[list[ComparisonResult]]
                         ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
                         "A comparison baseline has a different measure or unit.",
                     )
-                if parse_utc(baseline_view.measured_at) >= parse_utc(current_view.measured_at):
+                baseline_stamp = parse_utc(baseline_view.measured_at)
+                current_stamp = parse_utc(current_view.measured_at)
+                # The accepted F2 producer selects a baseline with an inclusive
+                # lower bound and an exclusive upper bound, relative to the
+                # current observation's own timestamp:
+                #     current - HISTORY_LOOKBACK_DAYS <= baseline < current
+                # The same constant is reused here; no new period is introduced.
+                if not (
+                    current_stamp - timedelta(days=HISTORY_LOOKBACK_DAYS)
+                    <= baseline_stamp
+                    < current_stamp
+                ):
                     raise _Drift(
                         ToolErrorCode.VALIDATION,
                         ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
-                        "A comparison baseline is not earlier than its current.",
+                        "A comparison baseline is outside the accepted F2 history window.",
                     )
             if item.trust_basis != _expected_trust_basis(current_view, baseline_view):
                 raise _Drift(
