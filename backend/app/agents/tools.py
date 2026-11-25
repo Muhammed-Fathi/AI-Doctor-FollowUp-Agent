@@ -21,6 +21,20 @@ No database writes, no audit rows and no network egress. The adapter returns a
 bounded structured audit payload for S2 to persist; S1 does not claim a durable
 audit trail.
 
+**Transaction lifecycle (S1-R1).** The accepted F2 bridge rolls back its own
+``BEGIN IMMEDIATE`` snapshot before returning. The stored-row reconciliation that
+follows autobegins a fresh read transaction, and the adapter ends it with
+``ROLLBACK`` before returning - on success and on every error path. ``COMMIT`` is
+never used as a cleanup mechanism, a caller-owned session is never closed, and a
+session that was already dirty on entry is left untouched.
+
+**Snapshot authority limit (S1-R2).** The bridge's snapshot and the adapter's
+stored-row reads are two independent reads. Detectable drift - a changed value,
+unit, measure type, timestamp, source or trust label, a row that became
+``rejected``, or a row beyond the accepted future-skew boundary - fails closed.
+This does not make the two reads one atomic snapshot, and nothing here claims
+that it does.
+
 ACADEMIC / SYNTHETIC DATA ONLY - NOT FOR CLINICAL USE.
 """
 
@@ -64,7 +78,8 @@ from app.core.enums import (
 from app.core.errors import ApiError
 from app.core.policies import Principal
 from app.db.models import Document, ExtractedFact, Observation
-from app.schemas.p5_review_evidence import EvaluableReviewEvidenceV2
+from app.schemas.p5_review_evidence import EvaluableReviewEvidenceV2, ObservationV2
+from app.services.monitoring import MonitoringInputError, admissibility_reason
 from app.services.p5_evidence_bridge import (
     COMPARISON_HISTORY_VERSION,
     build_run_evaluable_review_evidence,
@@ -302,7 +317,7 @@ def _api_error(exc: ApiError) -> ToolError:
 
 
 def _evidence(
-    ctx: ToolContext, tool: ToolName, start: float
+    ctx: ToolContext, tool: ToolName, start: float, *, started_clean: bool
 ) -> EvaluableReviewEvidenceV2 | ToolResult[None]:
     """Call the accepted F2 bridge first, on a fresh clean session.
 
@@ -332,7 +347,7 @@ def _evidence(
                 "A trusted upload root is required.",
             ),
         )
-    if ctx.db.in_transaction() or ctx.db.new or ctx.db.dirty or ctx.db.deleted:
+    if not started_clean:
         return _error_from(
             ctx,
             tool,
@@ -372,6 +387,170 @@ def _instant(value: object) -> str:
         raise ValueError("invalid stored observation timestamp") from None
 
 
+class _Drift(Exception):
+    """Internal signal: a stored row disagrees with the accepted F2 projection."""
+
+    def __init__(self, code: ToolErrorCode, reason: ToolErrorReason, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.reason = reason
+        self.message = message
+
+
+def _session_is_clean(db: Session) -> bool:
+    """The accepted bridge's own precondition, reused by the adapter."""
+    return not (db.in_transaction() or db.new or db.dirty or db.deleted)
+
+
+def _end_adapter_transaction(ctx: ToolContext, *, started_clean: bool) -> None:
+    """End the read transaction this adapter opened. Never COMMIT.
+
+    The accepted F2 bridge rolls back its own snapshot before returning. The
+    stored-row reconciliation that follows then autobegins a fresh read
+    transaction under SQLAlchemy, and it must not outlive the call: an open
+    transaction would pin a read snapshot on a session the caller still owns.
+    It is ended with ROLLBACK. COMMIT is never used, because it would turn a
+    read-only adapter into a writer. A session that was already dirty on entry
+    is left untouched, so no caller-owned pending write is ever discarded and
+    no caller-owned session is ever closed.
+    """
+    if started_clean and ctx.db.in_transaction():
+        ctx.db.rollback()
+
+
+def _require_admissible(stored: Observation, *, patient_id: str, as_of_utc: datetime) -> None:
+    """Apply the accepted admissibility predicate to the post-bridge row.
+
+    The F2 bridge proved admissibility inside its own snapshot. Re-applying the
+    same accepted predicate to the row read afterwards is what detects drift
+    between the two reads: a row that became ``rejected`` or that now exceeds
+    the accepted future-skew boundary can no longer be returned as an eligible
+    current observation. No new boundary is invented here.
+    """
+    try:
+        reason = admissibility_reason(stored, patient_id=patient_id, as_of_utc=as_of_utc)
+    except MonitoringInputError as exc:
+        if exc.code == "E_SCOPE_VIOLATION":
+            raise _Drift(
+                ToolErrorCode.SCOPE_VIOLATION,
+                ToolErrorReason.PATIENT_SCOPE_MISMATCH,
+                "A stored observation belongs to a different patient.",
+            ) from None
+        raise _Drift(
+            ToolErrorCode.VALIDATION,
+            ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
+            "A stored observation is malformed.",
+        ) from None
+    if reason is not None:
+        raise _Drift(
+            ToolErrorCode.VALIDATION,
+            ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
+            "A stored observation is no longer admissible.",
+        )
+
+
+def _stored_view(
+    stored: Observation,
+    *,
+    role: ObservationRole,
+    source_document_id: str | None,
+) -> ObservationView:
+    """Build the S0 view from the stored row; the S0 validators do the rest."""
+    return ObservationView(
+        observation_id=stored.id,
+        patient_id=stored.patient_id,
+        role=role,
+        measure_type=MeasureType(stored.measure_type),
+        value=_decimal(stored.value),
+        unit=Unit(stored.unit),
+        measured_at=_instant(stored.measured_at),
+        source=ObservationSource(stored.source),
+        validation=ValidationState(stored.validation),
+        trust_level=TrustLevel(stored.trust_level),
+        verified_by=stored.verified_by_user_id,
+        verified_at=stored.verified_at,
+        source_fact_id=stored.source_fact_id,
+        source_document_id=source_document_id,
+    )
+
+
+def _reconcile_selected(
+    ctx: ToolContext, evidence: EvaluableReviewEvidenceV2, row: ObservationV2
+) -> ObservationView:
+    """Read the selected row and prove it still matches the F2 projection.
+
+    The F2 envelope is never trusted on its own for the *current* row: the
+    stored value, measure type, unit, timestamp, source, trust label and fact
+    lineage are compared field by field. Any drift fails closed, so a
+    ``current_value`` taken from this view and a ``baseline_value`` taken from
+    a stored row can never be silently combined from disagreeing snapshots.
+    """
+    stored = ctx.db.get(Observation, row.observation_id)
+    if stored is None:
+        raise _Drift(
+            ToolErrorCode.NOT_FOUND,
+            ToolErrorReason.OBSERVATION_NOT_FOUND,
+            "A selected observation is not stored.",
+        )
+    if stored.patient_id != evidence.patient_id:
+        raise _Drift(
+            ToolErrorCode.SCOPE_VIOLATION,
+            ToolErrorReason.PATIENT_SCOPE_MISMATCH,
+            "A selected observation belongs to a different patient.",
+        )
+    if row.source_document_id is not None and (
+        row.source_document_id not in evidence.selected_document_ids
+    ):
+        raise _Drift(
+            ToolErrorCode.SCOPE_VIOLATION,
+            ToolErrorReason.DOCUMENT_SCOPE_MISMATCH,
+            "A selected observation lineage document is outside the run selection.",
+        )
+    _require_admissible(stored, patient_id=evidence.patient_id, as_of_utc=ctx.validation_clock)
+    view = _stored_view(
+        stored, role=ObservationRole.SELECTED_CURRENT, source_document_id=row.source_document_id
+    )
+    if (
+        view.measure_type.value != row.measure_type
+        or view.unit.value != row.unit
+        or view.source.value != row.source
+        or view.trust_level.value != row.trust_level
+        or view.source_fact_id != row.source_fact_id
+        or view.value != row.value
+        or view.measured_at != row.measured_at
+    ):
+        raise _Drift(
+            ToolErrorCode.VALIDATION,
+            ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
+            "A stored observation differs from the F2 projection.",
+        )
+    return view
+
+
+def _history_view(ctx: ToolContext, stored: Observation, *, patient_id: str) -> ObservationView:
+    """Build a HISTORY view, resolving document lineage only from stored rows."""
+    document_id: str | None = None
+    if stored.source_fact_id is not None:
+        fact = ctx.db.get(ExtractedFact, stored.source_fact_id)
+        if fact is None or fact.patient_id != patient_id:
+            raise _Drift(
+                ToolErrorCode.SCOPE_VIOLATION,
+                ToolErrorReason.PATIENT_SCOPE_MISMATCH,
+                "A comparison baseline lineage is outside the patient scope.",
+            )
+        document_id = fact.document_id
+    return _stored_view(stored, role=ObservationRole.HISTORY, source_document_id=document_id)
+
+
+def _expected_trust_basis(current: ObservationView, baseline: ObservationView | None) -> TrustBasis:
+    """Mirror the accepted producer's label derivation; invent nothing."""
+    if baseline is not None and current.trust_level != baseline.trust_level:
+        return TrustBasis.MIXED
+    if current.trust_level is TrustLevel.DOCTOR_VERIFIED:
+        return TrustBasis.DOCTOR_VERIFIED
+    return TrustBasis.SELF_REPORTED
+
+
 def read_verified_facts(ctx: ToolContext) -> ToolResult[list[VerifiedFact]]:
     """Project the accepted F2 verified facts, reconciled with stored rows.
 
@@ -384,92 +563,57 @@ def read_verified_facts(ctx: ToolContext) -> ToolResult[list[VerifiedFact]]:
     denied = _denied(ctx, tool)
     if denied is not None:
         return _error_from(ctx, tool, start, denied)
-    evidence = _evidence(ctx, tool, start)
-    if isinstance(evidence, ToolResult):
-        return evidence
-
+    started_clean = _session_is_clean(ctx.db)
     facts: list[VerifiedFact] = []
     evidence_ids: list[str] = []
     try:
+        evidence = _evidence(ctx, tool, start, started_clean=started_clean)
+        if isinstance(evidence, ToolResult):
+            return evidence
         for row in evidence.verified_facts:
             stored = ctx.db.get(ExtractedFact, row.fact_id)
             if stored is None:
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
-                        ToolErrorCode.NOT_FOUND,
-                        ToolErrorReason.FACT_NOT_FOUND,
-                        "A verified fact is not stored.",
-                    ),
+                raise _Drift(
+                    ToolErrorCode.NOT_FOUND,
+                    ToolErrorReason.FACT_NOT_FOUND,
+                    "A verified fact is not stored.",
                 )
             if stored.verification_status != "verified":
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
-                        ToolErrorCode.UNVERIFIED_FACT,
-                        ToolErrorReason.UNVERIFIED_FACT,
-                        "A projected fact is not verified.",
-                    ),
+                raise _Drift(
+                    ToolErrorCode.UNVERIFIED_FACT,
+                    ToolErrorReason.UNVERIFIED_FACT,
+                    "A projected fact is not verified.",
                 )
             if stored.patient_id != evidence.patient_id:
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
-                        ToolErrorCode.SCOPE_VIOLATION,
-                        ToolErrorReason.PATIENT_SCOPE_MISMATCH,
-                        "A verified fact belongs to a different patient.",
-                    ),
+                raise _Drift(
+                    ToolErrorCode.SCOPE_VIOLATION,
+                    ToolErrorReason.PATIENT_SCOPE_MISMATCH,
+                    "A verified fact belongs to a different patient.",
                 )
             if stored.document_id != row.document_id:
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
-                        ToolErrorCode.VALIDATION,
-                        ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
-                        "The stored fact document differs from the F2 projection.",
-                    ),
+                raise _Drift(
+                    ToolErrorCode.VALIDATION,
+                    ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
+                    "The stored fact document differs from the F2 projection.",
                 )
             document = ctx.db.get(Document, stored.document_id)
             if document is None:
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
-                        ToolErrorCode.NOT_FOUND,
-                        ToolErrorReason.DOCUMENT_NOT_FOUND,
-                        "A verified fact document is not stored.",
-                    ),
+                raise _Drift(
+                    ToolErrorCode.NOT_FOUND,
+                    ToolErrorReason.DOCUMENT_NOT_FOUND,
+                    "A verified fact document is not stored.",
                 )
             if document.patient_id != evidence.patient_id:
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
-                        ToolErrorCode.SCOPE_VIOLATION,
-                        ToolErrorReason.DOCUMENT_SCOPE_MISMATCH,
-                        "A verified fact document belongs to a different patient.",
-                    ),
+                raise _Drift(
+                    ToolErrorCode.SCOPE_VIOLATION,
+                    ToolErrorReason.DOCUMENT_SCOPE_MISMATCH,
+                    "A verified fact document belongs to a different patient.",
                 )
             if stored.document_id not in evidence.selected_document_ids:
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
-                        ToolErrorCode.SCOPE_VIOLATION,
-                        ToolErrorReason.DOCUMENT_SCOPE_MISMATCH,
-                        "A verified fact document is outside the run selection.",
-                    ),
+                raise _Drift(
+                    ToolErrorCode.SCOPE_VIOLATION,
+                    ToolErrorReason.DOCUMENT_SCOPE_MISMATCH,
+                    "A verified fact document is outside the run selection.",
                 )
             if (
                 stored.field_name != row.field_name
@@ -477,15 +621,10 @@ def read_verified_facts(ctx: ToolContext) -> ToolResult[list[VerifiedFact]]:
                 or stored.unit != row.unit
                 or stored.corrected_from_fact_id != row.corrected_from_fact_id
             ):
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
-                        ToolErrorCode.VALIDATION,
-                        ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
-                        "The stored fact differs from the F2 projection.",
-                    ),
+                raise _Drift(
+                    ToolErrorCode.VALIDATION,
+                    ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
+                    "The stored fact differs from the F2 projection.",
                 )
             facts.append(
                 VerifiedFact(
@@ -501,6 +640,8 @@ def read_verified_facts(ctx: ToolContext) -> ToolResult[list[VerifiedFact]]:
                 )
             )
             evidence_ids.append(row.fact_id)
+    except _Drift as exc:
+        return _error_from(ctx, tool, start, _tool_error(exc.code, exc.reason, exc.message))
     except (ValidationError, ValueError):
         return _error_from(
             ctx,
@@ -513,6 +654,8 @@ def read_verified_facts(ctx: ToolContext) -> ToolResult[list[VerifiedFact]]:
             ),
             tuple(evidence_ids),
         )
+    finally:
+        _end_adapter_transaction(ctx, started_clean=started_clean)
     return _ok(ctx, tool, start, facts, tuple(evidence_ids))
 
 
@@ -528,112 +671,31 @@ def read_observations(ctx: ToolContext) -> ToolResult[ObservationEvidence]:
     denied = _denied(ctx, tool)
     if denied is not None:
         return _error_from(ctx, tool, start, denied)
-    evidence = _evidence(ctx, tool, start)
-    if isinstance(evidence, ToolResult):
-        return evidence
-
+    started_clean = _session_is_clean(ctx.db)
     observations: list[ObservationView] = []
     exclusions: list[EvidenceExclusion] = []
     evidence_ids: list[str] = []
     try:
+        evidence = _evidence(ctx, tool, start, started_clean=started_clean)
+        if isinstance(evidence, ToolResult):
+            return evidence
         for row in evidence.selected_observations:
-            stored = ctx.db.get(Observation, row.observation_id)
-            if stored is None:
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
-                        ToolErrorCode.NOT_FOUND,
-                        ToolErrorReason.OBSERVATION_NOT_FOUND,
-                        "A selected observation is not stored.",
-                    ),
-                )
-            if stored.patient_id != evidence.patient_id:
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
-                        ToolErrorCode.SCOPE_VIOLATION,
-                        ToolErrorReason.PATIENT_SCOPE_MISMATCH,
-                        "A selected observation belongs to a different patient.",
-                    ),
-                )
-            if row.source_document_id is not None and (
-                row.source_document_id not in evidence.selected_document_ids
-            ):
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
-                        ToolErrorCode.SCOPE_VIOLATION,
-                        ToolErrorReason.DOCUMENT_SCOPE_MISMATCH,
-                        "A selected observation lineage document is outside the run selection.",
-                    ),
-                )
-            if (
-                stored.measure_type != row.measure_type
-                or stored.unit != row.unit
-                or stored.source != row.source
-                or stored.trust_level != row.trust_level
-                or stored.source_fact_id != row.source_fact_id
-                or _decimal(stored.value) != row.value
-                or _instant(stored.measured_at) != row.measured_at
-            ):
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
-                        ToolErrorCode.VALIDATION,
-                        ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
-                        "A stored observation differs from the F2 projection.",
-                    ),
-                )
-            observations.append(
-                ObservationView(
-                    observation_id=stored.id,
-                    patient_id=stored.patient_id,
-                    role=ObservationRole.SELECTED_CURRENT,
-                    measure_type=MeasureType(stored.measure_type),
-                    value=_decimal(stored.value),
-                    unit=Unit(stored.unit),
-                    measured_at=row.measured_at,
-                    source=ObservationSource(stored.source),
-                    validation=ValidationState(stored.validation),
-                    trust_level=TrustLevel(stored.trust_level),
-                    verified_by=stored.verified_by_user_id,
-                    verified_at=stored.verified_at,
-                    source_fact_id=stored.source_fact_id,
-                    source_document_id=row.source_document_id,
-                )
-            )
-            evidence_ids.append(stored.id)
+            view = _reconcile_selected(ctx, evidence, row)
+            observations.append(view)
+            evidence_ids.append(view.observation_id)
         for item in evidence.history_exclusions:
             stored = ctx.db.get(Observation, item.observation_id)
             if stored is None:
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
-                        ToolErrorCode.NOT_FOUND,
-                        ToolErrorReason.OBSERVATION_NOT_FOUND,
-                        "An excluded observation is not stored.",
-                    ),
+                raise _Drift(
+                    ToolErrorCode.NOT_FOUND,
+                    ToolErrorReason.OBSERVATION_NOT_FOUND,
+                    "An excluded observation is not stored.",
                 )
             if stored.patient_id != evidence.patient_id:
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
-                        ToolErrorCode.SCOPE_VIOLATION,
-                        ToolErrorReason.PATIENT_SCOPE_MISMATCH,
-                        "An excluded observation belongs to a different patient.",
-                    ),
+                raise _Drift(
+                    ToolErrorCode.SCOPE_VIOLATION,
+                    ToolErrorReason.PATIENT_SCOPE_MISMATCH,
+                    "An excluded observation belongs to a different patient.",
                 )
             exclusions.append(
                 EvidenceExclusion(
@@ -642,6 +704,8 @@ def read_observations(ctx: ToolContext) -> ToolResult[ObservationEvidence]:
                 )
             )
             evidence_ids.append(item.observation_id)
+    except _Drift as exc:
+        return _error_from(ctx, tool, start, _tool_error(exc.code, exc.reason, exc.message))
     except (ValidationError, ValueError):
         return _error_from(
             ctx,
@@ -654,6 +718,8 @@ def read_observations(ctx: ToolContext) -> ToolResult[ObservationEvidence]:
             ),
             tuple(evidence_ids),
         )
+    finally:
+        _end_adapter_transaction(ctx, started_clean=started_clean)
     return _ok(
         ctx,
         tool,
@@ -673,103 +739,96 @@ def compare_observations(ctx: ToolContext) -> ToolResult[list[ComparisonResult]]
 
     There is no caller-supplied baseline or lookback: the F2 bridge selected the
     baseline under its pinned history policy and computed the delta. This
-    adapter never reselects, never recalculates and never converts units.
+    adapter never reselects, never recalculates and never converts units. The
+    F2 delta is the output; it is only cross-checked, never replaced.
+
+    The current row and the baseline row are reconciled against their stored
+    rows and against the accepted admissibility predicate before any value is
+    emitted, so a current value and a baseline value can never be combined from
+    rows that drifted after the bridge's snapshot.
     """
     start = _start()
     tool = ToolName.COMPARE_OBSERVATIONS
     denied = _denied(ctx, tool)
     if denied is not None:
         return _error_from(ctx, tool, start, denied)
-    evidence = _evidence(ctx, tool, start)
-    if isinstance(evidence, ToolResult):
-        return evidence
-
-    selected_values = {row.observation_id: row.value for row in evidence.selected_observations}
+    started_clean = _session_is_clean(ctx.db)
     comparisons: list[ComparisonResult] = []
     evidence_ids: list[str] = []
     try:
+        evidence = _evidence(ctx, tool, start, started_clean=started_clean)
+        if isinstance(evidence, ToolResult):
+            return evidence
+        selected_by_id = {row.observation_id: row for row in evidence.selected_observations}
         for item in evidence.comparisons:
-            if item.current_observation_id not in selected_values:
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
-                        ToolErrorCode.VALIDATION,
-                        ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
-                        "A comparison current is outside the F2 selection.",
-                    ),
+            selected = selected_by_id.get(item.current_observation_id)
+            if selected is None:
+                raise _Drift(
+                    ToolErrorCode.VALIDATION,
+                    ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
+                    "A comparison current is outside the F2 selection.",
                 )
-            current = ctx.db.get(Observation, item.current_observation_id)
-            if current is None:
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
-                        ToolErrorCode.NOT_FOUND,
-                        ToolErrorReason.OBSERVATION_NOT_FOUND,
-                        "A comparison current is not stored.",
-                    ),
+            current_view = _reconcile_selected(ctx, evidence, selected)
+            if (
+                current_view.measure_type.value != item.measure_type
+                or current_view.unit.value != item.unit
+            ):
+                raise _Drift(
+                    ToolErrorCode.VALIDATION,
+                    ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
+                    "A comparison measure or unit differs from the reconciled current row.",
                 )
-            if current.patient_id != evidence.patient_id:
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
-                        ToolErrorCode.SCOPE_VIOLATION,
-                        ToolErrorReason.PATIENT_SCOPE_MISMATCH,
-                        "A comparison current belongs to a different patient.",
-                    ),
-                )
-            baseline_value: Decimal | None = None
+            baseline_view: ObservationView | None = None
             if item.baseline_observation_id is not None:
                 baseline = ctx.db.get(Observation, item.baseline_observation_id)
                 if baseline is None:
-                    return _error_from(
-                        ctx,
-                        tool,
-                        start,
-                        _tool_error(
-                            ToolErrorCode.NOT_FOUND,
-                            ToolErrorReason.OBSERVATION_NOT_FOUND,
-                            "A comparison baseline is not stored.",
-                        ),
+                    raise _Drift(
+                        ToolErrorCode.NOT_FOUND,
+                        ToolErrorReason.OBSERVATION_NOT_FOUND,
+                        "A comparison baseline is not stored.",
                     )
                 if baseline.patient_id != evidence.patient_id:
-                    return _error_from(
-                        ctx,
-                        tool,
-                        start,
-                        _tool_error(
-                            ToolErrorCode.SCOPE_VIOLATION,
-                            ToolErrorReason.PATIENT_SCOPE_MISMATCH,
-                            "A comparison baseline belongs to a different patient.",
-                        ),
+                    raise _Drift(
+                        ToolErrorCode.SCOPE_VIOLATION,
+                        ToolErrorReason.PATIENT_SCOPE_MISMATCH,
+                        "A comparison baseline belongs to a different patient.",
                     )
-                baseline_value = _decimal(baseline.value)
-            if item.comparable and (item.baseline_observation_id is None or item.delta is None):
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
+                baseline_view = _history_view(ctx, baseline, patient_id=evidence.patient_id)
+                _require_admissible(
+                    baseline, patient_id=evidence.patient_id, as_of_utc=ctx.validation_clock
+                )
+                if (
+                    baseline_view.measure_type.value != item.measure_type
+                    or baseline_view.unit.value != item.unit
+                ):
+                    raise _Drift(
                         ToolErrorCode.VALIDATION,
                         ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
-                        "A comparable result lacks a baseline or a delta.",
-                    ),
+                        "A comparison baseline has a different measure or unit.",
+                    )
+                if parse_utc(baseline_view.measured_at) >= parse_utc(current_view.measured_at):
+                    raise _Drift(
+                        ToolErrorCode.VALIDATION,
+                        ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
+                        "A comparison baseline is not earlier than its current.",
+                    )
+            if item.trust_basis != _expected_trust_basis(current_view, baseline_view):
+                raise _Drift(
+                    ToolErrorCode.VALIDATION,
+                    ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
+                    "A comparison trust label disagrees with the reconciled rows.",
+                )
+            if item.comparable and (item.baseline_observation_id is None or item.delta is None):
+                raise _Drift(
+                    ToolErrorCode.VALIDATION,
+                    ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
+                    "A comparable result lacks a baseline or a delta.",
                 )
             if not item.comparable and (item.incomparable_reason is None or item.delta is not None):
-                return _error_from(
-                    ctx,
-                    tool,
-                    start,
-                    _tool_error(
-                        ToolErrorCode.VALIDATION,
-                        ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
-                        "An incomparable result lacks a reason or carries a delta.",
-                    ),
+                raise _Drift(
+                    ToolErrorCode.VALIDATION,
+                    ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT,
+                    "An incomparable result lacks a reason or carries a delta.",
                 )
             comparisons.append(
                 ComparisonResult(
@@ -786,13 +845,15 @@ def compare_observations(ctx: ToolContext) -> ToolResult[list[ComparisonResult]]
                     ),
                     trust_basis=TrustBasis(item.trust_basis),
                     history_policy=ComparisonWindow(COMPARISON_HISTORY_VERSION),
-                    current_value=selected_values[item.current_observation_id],
-                    baseline_value=baseline_value,
+                    current_value=current_view.value,
+                    baseline_value=(baseline_view.value if baseline_view is not None else None),
                 )
             )
             evidence_ids.append(item.current_observation_id)
             if item.baseline_observation_id:
                 evidence_ids.append(item.baseline_observation_id)
+    except _Drift as exc:
+        return _error_from(ctx, tool, start, _tool_error(exc.code, exc.reason, exc.message))
     except (ValidationError, ValueError):
         return _error_from(
             ctx,
@@ -805,6 +866,8 @@ def compare_observations(ctx: ToolContext) -> ToolResult[list[ComparisonResult]]
             ),
             tuple(evidence_ids),
         )
+    finally:
+        _end_adapter_transaction(ctx, started_clean=started_clean)
     return _ok(ctx, tool, start, comparisons, tuple(evidence_ids))
 
 

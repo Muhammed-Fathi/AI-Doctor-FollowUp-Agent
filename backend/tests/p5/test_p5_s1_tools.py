@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.agents import state as S
@@ -958,6 +958,10 @@ def test_s1_dirty_session_is_refused_before_the_bridge(engine, tmp_path) -> None
         assert result.error is not None
         assert result.error.code is T.ToolErrorCode.VALIDATION
         assert result.error.reason is T.ToolErrorReason.SESSION_NOT_CLEAN
+        # S1-R1: a caller-owned pending write is neither rolled back nor closed.
+        assert ctx.db.in_transaction() is True
+        assert len(ctx.db.new) == 1
+        assert ctx.db.is_active
         ctx.db.rollback()
     finally:
         ctx.db.close()
@@ -1043,11 +1047,12 @@ def test_s1_adapters_never_write_to_the_database(engine, tmp_path) -> None:
         try:
             result = adapter(ctx)
             assert result.ok is True, result.error
+            # S1-R1: the adapter ends the read transaction it opened itself.
+            assert ctx.db.in_transaction() is False
             assert len(ctx.db.new) == 0
             assert len(ctx.db.dirty) == 0
             assert len(ctx.db.deleted) == 0
         finally:
-            ctx.db.rollback()
             ctx.db.close()
     with Session(engine) as db:
         assert _row_counts(db) == before
@@ -1150,3 +1155,291 @@ def test_s1_payloads_carry_no_runtime_or_clinical_authority(engine, tmp_path) ->
         dumped = row.model_dump()
         assert dumped["history_policy"] == S.ComparisonWindow.F2_365D.value
         assert "decision" not in dumped
+
+
+# --------------------------------------------------------------------------- #
+# S1-R1: post-bridge transaction lifecycle
+# --------------------------------------------------------------------------- #
+
+
+def test_s1_sequential_same_context_calls_end_their_transactions(engine, tmp_path) -> None:
+    """Both permitted monitor_compare adapters reuse one context and leave it clean."""
+    run = _make_run(engine, tmp_path, documents=1, observations=1, history=True)
+    ctx = _context(engine, run, tmp_path, S.NodeName.MONITOR_COMPARE)
+    try:
+        first = T.read_observations(ctx)
+        assert first.ok is True, first.error
+        assert isinstance(first.data, T.ObservationEvidence)
+        assert len(first.data.observations) == 1
+        assert ctx.db.in_transaction() is False
+        assert len(ctx.db.new) == len(ctx.db.dirty) == len(ctx.db.deleted) == 0
+
+        second = T.compare_observations(ctx)
+        assert second.ok is True, second.error
+        assert isinstance(second.data, list)
+        assert len(second.data) == 1
+        assert ctx.db.in_transaction() is False
+        assert len(ctx.db.new) == len(ctx.db.dirty) == len(ctx.db.deleted) == 0
+    finally:
+        ctx.db.close()
+
+
+def test_s1_early_error_return_leaves_no_open_transaction(engine, tmp_path) -> None:
+    run = _make_run(engine, tmp_path, documents=1, observations=1, history=True)
+    forged = dataclasses.replace(run, run_id="6f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5")
+    ctx = _context(engine, forged, tmp_path, S.NodeName.MONITOR_COMPARE)
+    try:
+        result = T.compare_observations(ctx)
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.reason is T.ToolErrorReason.RUN_NOT_FOUND
+        assert ctx.db.in_transaction() is False
+    finally:
+        ctx.db.close()
+
+
+def test_s1_denied_call_never_touches_the_session(engine, tmp_path) -> None:
+    run = _make_run(engine, tmp_path, documents=1, observations=1, history=True)
+    ctx = _context(engine, run, tmp_path, S.NodeName.MONITOR_COMPARE)
+    try:
+        result = T.read_verified_facts(ctx)
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code is T.ToolErrorCode.TOOL_NOT_ALLOWED
+        assert ctx.db.in_transaction() is False
+    finally:
+        ctx.db.close()
+
+
+def test_s1_no_adapter_ever_commits(engine, tmp_path, monkeypatch) -> None:
+    """ROLLBACK only: an adapter may never turn its read into a durable write."""
+    run = _make_run(engine, tmp_path, documents=1, observations=1, history=True)
+    ctx = _context(engine, run, tmp_path, S.NodeName.MONITOR_COMPARE)
+    commits: list[str] = []
+    monkeypatch.setattr(ctx.db, "commit", lambda: commits.append("commit"))
+    try:
+        assert T.read_observations(ctx).ok is True
+        assert T.compare_observations(ctx).ok is True
+        assert commits == []
+    finally:
+        ctx.db.close()
+
+
+# --------------------------------------------------------------------------- #
+# S1-R2: complete stored-row reconciliation
+# --------------------------------------------------------------------------- #
+
+
+def _write_after_bridge(monkeypatch: pytest.MonkeyPatch, engine, mutation) -> None:
+    """Simulate a concurrent writer committing between the bridge and the read.
+
+    The real bridge still runs and still rolls back its own snapshot; the
+    mutation is committed by a second session afterwards, so the adapter's
+    stored-row reads see the drifted row while the F2 envelope does not.
+    """
+
+    real = T.build_run_evaluable_review_evidence
+
+    def fake(db, *, principal, run_id, validation_clock, upload_root):
+        evidence = real(
+            db,
+            principal=principal,
+            run_id=run_id,
+            validation_clock=validation_clock,
+            upload_root=upload_root,
+        )
+        with Session(engine) as writer:
+            mutation(writer)
+            writer.commit()
+        return evidence
+
+    monkeypatch.setattr(T, "build_run_evaluable_review_evidence", fake)
+
+
+def _mutate_current(**values):
+    return lambda writer: writer.execute(
+        update(Observation).where(Observation.id == OBS_CURRENT).values(**values)
+    )
+
+
+@pytest.mark.parametrize(
+    ("values", "label"),
+    [
+        ({"value": 999}, "value"),
+        ({"unit": "bpm"}, "unit"),
+        ({"measure_type": "heart_rate"}, "measure_type"),
+        ({"measured_at": "2026-11-14T12:30:00Z"}, "measured_at"),
+        ({"source": "seed_fixture"}, "source"),
+    ],
+)
+def test_s1_compare_rejects_a_drifted_stored_current_row(
+    engine, tmp_path, monkeypatch, values, label
+) -> None:
+    """S1-R2: the current value/unit/measure/timestamp/source must match F2."""
+    run = _make_run(engine, tmp_path, documents=1, observations=1, history=True)
+    _write_after_bridge(monkeypatch, engine, _mutate_current(**values))
+    result = _call(engine, run, tmp_path, S.NodeName.MONITOR_COMPARE, T.compare_observations)
+    assert result.ok is False, label
+    assert result.error is not None
+    assert result.error.code is T.ToolErrorCode.VALIDATION
+    assert result.error.reason is T.ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT
+    assert result.data is None
+
+
+def test_s1_compare_rejects_a_drifted_stored_trust_label(engine, tmp_path, monkeypatch) -> None:
+    """S1-R2: a stored trust label that moved after the bridge fails closed."""
+    run = _make_run(engine, tmp_path, documents=1, observations=1, history=True)
+    with Session(engine) as db:
+        verifier = _doctor(db).user_id
+    _write_after_bridge(
+        monkeypatch,
+        engine,
+        _mutate_current(
+            trust_level="doctor_verified",
+            verified_by_user_id=verifier,
+            verified_at="2026-11-01T09:00:00Z",
+        ),
+    )
+    result = _call(engine, run, tmp_path, S.NodeName.MONITOR_COMPARE, T.compare_observations)
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.reason is T.ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT
+
+
+def test_s1_compare_rejects_a_baseline_that_became_rejected(engine, tmp_path, monkeypatch) -> None:
+    """S1-R2: the baseline is re-checked with the accepted admissibility predicate."""
+    run = _make_run(engine, tmp_path, documents=1, observations=1, history=True)
+    _write_after_bridge(
+        monkeypatch,
+        engine,
+        lambda writer: writer.execute(
+            update(Observation).where(Observation.id == WARN_OBS).values(validation="rejected")
+        ),
+    )
+    result = _call(engine, run, tmp_path, S.NodeName.MONITOR_COMPARE, T.compare_observations)
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.reason is T.ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT
+
+
+def test_s1_compare_rejects_a_baseline_measured_after_its_current(
+    engine, tmp_path, monkeypatch
+) -> None:
+    """S1-R2: a baseline must be strictly earlier than its current row."""
+    run = _make_run(engine, tmp_path, documents=1, observations=1, history=True)
+    _write_after_bridge(
+        monkeypatch,
+        engine,
+        lambda writer: writer.execute(
+            update(Observation)
+            .where(Observation.id == WARN_OBS)
+            .values(measured_at="2026-11-10T09:00:00Z")
+        ),
+    )
+    result = _call(engine, run, tmp_path, S.NodeName.MONITOR_COMPARE, T.compare_observations)
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.reason is T.ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT
+
+
+def test_s1_compare_rejects_a_cross_patient_baseline(engine, tmp_path, monkeypatch) -> None:
+    """S1-R2: a forged baseline identity from another patient is refused."""
+    run = _make_run(engine, tmp_path, documents=1, observations=1, history=True)
+    with Session(engine) as db:
+        other_observation = (
+            db.execute(select(Observation).where(Observation.patient_id != run.patient_id))
+            .scalars()
+            .first()
+        )
+        assert other_observation is not None
+        other_id = other_observation.id
+
+    def mutate(evidence):
+        return dataclasses.replace(
+            evidence,
+            comparisons=(
+                dataclasses.replace(evidence.comparisons[0], baseline_observation_id=other_id),
+            ),
+        )
+
+    _patch_bridge(monkeypatch, mutate)
+    result = _call(engine, run, tmp_path, S.NodeName.MONITOR_COMPARE, T.compare_observations)
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code is T.ToolErrorCode.SCOPE_VIOLATION
+    assert result.error.reason is T.ToolErrorReason.PATIENT_SCOPE_MISMATCH
+
+
+def test_s1_compare_rejects_a_baseline_with_a_different_measure(
+    engine, tmp_path, monkeypatch
+) -> None:
+    """S1-R2: a baseline must carry the comparison's own measure type and unit."""
+    run = _make_run(engine, tmp_path, documents=1, observations=1, history=True)
+    with Session(engine) as db:
+        heart_rate = (
+            db.execute(
+                select(Observation).where(
+                    Observation.patient_id == run.patient_id,
+                    Observation.measure_type == "heart_rate",
+                )
+            )
+            .scalars()
+            .first()
+        )
+        assert heart_rate is not None
+        heart_rate_id = heart_rate.id
+
+    def mutate(evidence):
+        return dataclasses.replace(
+            evidence,
+            comparisons=(
+                dataclasses.replace(evidence.comparisons[0], baseline_observation_id=heart_rate_id),
+            ),
+        )
+
+    _patch_bridge(monkeypatch, mutate)
+    result = _call(engine, run, tmp_path, S.NodeName.MONITOR_COMPARE, T.compare_observations)
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.reason is T.ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT
+
+
+def test_s1_compare_rejects_a_drifted_trust_basis_label(engine, tmp_path, monkeypatch) -> None:
+    """S1-R2: the F2 trust label must follow from the reconciled rows."""
+    run = _make_run(engine, tmp_path, documents=1, observations=1, history=True)
+
+    def mutate(evidence):
+        return dataclasses.replace(
+            evidence,
+            comparisons=(dataclasses.replace(evidence.comparisons[0], trust_basis="mixed"),),
+        )
+
+    _patch_bridge(monkeypatch, mutate)
+    result = _call(engine, run, tmp_path, S.NodeName.MONITOR_COMPARE, T.compare_observations)
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.reason is T.ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT
+
+
+def test_s1_read_observations_rejects_a_selected_row_that_became_rejected(
+    engine, tmp_path, monkeypatch
+) -> None:
+    """S1-R2: a selected row that turned rejected is no longer an eligible current."""
+    run = _make_run(engine, tmp_path, documents=1, observations=1)
+    _write_after_bridge(monkeypatch, engine, _mutate_current(validation="rejected"))
+    result = _call(engine, run, tmp_path, S.NodeName.MONITOR_COMPARE, T.read_observations)
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.reason is T.ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT
+
+
+def test_s1_read_observations_rejects_a_selected_row_beyond_the_future_skew(
+    engine, tmp_path, monkeypatch
+) -> None:
+    """S1-R2: the accepted future-skew boundary is re-checked after the bridge."""
+    run = _make_run(engine, tmp_path, documents=1, observations=1)
+    _write_after_bridge(monkeypatch, engine, _mutate_current(measured_at="2026-11-14T12:30:00Z"))
+    result = _call(engine, run, tmp_path, S.NodeName.MONITOR_COMPARE, T.read_observations)
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.reason is T.ToolErrorReason.PRODUCER_EVIDENCE_INCONSISTENT

@@ -251,3 +251,86 @@ This is the first green exact-head run for the slice. It was read from the Actio
 After the documentation-only commits, the branch head is `85b8f47cfc67a9ee0cc8c3c181842b86b618d62f`. Both exact-head runs at that SHA — push [#45481000638](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45481000638) and pull_request [#45480990524](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45480990524) — are **COMPLETED / SUCCESS** (Frontend Node 22 and Backend Python 3.12, including Ruff lint/format, backend tests, Alembic smoke, OpenAPI and repository scan). This section is a documentation-only append: no application or test blob changes after `08b457f`, so the CI evidence above covers the reviewed code exactly. Windows `test_all.ps1` remains **not run** by the agent.
 
 **Status:** PR #48 **OPEN / DRAFT / NOT MERGED**; P5 **IN_REVIEW / NOT ACCEPTED**; issue #14 **OPEN**; no merge, auto-merge, self-approval, main change or P5-S2 work. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
+
+---
+
+## 12. S1-R1 — post-bridge transaction lifecycle closed (2026-11-24)
+
+**Finding (independent review).** The accepted F2 bridge rolls back its own `BEGIN IMMEDIATE` snapshot before returning, but the adapters then reconcile stored rows with `ctx.db.get(...)`, which autobegins a fresh read transaction under SQLAlchemy. The adapters returned without ending it, and the tests opened a new session per call, so neither safe sequential reuse nor a clean post-return state was proven.
+
+**Correction (in `backend/app/agents/tools.py` only).**
+
+- `_session_is_clean(db)` captures the bridge's own precondition once per call, after the allowlist check and before the bridge is called.
+- `_end_adapter_transaction(ctx, started_clean=...)` ends the transaction **with `ROLLBACK`**, and only when the session was already clean on entry. `COMMIT` is never used as a cleanup mechanism, the session is never closed, and a caller-owned dirty session is left untouched.
+- Every adapter now wraps its reconciliation in `try / except _Drift / except (ValidationError, ValueError) / finally`, so the rollback runs on success, on a typed error, on a validation failure and on an unexpected exception.
+- `_evidence(...)` takes the pre-computed `started_clean` instead of re-reading session state, so there is exactly one definition of the precondition per call.
+
+**Proof (new tests).**
+
+| Test | Proves |
+|---|---|
+| `test_s1_sequential_same_context_calls_end_their_transactions` | the two permitted `monitor_compare` adapters run on **one** context, both succeed, and `in_transaction()` is `False` with empty `new`/`dirty`/`deleted` after each return |
+| `test_s1_early_error_return_leaves_no_open_transaction` | a `run_not_found` early return still ends the transaction |
+| `test_s1_denied_call_never_touches_the_session` | an unauthorized pair never opens a transaction |
+| `test_s1_no_adapter_ever_commits` | `Session.commit` is patched to record calls; both adapters run and **zero** commits happen |
+| strengthened `test_s1_dirty_session_is_refused_before_the_bridge` | the caller's pending row is still pending (`len(new) == 1`), the session is still in its own transaction and still active — nothing was rolled back or closed for it |
+| strengthened `test_s1_adapters_never_write_to_the_database` | no open transaction after the call, in addition to unchanged row counts |
+
+**Explicit non-claims.** Ending the read transaction does **not** make the bridge's snapshot and the adapter's stored-row reads one atomic snapshot, and no such claim is made. The F2 bridge's accepted `BEGIN IMMEDIATE` / rollback semantics are untouched. No caller-owned session is closed.
+
+---
+
+## 13. S1-R2 — complete stored-row reconciliation (2026-11-24)
+
+**Finding (independent review).** `compare_observations` checked only the current row's patient scope, and took `current_value` from the F2 envelope while `baseline_value` came from a stored row. A drifted current row could therefore be combined with a baseline from a different read. `read_observations` also did not re-check whether a selected row was still eligible after the bridge's snapshot.
+
+**Correction (in `backend/app/agents/tools.py` only).**
+
+- `_reconcile_selected(ctx, evidence, row)` now reads the selected row and compares **value, measure type, unit, timestamp, source, trust label and fact lineage** against the F2 `ObservationV2`. Any drift raises a typed `producer_evidence_inconsistent`; the returned `ObservationView` is built from the **stored** row, so `current_value` and `baseline_value` always come from the same read.
+- `_require_admissible(...)` re-applies the **accepted** `monitoring.admissibility_reason` predicate to the stored row with the run clock. A row that became `validation=rejected`, or that now exceeds the accepted future-skew boundary, fails closed. No new boundary or policy parameter is introduced.
+- `_history_view(...)` builds the baseline's `HISTORY` view, resolving `source_document_id` only through the stored `ExtractedFact`, and the S0 `ObservationView` validators enforce trust/provenance consistency (a `doctor_verified` row requires a verifier; a document row requires its fact lineage).
+- The baseline is additionally checked for patient scope, identical measure type and unit, strict temporal precedence (`baseline.measured_at < current.measured_at`) and admissibility.
+- `_expected_trust_basis(...)` mirrors the accepted producer's derivation exactly (`mixed` when the two labels differ, else `doctor_verified` or `self_reported`) and the F2 label is cross-checked against it.
+- The F2 `delta` remains the **output**: it is never recalculated or replaced. When both values are present the S0 `ComparisonResult` validator re-checks `delta == current_value - baseline_value` exactly, and the `f2-history-365d-v1` label and `no_baseline` semantics are preserved unchanged.
+
+**Proof (new tests).**
+
+| Test | Proves |
+|---|---|
+| `test_s1_compare_rejects_a_drifted_stored_current_row` (5 cases) | a stored current **value, unit, measure type, timestamp or source** that drifted after the bridge fails closed |
+| `test_s1_compare_rejects_a_drifted_stored_trust_label` | a stored **trust label** that drifted fails closed |
+| `test_s1_compare_rejects_a_baseline_that_became_rejected` | the baseline is re-checked with the accepted predicate |
+| `test_s1_compare_rejects_a_baseline_measured_after_its_current` | strict temporal precedence is enforced |
+| `test_s1_compare_rejects_a_cross_patient_baseline` | a forged baseline identity from another patient is refused with `patient_scope_mismatch` |
+| `test_s1_compare_rejects_a_baseline_with_a_different_measure` | measure/unit comparability is enforced |
+| `test_s1_compare_rejects_a_drifted_trust_basis_label` | the F2 trust label must follow from the reconciled rows |
+| `test_s1_read_observations_rejects_a_selected_row_that_became_rejected` | a selected row that turned `rejected` is not returned as eligible |
+| `test_s1_read_observations_rejects_a_selected_row_beyond_the_future_skew` | the accepted 5-minute future-skew boundary is re-checked |
+
+Drift is produced by a **real** second session committing after the genuine bridge returns and rolls back, so the F2 envelope and the adapter's read genuinely disagree — the tests do not fabricate an envelope for these cases. `ok_with_warning` admissibility and self-reported trust labels are preserved: the warning baseline is still used as a baseline in the exact-delta test.
+
+**Residual authority limit (documented, not fixed).** The bridge's snapshot and the adapter's stored-row reads are two independent reads. Detectable drift fails closed; an undetectable change that leaves every compared field identical would not be caught, and nothing here claims the two reads are one atomic snapshot.
+
+---
+
+## 14. Collection re-measurement after the corrections (2026-11-24)
+
+| Suite | Before corrections | After corrections |
+|---|---|---|
+| Focused S1 | 35 | **52** (+17) |
+| P5 | 267 | **284** |
+| P2 | 284 | **284** (unchanged) |
+| P3 | 443 | **443** (unchanged) |
+| Whole backend | 1507 | **1524** |
+
+`docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md` was **not** edited at this point: the pairing moved, so a fresh D-09 authorization is required before the append-only note. The guard was not weakened.
+
+---
+
+## 15. D-09 fresh authorization obtained — collection note appended (2026-11-24)
+
+- **Authorization (disclosed channel):** the repository owner selected the explicit option *Authorize the append-only edit* in this Arena working session on 2026-11-24, for exactly `**1524 collected**, of which **443** are the P3 suite`. Given in reply to a direct question in the session; **no** new signed GitHub comment exists for it. Recorded in `docs/roadmap/PHASE_PROGRESS.md` before the handoff was edited.
+- **Edit executed:** one append-only section at the end of `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md`. No other line of that file changed; every historical P3 result, every earlier collection checkpoint and the real `GOLD-EX-11 FAIL / NOT PROVEN` outcome remain verbatim.
+- **Guard re-run after the edit:** `test_handoff_test_count_matches_the_suite_it_describes` → **passed**. The guard itself was not modified.
+- **Whole backend after the edit:** **1524 passed / 0 failed**.
+- **Status unchanged:** P5 **IN_REVIEW / NOT ACCEPTED**; PR #48 **OPEN / DRAFT / NOT MERGED**; issue #14 **OPEN**; no merge, auto-merge, self-approval, main change, S2 work or Windows acceptance claim.
