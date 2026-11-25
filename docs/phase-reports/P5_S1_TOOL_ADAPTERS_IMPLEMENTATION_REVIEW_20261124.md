@@ -334,3 +334,11 @@ Drift is produced by a **real** second session committing after the genuine brid
 - **Guard re-run after the edit:** `test_handoff_test_count_matches_the_suite_it_describes` → **passed**. The guard itself was not modified.
 - **Whole backend after the edit:** **1524 passed / 0 failed**.
 - **Status unchanged:** P5 **IN_REVIEW / NOT ACCEPTED**; PR #48 **OPEN / DRAFT / NOT MERGED**; issue #14 **OPEN**; no merge, auto-merge, self-approval, main change, S2 work or Windows acceptance claim.
+
+---
+
+## 16. Exact-head CI for the corrections (2026-11-24)
+
+Correction head `8cb05d08788c6510211d11156584464c59f67a9a` — push [#45649051373](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45649051373) and pull_request [#45649044112](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45649044112): both **COMPLETED / SUCCESS** (Frontend Node 22; Backend Python 3.12 with Ruff lint, Ruff format, backend tests, Alembic smoke, OpenAPI and repository scan). Read from the Actions API. This section is a documentation-only append; no application or test blob changes after `8cb05d0`.
+
+Windows `test_all.ps1` remains **not run** by the agent; no Windows acceptance is claimed. PR #48 **OPEN / DRAFT / NOT MERGED**; P5 **IN_REVIEW / NOT ACCEPTED**; issue #14 **OPEN**; no merge, auto-merge, self-approval, main change or P5-S2 work. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
