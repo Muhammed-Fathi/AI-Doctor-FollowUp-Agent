@@ -378,3 +378,11 @@ Both new tests use `_write_after_bridge`, i.e. the genuine bridge plus a real se
 - **Edit executed:** one append-only section at the end of `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md`. No other line of that file changed; every historical P3 result, every earlier collection checkpoint and the real `GOLD-EX-11 FAIL / NOT PROVEN` outcome remain verbatim.
 - **Guard re-run after the edit:** `test_handoff_test_count_matches_the_suite_it_describes` → **passed**. The guard itself was not modified.
 - **Status unchanged:** P5 **IN_REVIEW / NOT ACCEPTED**; PR #48 **OPEN / DRAFT / NOT MERGED**; issue #14 **OPEN**; no merge, auto-merge, self-approval, main change, S2 work or Windows acceptance claim.
+
+---
+
+## 19. Exact-head CI for S1-R3 (2026-11-24)
+
+Correction head `c2e5949148700c23cd3b9980f886532e231db264` — push [#45663656115](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45663656115) and pull_request [#45663636268](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45663636268): both **COMPLETED / SUCCESS** (Frontend Node 22; Backend Python 3.12 with Ruff lint, Ruff format, backend tests, Alembic smoke, OpenAPI and repository scan). Read from the Actions API. This section is a documentation-only append; no application or test blob changes after `c2e5949`.
+
+Windows `test_all.ps1` remains **not run** by the agent; no Windows acceptance is claimed. PR #48 **OPEN / DRAFT / NOT MERGED**; P5 **IN_REVIEW / NOT ACCEPTED**; issue #14 **OPEN**; no merge, auto-merge, self-approval, main change or P5-S2 work. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
