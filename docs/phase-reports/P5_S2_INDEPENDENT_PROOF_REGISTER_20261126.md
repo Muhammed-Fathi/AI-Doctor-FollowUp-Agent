@@ -672,3 +672,125 @@ Linux feasibility. No full new design rewrite; no implementation,
 migration, dependency adoption or merge authorized. Reviewer read exact
 base source and executed the small SQLite locking probe, not app tests.
 Main remains unchanged. All earlier register content retained.
+
+
+## 13. Independent review of R4 focused closure addendum — 2026-11-27
+
+Disposition: NOT RATIFIED. Accept the correction of the impossible nested
+F2 barrier invocation and the distinction between HALT and quiescent END
+as design progress, not completed implementation. The owner has a WSL2
+Ubuntu 26.04.1 x86_64 environment, independently installed CPython 3.12.16
+via uv 0.13.10, reported SQLite 3.54.1, and the accepted baseline identity.
+Linux full execution results are not yet received. Windows section 11
+stands. No substitution or additional adoption authority.
+
+R4C-01: c1-prime does not establish historical replay equality. A run
+whose first pass processed 36 blocker facts, then tripped the cumulative
+cap in a later document, could formerly record one additional VI-006
+from the skipped document and persist union 37. The new rule would remove
+that blocker (union 36), despite both being below 40. Reviewer executed
+only the abstract set example (37 vs 36, not equal), NOT the real app
+fixture. Arena must construct a reachable synthetic old-persist/new-replay
+case and compare actual semantic tuples and fingerprints; cover skipped
+docs due to missing bytes as well as cap, and late unavailable reason
+overwrites (observations 540–606, omissions 669–681, recovery 727–728,
+file recheck 730–734). Do not assert the cap reason is always final.
+Do not assert issue-count <=40 from fact-union <=40; multiple issues
+can share a fact or be document-only. Test the S0 representability
+boundary separately. Decide gate-version/replay strategy after proof;
+F2 imports GATE_VERSION (bridge:44,99). No silent replay relaxation,
+history rewrite, clamp, or source edit authorized.
+
+R4C-02: observer after N2 leaves an unobserved gap. If another writer
+commits between F1 receipt and v0, including a different valid persisted
+F1 proceed evaluation, N3 may read a different gate through F2. Selecting
+the old receipt's immutable row and comparing manifest IDs does not bind
+the actual N3 DTOs to that gate. F2 emits gate_evaluation_id, gate_version,
+gate_input_fingerprint_sha256 (bridge:415–417); S1 results do not expose
+this complete binding. Prove a shared authority window covering N2 and
+N3 without mistaking intentional own writes for foreign ones, or propose
+a narrow, independently authorized producer amendment carrying actual
+producer identity and digest. Hashes of DB projections alone do not
+prevent filesystem swap/restore. HALT, abort and successful paths all
+need fencing/quiescence before advancing durable slice disposition;
+no fabricated NodeEvent for HALTED with GateDetail (state:1358–1372).
+A full successful N2 trace must not be omitted merely because N3 succeeds.
+
+R4C-03: reset design still impossible as written. The request auth path
+has already flushed DML into the same session (accounts:257–258).
+Reviewer executed disposable stdlib SQLite 3.46.1 / CPython 3.13.5
+probe: create table user_session, insert/commit, UPDATE last_used_at,
+observe in_transaction=True, execute BEGIN IMMEDIATE => OperationalError
+"cannot start a transaction within a transaction"; rollback restores
+old value. This proves transaction mechanism, not whole endpoint.
+After flush, db.dirty is not proof that no other writes happened.
+Choose transaction ownership BEFORE auth DML, or leverage a demonstrably
+already-held SQLite writer lock under the request transaction with actual
+provenance/authority and integration tests. No nested BEGIN, no commit
+or rollback of arbitrary caller state. Live auth re-read must bypass
+stale identity-map state and respect uniform existing error semantics.
+Reset-first must allow fresh valid F0 creation, not require no history
+for all normal subsequent F0 runs. F0 must revalidate live scope and
+selection after serialization, not trust pre-reset identities. Explicit
+contract reconciliation remains required.
+
+R4C-04: checkpoint storage and anchor proposals improve specificity but
+are not complete. Same call stack != same transaction. Specify actual
+carrier type/channel/metadata/pending-write identity and HMAC coverage
+including lease and slice provenance. Confirm pinned PK and replacement
+semantics, no invented genesis id 0, verify complete set and authenticated
+head at exact read/commit boundary; old anchor denotes previous head
+rather than requiring new head equal old head. Address deletion of sealed
+rows and seal-without-carrier, replay of valid branches, rollback of
+pending-write set, bounded safe raw reads. Clarify app-DB trust assumption.
+Audit identity must include complete semantic error fields, not merely
+error_code; duration excluded. A pre-invocation durable slot reservation
+is not present in the buffered-only transaction proposal, so crash
+cannot prove invoked_no_return without durable intent and even then
+invocation itself may be unknown. Separate unknown/invoked/returned
+evidence, never invent a persisted slot or post-crash event. No implicit
+retry or takeover. Later C/B-specific proofs, not full rewrite now.
+
+R4C-05: existing guards scan all backend/app Python sources
+(test_safety_guards.py:53–70, test_p2_scope_guards.py:269–281). Adding a
+new exact-path guard cannot make unchanged global bans permit LangGraph.
+Authorize exact-path amendments to BOTH existing bans at runtime stage
+only; preserve remaining bans and D-15, add negative fixtures. No dynamic
+import bypass. Migration smoke changes explicitly scoped to B, preserve
+0008 historical assertions. D-09 handoff file must be included and
+fresh measured pairing authorized. Packaging is a separate A1 item.
+
+Historical proposal crosswalk recovered by reviewer from prior owner
+chat attachments, not the accepted tree. Revision 2 attachment
+Pasted text(20261126-095417).txt section 14 (all unratified):
+- R2:OD-01 graph scope/bootstrap -> D-18, D-26.
+- R2:OD-02 workflow lifecycle -> D-19, D-26.
+- R2:OD-03 ownership -> D-19.
+- R2:OD-04 checkpoint/serializer/crash window -> D-20.
+- R2:OD-05 dependency/import guard -> D-24, D-23 (split).
+- R2:OD-06 migration -> D-21.
+- R2:OD-07 module placement/D-15 -> D-23.
+- R2:OD-08 audit error and deferred slots -> D-21.
+- R2:OD-09 transitive pins -> D-24.
+- R2:OD-10 failure halt mapping -> D-18.
+- R2:OD-11 cross-call snapshot -> D-17, D-27.
+Revision 3 attachment Pasted text(20261126-104817).txt section 11
+reused OD-01 for pin selection (D-24), OD-02 for wheel discovery
+(separate A1 packaging decision), OD-11 for snapshot (D-17/D-27),
+and added OD-12 failure boundary (D-18), OD-13 takeover (D-19),
+OD-14 reset (D-22). Qualify references by revision; do not confuse these
+with accepted S0 D-01..D-15. This is a topic crosswalk, not equivalence
+or ratification. Arena's inability to find external history in main is
+explained. Preserve original proposal text in owner attachments.
+
+R4C-06: reported untracked P5_S2_R4_SYNTHETIC_EVIDENCE_20261126.md
+not yet delivered to reviewer. Request actual downloadable evidence
+first; preserve old scripts/output and checksum. Next narrow experiment
+only: prove or refute old persisted <=40 overflow receipt replay under
+proposed c1-prime, and demonstrate actual endpoint transaction ordering
+on isolated synthetic fixture if feasible. No tracked edits, commits,
+pushes, migration or dependency adoption. Park later B/C/D design
+obligations until their implementation planning, not another complete
+revision cycle. No final design ratification or merge. S2-A1 may be
+considered separately after Linux evidence, exact pin/supply-chain review,
+explicit packaging decision and owner authorization.
