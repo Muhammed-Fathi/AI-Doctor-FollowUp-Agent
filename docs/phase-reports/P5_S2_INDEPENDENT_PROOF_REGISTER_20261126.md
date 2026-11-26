@@ -414,3 +414,96 @@ Main unchanged; PR #49 remains draft. Original docs-only report preserved
 byte-for-byte as prefix. No change to application source, dependency
 manifests, locks, tests, guards, migrations or runtime. P5 remains
 IN_REVIEW; no owner decision or merge authorized.
+
+
+## 10. A0 original artifact reconciliation — independent review, 2026-11-26
+
+The owner transferred Arena's original artifacts via an ASCII Git binary
+patch embedded in an exported workspace patch. The reviewer extracted only
+the transfer text and executed git apply --check and git apply in a fresh
+isolated directory (not a repository checkout).
+
+Verified transfer: 1,791,791 bytes, SHA-256
+4d4d4465de03e1e2e640cc91309d83b843c4b5047e87dc4f67c1ae864cba20f4.
+
+- Evidence ZIP: 1,233,238 bytes, 70 entries, SHA-256
+  b9fd006f8fad2507f4beec4e13738b940f73fc02c498b1b1da793221d46e50bb.
+  CRC clean; all 69 listed internal SHA-256 checks matched.
+- Baseline supplemental ZIP: 172,759 bytes, 11 entries, SHA-256
+  11e4b5372cd8c57ec1e5dbf69f1c2ab15504b51246fac931408637c3a06064ed.
+  CRC clean; all 10 listed internal SHA-256 checks matched.
+
+No binary artifacts added to this PR. Original experiment inputs and fresh
+baseline copies match byte-for-byte for all three files. Git blob SHA-1
+computed directly over each original file (git blob header plus bytes)
+matches previously retrieved exact-base GitHub identities:
+
+- pyproject.toml: a9c3f0de97d925394558e6908b70999a957bdb23
+- requirements/requirements.lock: 934b2522bc43426714598349ad3e6c0d703c6bc6
+- requirements/requirements-dev.lock: 4684a8650d681b5d37c4b25cb724fd32c45dfa60
+
+Machine-parsed constraints match all 39 accepted dev name/version/marker
+entries. Both original generated candidate locks preserve every existing
+name/version/marker entry in their respective baseline lock. No removals
+or changes. All four original lockfiles are byte-identical to their
+corresponding saved resolver stdout. Counts independently parsed:
+
+| Candidate | Runtime pins | Dev pins | Net-new distributions | Promoted dev to runtime |
+|---|---:|---:|---:|---:|
+| A | 59 | 67 | 28 | 5 |
+| B | 55 | 67 | 28 | 1 |
+
+The reported installed-package JSON inventories match all applicable Linux
+CPython 3.11 lock pins (extra pip and, runtime only, setuptools are environment
+tooling). The supply-chain inventory covers all 69 distinct distribution/version
+pairs from the two development locks; its advisory arrays report no active
+advisories. This verifies inventory consistency, not independently queried
+advisory coverage or independent rehashing of absent third-party wheel bytes.
+
+P07-A disposition: REPORT_ONLY_ERROR for the earlier accepted pin-version
+discrepancy. Experimental-input drift not found in the original artifacts.
+Do not rerun the 3.11 resolver solely for that discrepancy. Preserve the
+original report and append this correction; no actual Python 3.12 platform
+acceptance.
+
+Candidate B preferred for continued feasibility: retains the httpx2 dev-only
+guard, promotes only pyyaml, and its regression JSON records 1526 passed on
+Python 3.11.2. This is Arena-executed evidence, not a reviewer rerun.
+Exact Candidate B lock SHA-256:
+runtime bf28103ffcc633bc5f20ca406639519376c2f37984bebe1d2fc8a511a90a7fd1;
+dev bd77ba37b61fa37bf3c2d624f73aaa1c714ff384bbc5dd51d7bfe7c919efdc68.
+
+### A0 remaining verification issues
+
+- Windows script is a partial scaffold, not an executable end-to-end gate.
+  It stops after creating the resolver venv and installing tools. It contains
+  no complete manifest/lock install, wheel, regression or egress sequence.
+- Linux script recompiles candidate locks rather than using the preserved
+  exact experimental bytes, strips environment markers when reconstructing
+  constraints, does not itself verify the exact base, and deletes a copied
+  .git directory without a strict fresh-workspace guard. Do not run it
+  verbatim. Use an isolated fresh checkout of the accepted SHA and the exact
+  recovered candidate lock bytes, verify hashes, and compare any separately
+  regenerated lock before using it.
+- Nested wheel inventories directly inspected: current_packages_list has
+  6 entries and no app/services entries; both candidate_packages_find_default_no_namespaces
+  and candidate_packages_find_with_namespaces_true have 89 entries and 35
+  app/services entries. The separate candidate_packages_find artifact also
+  has 6 entries. The explicit corrected namespace-discovery wheel supports
+  the packaging hypothesis; retain the distinction between artifacts and
+  require actual non-editable installation under Python 3.12.
+- Regression reports include summaries and tail output, not all requested
+  complete raw logs. Some candidate probes are synthetic and should not be
+  imported or executed as production code. Inspect and harden before rerun.
+- No actual Linux/Windows Python 3.12 execution yet. Existing CI cannot prove
+  runtime-only dependency installation, wheel import isolation, checkpoint
+  scheduling or hostile-environment egress behavior without separate checks.
+
+Reviewer executed archive extraction and manifest checking, Git-blob and
+pin/marker/inventory comparisons, and nested wheel archive listing/CRC
+checks; no third-party package installation, application tests or upstream
+runtime execution in this turn. Main was re-read unchanged; PR #49 remains
+draft. New session may start from the accepted main using recovered evidence
+as historical input. Preserve the old session without applying its patch.
+A0 remains PARTIALLY_VERIFIED_WITH_BLOCKERS. A1 dependency adoption,
+schema, graph, policy activation, LLM and merge remain unauthorized.
