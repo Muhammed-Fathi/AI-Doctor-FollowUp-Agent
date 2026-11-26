@@ -257,3 +257,160 @@ reject this review register; no acceptance or merge implied. Keep the branch
 isolated pending A0 evidence. Rollback: simply leave the draft unmerged;
 main and Arena's A0 starting tree are unaffected. No branch deletion or
 history rewrite required.
+
+
+## 9. A0 report review — independent exact-base reconciliation, 2026-11-26
+
+Disposition: A0 PARTIALLY_VERIFIED_WITH_BLOCKERS. Candidate B is a preferred
+candidate for continued verification, not approved for adoption. The reported
+Python 3.11 resolver/install/pytest and upstream probe results are Arena
+evidence; actual Python 3.12 Linux and Windows execution remains blocked/not
+executed. No new dependencies or guards authorized.
+
+### P07-A: source identity versus dependency content
+
+The reported base SHA and package/hash counts agree with exact-base GitHub
+reads, but the listed accepted pin versions do not. The following Git blob
+identities were independently retrieved at the base in section 1:
+
+- requirements/requirements.lock: 934b2522bc43426714598349ad3e6c0d703c6bc6
+  (26 pins, 511 hash occurrences, 0 marked pins).
+- requirements/requirements-dev.lock: 4684a8650d681b5d37c4b25cb724fd32c45dfa60
+  (39 pins, 624 hash occurrences, 4 marked pins).
+
+Actual runtime pins (from the GitHub file, not reconstructed from report prose):
+
+```text
+alembic==1.20.1
+annotated-doc==0.0.6
+annotated-types==0.8.0
+anyio==4.16.0
+click==8.5.1
+fastapi==0.162.7
+h11==0.16.0
+idna==3.20
+mako==1.4.3
+markupsafe==3.0.4
+opentelemetry-api==1.45.2
+packaging==26.3
+pillow==13.0.0
+pydantic==2.14.3
+pydantic-core==2.50.4
+pydantic-settings==2.16.3
+pypdf==7.1.0
+pypdfium2==5.15.2
+pytesseract==0.3.13
+python-dotenv==1.2.4
+python-multipart==0.0.33
+sqlalchemy==2.1.8
+starlette==1.10.0
+typing-extensions==4.16.0
+typing-inspection==0.4.5
+uvicorn==0.54.0
+```
+
+Actual dev pins:
+
+```text
+alembic==1.20.1
+annotated-doc==0.0.6
+annotated-types==0.8.0
+anyio==4.16.0
+click==8.5.1
+colorama==0.4.6 ; sys_platform == 'win32'
+fastapi==0.162.7
+h11==0.16.0
+httpcore2==2.16.0 ; sys_platform != 'emscripten'
+httpx2==2.16.0
+httpx2-jsfetch==1.0 ; sys_platform == 'emscripten'
+idna==3.20
+iniconfig==2.3.1
+mako==1.4.3
+markupsafe==3.0.4
+opentelemetry-api==1.45.2
+packaging==26.3
+pillow==13.0.0
+pluggy==1.7.0
+pydantic==2.14.3
+pydantic-core==2.50.4
+pydantic-settings==2.16.3
+pygments==2.21.0
+pypdf==7.1.0
+pypdfium2==5.15.2
+pytesseract==0.3.13
+pytest==9.2.0
+python-dotenv==1.2.4
+python-multipart==0.0.33
+pyyaml==6.0.3
+ruff==0.17.5
+setuptools==84.2.1
+sqlalchemy==2.1.8
+starlette==1.10.0
+truststore==0.10.5 ; sys_platform != 'emscripten'
+typing-extensions==4.16.0
+typing-inspection==0.4.5
+uvicorn==0.54.0
+wheel==0.48.0
+```
+
+The A0 report instead lists click 8.3.2, h11 0.16.1, idna 3.12,
+mako 1.4.2, markupsafe 3.1.1, packaging 26.2, pydantic-core 2.45.3,
+python-dotenv 1.3.2, typing-extensions 4.16.1, typing-inspection 0.5.1
+and greenlet 3.5.1 while omitting opentelemetry-api from the accepted
+runtime set. Its remaining-dev list also differs (iniconfig, pluggy,
+pygments). Matching package counts do not establish matching pins.
+
+Do not infer that the resolver used the incorrect pins solely from this
+report discrepancy: compare the actual temporary inputs, constraints,
+candidate locks, installed inventory and raw output before classification.
+Require original baseline blob identity and full SHA-256 of exported
+files; exact name/version/marker diff; distinguish report-only error from
+experimental-input drift. If experiment inputs differ, rerun affected
+checks on corrected exact-base constraints. Do not hand-edit candidate
+locks. No adoption PR before evidence review.
+
+### P05-A: checkpoint/tracing implications of A0 (reported, not reproduced here)
+
+The synthetic graph reportedly generated four root checkpoints for two
+nodes, with root namespace empty, node-specific namespace and only the
+parent checkpoint ID visible in node context. Pending writes target the
+pre-node checkpoint, with variable executor ordering. A saver failure
+reportedly allowed a later node to run before invoke raised. Therefore
+neither one-checkpoint-per-node nor synchronous saver-failure propagation
+may be used as an invariant. Prove a quiescent outer completion barrier
+before seal/state advancement; unsealed partial writes remain
+non-authoritative. Do not rely on a future-node side effect being prevented
+merely by an earlier saver exception.
+
+Hostile tracing startup reportedly attempted DNS; guarded probes saw none.
+This is evidence for the exercised paths, not a universal zero-egress
+guarantee. Require fresh-process, actual Python 3.12 probes, explicit
+legacy tracing handling, and verify the real API/configuration before
+production implementation. No future nodes or LLM integration authorized.
+
+### Next parallel work and gates
+
+Arena: preserve the original session and export original A0 manifests,
+constraints, locks, raw reports, installed inventory and probe scripts
+with a SHA-256 manifest, no environment secrets or wheels/venvs required.
+Correct the report or rerun affected experiments only as indicated by the
+actual bytes. No production edits.
+
+Reviewer: inspect artifact identity, determine exact Candidate B delta and
+prepare a bounded Python 3.12 verification path using hosted Linux CI
+and owner Windows after appropriate scope authorization. Standard CI
+only installs the dev lock and runs existing checks; it does not itself
+prove runtime-only install, non-editable wheel imports or the new graph
+and egress probes.
+
+A repeat of the small SQLite constraint/ABA probe was actually executed
+in this review turn (CPython 3.13.5, SQLite 3.46.1): inserting 40 succeeded,
+41 raised IntegrityError; after rollback stored rows were [(40,)].
+Two external commits 40 -> 39 -> 40 changed observer data_version 2 -> 3.
+This is not an application regression or Python 3.12 platform result.
+No application tests or package installs executed here.
+
+Main unchanged; PR #49 remains draft. Original docs-only report preserved
+byte-for-byte as prefix. No change to application source, dependency
+manifests, locks, tests, guards, migrations or runtime. P5 remains
+IN_REVIEW; no owner decision or merge authorized.
