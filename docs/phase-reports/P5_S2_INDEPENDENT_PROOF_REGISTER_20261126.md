@@ -794,3 +794,38 @@ obligations until their implementation planning, not another complete
 revision cycle. No final design ratification or merge. S2-A1 may be
 considered separately after Linux evidence, exact pin/supply-chain review,
 explicit packaging decision and owner authorization.
+
+
+## 14. Linux WSL2 partial evidence review — 2026-11-27
+
+Owner-provided P5-S2-Linux-Partial-Evidence-20261127-013341.zip,
+41325 bytes, SHA-256
+855a27f1c00d4f13f18e5c1d77f1682818321cb2b59df2a1ecfab9c03c39831c.
+Reviewer opened ZIP, verified CRC, parsed result.json, logs, and
+compared both installed inventories with the recovered Candidate B
+lock bytes using applicable Linux markers.
+
+CPython 3.12.16, SQLite 3.54.1, Linux WSL2 x86_64/glibc 2.43.
+Exact base/tree and three candidate hashes reported matching.
+31 recorded subprocess steps, all expected rc=0. Runtime 55 and
+Linux-applicable dev 65 pins match exactly; extra pip only. Windows-only
+and Emscripten-only dev entries excluded. Hash-required binary installs,
+pip checks, original six-entry/corrected 87-entry wheel builds,
+non-editable installed imports, editable install, bounded clean/guarded
+graph probes and trap control, legacy rejection, Ruff/format all passed.
+Graph clean/guarded logs show counter 11, four checkpoints, eight
+pending writes, zero recorded socket/DNS attempts, MainThread only.
+These do not prove general egress isolation or saver failure behavior.
+Collection 1526 (P2 284, P3 443, P4 379, P5 286, other 134).
+
+Full pytest exceeded 1800 seconds; status BLOCKED_OR_FAILED and
+79 success markers, no final summary. Do not classify timeout as
+a failed assertion or a passing regression. First unreported node
+in collection order is the protected GET observations test in
+backend/tests/p2/test_p2_http_routes.py (ordinal 80); exact stalled
+setup/call/teardown is unproven. Diagnose with isolated verbose targeted
+run and timed faulthandler stack dumps before rerunning the entire suite.
+Migration upgrade/downgrade/reupgrade, migration smoke, OpenAPI and
+scanner steps 23–28 did not execute. Keep original logs and report
+unchanged; supplementary diagnostics separate. No adoption or acceptance
+implied. Windows evidence remains valid within section 11 limits.
