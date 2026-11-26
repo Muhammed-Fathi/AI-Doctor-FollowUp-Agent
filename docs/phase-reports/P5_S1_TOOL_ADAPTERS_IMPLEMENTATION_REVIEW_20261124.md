@@ -386,3 +386,34 @@ Both new tests use `_write_after_bridge`, i.e. the genuine bridge plus a real se
 Correction head `c2e5949148700c23cd3b9980f886532e231db264` — push [#45663656115](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45663656115) and pull_request [#45663636268](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/actions/runs/45663636268): both **COMPLETED / SUCCESS** (Frontend Node 22; Backend Python 3.12 with Ruff lint, Ruff format, backend tests, Alembic smoke, OpenAPI and repository scan). Read from the Actions API. This section is a documentation-only append; no application or test blob changes after `c2e5949`.
 
 Windows `test_all.ps1` remains **not run** by the agent; no Windows acceptance is claimed. PR #48 **OPEN / DRAFT / NOT MERGED**; P5 **IN_REVIEW / NOT ACCEPTED**; issue #14 **OPEN**; no merge, auto-merge, self-approval, main change or P5-S2 work. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
+
+---
+
+## 20. Owner Windows quality gate for the bounded P5-S1 slice (2026-11-24)
+
+**Tested head.** The owner ran the Windows local quality gate on the exact final PR #48 head `0bbd715640afe931d4b726e42738f0590580a96b`. Before this record was written, PR #48 was re-verified through the GitHub API: **OPEN / DRAFT**, `headRefOid` exactly `0bbd715640afe931d4b726e42738f0590580a96b`, base `main`, head branch `arena/a61b8893-p5-s1-tool-adapters`.
+
+**Evidence source (disclosed).** No Windows transcript file was present in the workspace. The evidence below is the repository owner's report in the working session on 2026-11-24, including their independent review of the actual Windows output. The agent did not execute Windows and does not reproduce a transcript it did not receive.
+
+**Environment.** Windows PowerShell 5.1; Python 3.12.9.
+
+**Gate result.** `P5-S1 WINDOWS QUALITY GATE: PASS` — summary **12 PASS, 0 FAIL, 1 SKIP**; total quality-gate duration **805.6 seconds**.
+
+| Step | Result |
+|---|---|
+| Setup | PASS |
+| Full `test_all.ps1` execution | PASS |
+| Backend pytest | PASS, with **four skipped test cases** visible in the output |
+| Frontend tests | 13 passed |
+| Ruff lint and format | PASS |
+| Alembic migration smoke | PASS |
+| OpenAPI contract | PASS |
+| Frontend typecheck, lint and build | PASS |
+| Repository security scan | PASS |
+| Playwright E2E | **SKIPPED** (optional, not executed) |
+
+**Collected vs executed (not conflated).** The tree at this head collects **1526** backend tests (1526 whole / 443 P3 / 286 P5 / 284 P2). On Windows, backend pytest passed with **four skipped test cases** and no failures — i.e. **1522 passed and 4 skipped on Windows, not all 1526**. The identities of the four skipped cases were not specified in the owner's report. The Linux re-measurement at this head (1526 passed / 0 failed) remains a separate, agent-executed result and is not a Windows result.
+
+**Bounded scope.** This records the owner Windows quality gate for the **bounded P5-S1 slice only**. It does **not** authorize merging and does **not** accept the entire Phase 5. P5 remains **IN_REVIEW / NOT ACCEPTED**; issue #14 remains **OPEN**; PR #48 remains **OPEN / DRAFT / NOT MERGED**; no merge, auto-merge, self-approval, main change, S2 work, runtime activation or clinical use.
+
+**Historical evidence preserved.** Every earlier P3 / Windows / OCR record in the phase reports and handoff is unchanged by this append. GOLD-EX-11 remains **FAIL / NOT PROVEN**; P4 remains **`CONDITIONALLY_ACCEPTED_SYNTHETIC`**; RB3-75..77 remain **deferred / NOT EXECUTED**; DR-006 persistence remains **prohibited**; the runtime demo policy remains **not activated / unapproved**. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
