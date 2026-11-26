@@ -829,3 +829,87 @@ Migration upgrade/downgrade/reupgrade, migration smoke, OpenAPI and
 scanner steps 23–28 did not execute. Keep original logs and report
 unchanged; supplementary diagnostics separate. No adoption or acceptance
 implied. Windows evidence remains valid within section 11 limits.
+
+
+## 15. Focused executable proof review and Linux I/O diagnosis — 2026-11-27
+
+Disposition: c1-prime REJECTED; accept reported defect reproduction as
+investigative evidence, not correction acceptance. Old evidence file
+P5_S2_R4_SYNTHETIC_EVIDENCE_20261126.md independently rehashed:
+32809 bytes, SHA-256
+96045b83d59487e160fb4a101e09df82a81b2e7417b52a4f589939b6d01512c9.
+New report attachment Pasted text(20261126-235754).txt, 18826 bytes,
+SHA-256 5cd09a1827c409961b3d9b321ec7d4f46d82c7529aa5aca115432bae8a55004a.
+New scripts, four-hunk disposable patch and JSON results still reside
+in Arena's ephemeral scratch directory; they are NOT delivered or
+independently rerun. Obtain these before session reset.
+
+R4C-01: Arena reports real migrated F0/F1 cases on CPython 3.11.2 /
+SQLite 3.40.1. Four valid old unavailable rows (cap, missing bytes,
+inadmissible observation, excessive history) replay under 1.0.0
+before c1-prime but return 409 E_IDEMPOTENCY_CONFLICT after it.
+Count 37 -> 36 or 40 -> 39 and a VI-006 semantic tuple disappears.
+This corroborates exact-source review of stable key and equality
+at gate:736-785. Control unchanged. Exact40 overflow yields 41
+distinct facts and old CHECK failure; c1-prime fresh count 40.
+Late unavailable reason overwrites independently observed in two
+observation cases; other sites only source-read. Do not adopt c1-prime.
+Keep 1.0.0 persisted history and all successful replay comparisons.
+A new non-persistable outcome is a contract decision: preferred
+direction is a typed refusal explicitly distinct from a certified
+persisted F1 receipt (or explicit non-persistence marker with
+consumer changes). Do not approve returning an indistinguishable
+ordinary RunGateReceipt with gate_evaluated=True/replayed=False and
+no gate/audit rows. Require require_existing branch to keep F2
+read-only and fail-closed; no silent deletion/clamping, schema
+relaxation, exception swallowing or version bump. Tests must pin
+historical semantics, actual count, rollback, audit/row absence,
+repeat and consumer refusal. Owner approval and D-09 still needed.
+Additional S0 representability defect: Arena reports 42 blocker
+rows with 39 distinct facts in a valid HALT, accepted by F1 storage
+but rejected by GateEvaluationRef.issues max_length=40
+(state:1590). Count bound does not bound issue count. Do not truncate,
+mislabel HALT, fake N8, or globally remove bounds. Derive separate
+producer cardinality and bounded projection or typed abort before D.
+Any S0 contract/version change requires separate authorization.
+
+R4C-03: Arena reports nested BEGIN failure, changed-timestamp auth
+DML acquiring writer lock, reset rollback with history, reset-first
+fresh F0 success. Useful but the proposed implicit auth writer lock
+is not guaranteed. Exact accounts.py:257-258 assigns last_used_at and
+flushes. A no-op assignment can emit no UPDATE. Independent reviewer
+executed a disposable SQLAlchemy 2.0.50 / CPython 3.13.5 / SQLite
+3.46.1 probe: mapped auth row, select and assign identical stored
+timestamp, flush. Statements [SELECT], ORM in_transaction=True,
+driver in_transaction=False, db.dirty=False; sibling BEGIN IMMEDIATE
+succeeded. Changed value: [SELECT, UPDATE], driver in_transaction=True,
+sibling refused database is locked. Both request transactions rolled
+back. This is a mechanism probe, not exact app/target-pin execution.
+A guaranteed request transaction lock before authority evaluation and
+delete is required, including same-clock/no-op path; prefer explicit
+reset-scoped acquisition before auth DML or equivalent tested
+transaction owner, not nested BEGIN. Preserve auth 401 and 403
+semantics, no arbitrary caller commit/rollback, no file deletion.
+Do not imply no post-DML failure is possible; unexpected failures
+must roll back atomically. Refuse before destructive DELETE, not
+necessarily before all request auth DML. Any history protecting
+immutable dependencies must block reset; active-status-only check
+does not guarantee referential safety. Reset-first permits new F0
+after live revalidation. D-22 contract/error-code and exact scope
+still open. No implementation authorization.
+
+R4C-02/04/05 acknowledged by Arena and retained for respective stages.
+Do not request another full design revision. Deliver new scratch
+evidence only, then stop for narrow owner decisions. No merge.
+
+Linux supplementary owner diagnostic: same protected GET observations
+test passed 1/1 (401, rc=0, 30.51s setup, 0.02s call). A/B profiling
+on disk vs /dev/shm with same interpreter and test: 35.40s versus
+0.85s reported pytest time; setup 35.17s vs 0.61s; disk _migrate
+34.58s cumulative. Approx 41.6x for this specific profiled test only,
+not a full-suite speed claim or proof of a storage subsystem fault.
+Evidence Pasted text(20261126-235455).txt. Full regression restarted
+by owner with temporary files on tmpfs, unchanged candidate locks
+and source, no SQLite safety settings weakened. Await actual JUnit
+and full log; migration/OpenAPI/scanner still outstanding. tmpfs
+is not a durability or hosted-runner proof. A1 still not authorized.
