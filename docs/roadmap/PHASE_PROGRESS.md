@@ -1813,3 +1813,54 @@ New [GOLD run-backed acceptance design](../phase-reports/P4_RB4_RUN_BACKED_GOLD_
 - **Result:** `P5-S1 WINDOWS QUALITY GATE: PASS` on Windows PowerShell 5.1 / Python 3.12.9 — **12 PASS, 0 FAIL, 1 SKIP**, 805.6 seconds. Setup, full `test_all.ps1`, backend pytest, frontend tests (13 passed), Ruff lint/format, Alembic smoke, OpenAPI, frontend typecheck/lint/build and security scan PASS; Playwright E2E **SKIPPED** (optional).
 - **Collected vs executed:** 1526 collected on this tree; Windows backend pytest passed with **four skipped test cases** and no failures (**1522 passed, 4 skipped on Windows — not all 1526**); skipped-case identities were not specified in the report.
 - **Bounded scope:** owner Windows gate recorded for the **bounded P5-S1 slice only**; it does not authorize merging and does not accept the entire Phase 5. P5 **IN_REVIEW / NOT ACCEPTED**; issue #14 **OPEN**; PR #48 **OPEN / DRAFT / NOT MERGED**; no merge, auto-merge, self-approval, main change, S2 work, runtime activation or clinical use. Historical P3/Windows/OCR evidence preserved; GOLD-EX-11 **FAIL / NOT PROVEN**; P4 **`CONDITIONALLY_ACCEPTED_SYNTHETIC`**; RB3-75..77 **deferred**; DR-006 **prohibited**; runtime demo policy **not activated**. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
+
+## P5-S1 written owner authorization (2026-11-26)
+
+- Owner decision: [OWNER-AUTHORIZE-P5-S1-DOCS-ONLY-CORRECTION](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/48#issuecomment-7185369709).
+- Author: `Muhammed-Fathi`; comment ID `7185369709`; timestamp `2026-11-26T07:21:32Z`.
+- Reviewed HEAD: `662c111c21ea8e0b37609eec7abf5f25e2a04822`; authorized branch: `arena/a61b8893-p5-s1-tool-adapters`.
+- The owner authorized append-only corrections to the S1 implementation review, PHASE_5_REPORT.md and this roadmap only.
+- The owner also confirmed the earlier in-session D-09 pairings 1507/443, 1524/443 and 1526/443, and D-15 exact-path authorization `("__init__.py", "state.py", "tools.py")`. These remain historical in-session decisions subsequently confirmed in writing, not retroactively dated GitHub approvals.
+- This decision is not final S1 acceptance, merge authorization or P5-S2 authorization.
+
+## P5-S1 Windows evidence correction (2026-11-26)
+
+This entry supersedes the preceding Windows quality-gate checkpoint's execution date and clarifies count provenance.
+
+The actual owner Windows quality-gate execution occurred on
+**2026-11-25**, from **23:10:13 to 23:25:30 local Windows time**,
+as recorded in the owner-supplied PowerShell transcript.
+
+Windows-tested HEAD: `0bbd715640afe931d4b726e42738f0590580a96b`.
+
+The earlier November 24 Windows execution date is superseded.
+No separate owner-report timestamp is inferred.
+
+The owner Windows result remains PASS: 12 mandatory gates passed,
+zero failed gates and one optional Playwright gate skipped.
+
+Independent review of the owner-supplied pytest progress output
+counted 1522 success-dot markers and four skip markers, with no
+failure or error markers. The count of 1522 passed and four skipped
+is derived from those progress markers, not from a separately
+printed pytest final summary. The skipped-test identities were
+not established.
+
+The whole-backend collection remains 1526, including 443 P3
+tests. The historical Linux result of 1526 passed and zero failed
+is a separate execution result. Neither the reviewer nor Arena
+executed the owner Windows run.
+
+Owner authorization: [comment 7185369709](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/48#issuecomment-7185369709).
+
+This is an append-only evidence correction for the bounded
+P5-S1 slice. No application or test change is authorized.
+P5 remains IN_REVIEW / NOT ACCEPTED; issue #14 remains OPEN.
+P4 remains CONDITIONALLY_ACCEPTED_SYNTHETIC.
+GOLD-EX-11 remains FAIL / NOT PROVEN.
+RB3-75 through RB3-77 remain DEFERRED / NOT EXECUTED.
+DR-006 persistence remains PROHIBITED.
+The runtime demo policy remains unapproved and inactive.
+PR #48 remains OPEN / DRAFT / NOT MERGED.
+No owner acceptance, merge or P5-S2 work is authorized.
+ACADEMIC / SYNTHETIC DATA ONLY - NOT FOR CLINICAL USE.

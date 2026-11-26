@@ -417,3 +417,45 @@ Windows `test_all.ps1` remains **not run** by the agent; no Windows acceptance i
 **Bounded scope.** This records the owner Windows quality gate for the **bounded P5-S1 slice only**. It does **not** authorize merging and does **not** accept the entire Phase 5. P5 remains **IN_REVIEW / NOT ACCEPTED**; issue #14 remains **OPEN**; PR #48 remains **OPEN / DRAFT / NOT MERGED**; no merge, auto-merge, self-approval, main change, S2 work, runtime activation or clinical use.
 
 **Historical evidence preserved.** Every earlier P3 / Windows / OCR record in the phase reports and handoff is unchanged by this append. GOLD-EX-11 remains **FAIL / NOT PROVEN**; P4 remains **`CONDITIONALLY_ACCEPTED_SYNTHETIC`**; RB3-75..77 remain **deferred / NOT EXECUTED**; DR-006 persistence remains **prohibited**; the runtime demo policy remains **not activated / unapproved**. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
+
+## 21. Owner Windows evidence provenance correction (2026-11-26)
+
+This entry supersedes the Windows date and clarifies the count provenance in section 20.
+
+The actual owner Windows quality-gate execution occurred on
+**2026-11-25**, from **23:10:13 to 23:25:30 local Windows time**,
+as recorded in the owner-supplied PowerShell transcript.
+
+Windows-tested HEAD: `0bbd715640afe931d4b726e42738f0590580a96b`.
+
+The earlier November 24 Windows execution date is superseded.
+No separate owner-report timestamp is inferred.
+
+The owner Windows result remains PASS: 12 mandatory gates passed,
+zero failed gates and one optional Playwright gate skipped.
+
+Independent review of the owner-supplied pytest progress output
+counted 1522 success-dot markers and four skip markers, with no
+failure or error markers. The count of 1522 passed and four skipped
+is derived from those progress markers, not from a separately
+printed pytest final summary. The skipped-test identities were
+not established.
+
+The whole-backend collection remains 1526, including 443 P3
+tests. The historical Linux result of 1526 passed and zero failed
+is a separate execution result. Neither the reviewer nor Arena
+executed the owner Windows run.
+
+Owner authorization: [comment 7185369709](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/48#issuecomment-7185369709).
+
+This is an append-only evidence correction for the bounded
+P5-S1 slice. No application or test change is authorized.
+P5 remains IN_REVIEW / NOT ACCEPTED; issue #14 remains OPEN.
+P4 remains CONDITIONALLY_ACCEPTED_SYNTHETIC.
+GOLD-EX-11 remains FAIL / NOT PROVEN.
+RB3-75 through RB3-77 remain DEFERRED / NOT EXECUTED.
+DR-006 persistence remains PROHIBITED.
+The runtime demo policy remains unapproved and inactive.
+PR #48 remains OPEN / DRAFT / NOT MERGED.
+No owner acceptance, merge or P5-S2 work is authorized.
+ACADEMIC / SYNTHETIC DATA ONLY - NOT FOR CLINICAL USE.

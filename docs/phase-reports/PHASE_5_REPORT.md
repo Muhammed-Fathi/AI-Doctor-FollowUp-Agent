@@ -182,3 +182,45 @@ See S0 review §6 (D-01 … D-14) and §7 (requirements recorded for S1/S2/S4/S5
 - **Environment:** Windows PowerShell 5.1, Python 3.12.9. **Result:** `P5-S1 WINDOWS QUALITY GATE: PASS` — **12 PASS, 0 FAIL, 1 SKIP**, 805.6 seconds. Setup, full `test_all.ps1`, backend pytest, frontend tests (13 passed), Ruff lint/format, Alembic smoke, OpenAPI, frontend typecheck/lint/build and the security scan all PASS; Playwright E2E **SKIPPED** (optional, not executed).
 - **Collected vs executed:** the tree collects **1526** backend tests; on Windows backend pytest passed with **four skipped test cases** and no failures — **1522 passed, 4 skipped on Windows, not all 1526**. The skipped cases' identities were not specified in the report. The Linux 1526/0 result remains a separate agent-executed measurement.
 - **Bounded scope:** this records the owner Windows gate for the **bounded P5-S1 slice only**; it does not authorize merging and does not accept the entire Phase 5. P5 **IN_REVIEW / NOT ACCEPTED**; issue #14 **OPEN**; PR #48 **OPEN / DRAFT / NOT MERGED**; no merge, auto-merge, self-approval, main change, S2 work, runtime activation or clinical use. All historical P3/Windows/OCR evidence is preserved; GOLD-EX-11 **FAIL / NOT PROVEN**; P4 **`CONDITIONALLY_ACCEPTED_SYNTHETIC`**; RB3-75..77 **deferred**; DR-006 **prohibited**; runtime demo policy **not activated**. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
+
+## 16. P5-S1 Windows evidence provenance correction (2026-11-26)
+
+This entry supersedes the Windows date and clarifies the count provenance in section 15.
+
+The actual owner Windows quality-gate execution occurred on
+**2026-11-25**, from **23:10:13 to 23:25:30 local Windows time**,
+as recorded in the owner-supplied PowerShell transcript.
+
+Windows-tested HEAD: `0bbd715640afe931d4b726e42738f0590580a96b`.
+
+The earlier November 24 Windows execution date is superseded.
+No separate owner-report timestamp is inferred.
+
+The owner Windows result remains PASS: 12 mandatory gates passed,
+zero failed gates and one optional Playwright gate skipped.
+
+Independent review of the owner-supplied pytest progress output
+counted 1522 success-dot markers and four skip markers, with no
+failure or error markers. The count of 1522 passed and four skipped
+is derived from those progress markers, not from a separately
+printed pytest final summary. The skipped-test identities were
+not established.
+
+The whole-backend collection remains 1526, including 443 P3
+tests. The historical Linux result of 1526 passed and zero failed
+is a separate execution result. Neither the reviewer nor Arena
+executed the owner Windows run.
+
+Owner authorization: [comment 7185369709](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/48#issuecomment-7185369709).
+
+This is an append-only evidence correction for the bounded
+P5-S1 slice. No application or test change is authorized.
+P5 remains IN_REVIEW / NOT ACCEPTED; issue #14 remains OPEN.
+P4 remains CONDITIONALLY_ACCEPTED_SYNTHETIC.
+GOLD-EX-11 remains FAIL / NOT PROVEN.
+RB3-75 through RB3-77 remain DEFERRED / NOT EXECUTED.
+DR-006 persistence remains PROHIBITED.
+The runtime demo policy remains unapproved and inactive.
+PR #48 remains OPEN / DRAFT / NOT MERGED.
+No owner acceptance, merge or P5-S2 work is authorized.
+ACADEMIC / SYNTHETIC DATA ONLY - NOT FOR CLINICAL USE.
