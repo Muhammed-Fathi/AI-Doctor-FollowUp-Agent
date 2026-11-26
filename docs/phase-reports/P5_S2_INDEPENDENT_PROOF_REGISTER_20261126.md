@@ -564,3 +564,111 @@ scope/guard changes, or implementation authorization follows from this run.
 The reviewer parsed owner-provided evidence; did not rerun Windows commands.
 Arena reportedly completed its parallel design task; report not yet
 received/reviewed. Do not merge this draft or change main.
+
+
+## 12. Independent Revision 4 review — 2026-11-26
+
+Disposition: useful investigative progress; NOT RATIFIED. Arena reports
+reproduction of P01 (41 distinct blocker facts causes F1 CHECK failure,
+rollback), P08 (reset DELETE observation FK failure with a selected run),
+and P06 (same audit key returns old content). These are Arena-reported
+scratch Python 3.11.2 / SQLite 3.40.1 experiments, not independently
+executed on accepted Python 3.12/locks. Preserve actual scripts, input
+identities, commands and outputs. No production patch is authorized.
+
+R4-01 (P01): c1 is a promising minimal approach, not yet an approved fix.
+The first scan may break before all selected facts/documents are captured
+in snapshot (p5_run_gate.py:289–341), and the second scan (608–661) adds
+conflicts from all doc IDs. A bounded incomplete projection must remain
+unavailable; prove deterministic reason precedence, omitted-source
+semantics and fingerprint/replay compatibility. Same gate_version +
+fingerprint keys immutable existing rows (736–785); changed semantics can
+cause replay conflict, including with historical unavailable receipts.
+Prove compatibility or propose explicit versioning, not deleting rows
+or clamping counts. Test source bytes unavailable, exact 40, overflow with
+and without conflict, distinct fact/issue count bounds and F2 ineligibility.
+Rev4 calls c1 necessary but excludes p5_run_gate.py in its B allowlist;
+propose separately authorized correction with exact test paths and D-09.
+
+R4-02 (P03/P04): Option A as written cannot execute. S1 _evidence calls
+F2 (tools.py:351–371); F2 rejects dirty/active sessions (450–451) and owns
+BEGIN IMMEDIATE (454), always rolls back (470–472). Same-session nested
+calls are rejected; a separate connection cannot acquire a second
+IMMEDIATE lock while the barrier owns one. Reviewer executed a disposable
+stdlib sqlite3 experiment (CPython 3.13.5 / SQLite 3.46.1): two independent
+connections, first BEGIN IMMEDIATE, second BEGIN IMMEDIATE with timeout
+0.1 s. Both DELETE and WAL modes returned SQLITE_BUSY (database is locked);
+second acquisition succeeded after first rollback. A third observer could
+read a table and data_version while first held the lock. This is a
+transaction mechanism probe, not an S1 test. A0 Windows evidence separately
+confirmed the existing adapters' baseline suite.
+
+Propose sampling the same dedicated observer AFTER intended lease/F1 writes,
+perform all F2/S1 reads and repeats BEFORE the final write lock, then under
+lock only compare observer version, live scope/lease and any explicitly
+authorized locked read evidence. Any foreign commit (including auth
+last_used_at) conservatively rejects; do not ignore it selectively.
+No adapter invocation under barrier. Explain F1 commits and audit cannot
+be called no-write; F1/RB3 do not honor S2 lease. Prove how earlier N0/N2
+receipt is rebound to the N3 producer evidence, including HALT path and
+filesystem ABA limitation. If unable to prove, propose a separately
+authorized snapshot-binding producer amendment; no private API shortcut.
+Do not call inspect_current_run_gate_locked directly in S2: its contract
+says only the F2 bridge may call it (p5_run_gate.py:857–884).
+
+R4-03 (P08): authenticated route uses PrincipalDep AND DbSession
+(api/v1/demo/router.py:59–77). auth/dependencies.py current_principal
+uses the same DbSession dependency, and resolve_session (accounts.py:
+224–259) flushes last_used_at. Rejecting any active transaction in
+reset_demo would reject ordinary authenticated reset requests. Need
+one explicit transaction owner with actual endpoint/auth integration,
+never an arbitrary commit or rollback of caller changes. Re-check live
+authority under lock; race F0 vs reset and revocation; retain files and
+audit. API_CONTRACT.md:197–200 also says deletes runtime files and lists
+only active statuses, conflicting with accepted no-file-delete behavior
+and proposed any-history refusal. Explicit owner contract reconciliation,
+not silent addition of E_RUN_IN_PROGRESS or E_VALIDATION substitution.
+
+R4-04 (P05/P06): define concrete seal table, atomicity with exact stored
+bytes, verified raw read-before-deserialize, key provisioning and
+anti-replay/anti-rollback trusted app-DB anchor. A valid old HMAC prefix
+must not itself authorize continuation. Pending writes have no
+new_versions parameter; that parameter belongs to put. Exact pinned
+API and threading/failure injection needed. Append-only pending-write
+seals must handle saver UPSERT/REPLACE behavior and duplicate keys;
+prove canonical current-set commitment and no unsealed promotion.
+Define adapter result separately from runtime rejection, retry/attempt
+identity, non-invoked vs invoked-and-raised, duration nondeterminism
+and complete audit semantic equality; do not use whole ToolResult JSON
+as retry-stable identity. Do not authorize automatic retry contrary to
+no-takeover. Table/trigger/FK/constraints and downgrade inventory
+remain proposals, not closed specification.
+
+R4-05 (P02/P09): specify separate HALT -> N8 vs PROCEED -> N3 -> bounded
+quiescent END. N8 is a halted node; do not fabricate halt_reason on
+successful N3 or app-DB status. Unavailable/out-of-graph abort must
+carry actual typed cause, not a fabricated N2 trace. GateEvaluationRef
+limits issues and historical exclusions as well as distinct fact count;
+prove bounds. Preserve current phase gates. Exact source guard
+test_p2_scope_guards.py:85 and test_safety_guards.py:33 prohibit langgraph
+imports. check_alembic_smoke.py:76 hardcodes 0008. Future B/C/D require
+explicitly authorized narrow guard/smoke changes or a compatible
+alternative; no scope bypass or silent weakening. Current allowlists
+exclude these prerequisites and D-09 append path. Reconcile actual old
+OD-01..OD-11 topics against proposed D-16..D-25; do not overwrite existing
+owner decisions. Separate A1 packaging decision from future runtime module.
+
+R4-06 (P07): reviewer Windows evidence section 11 supersedes Arena's
+unexecuted-Windows statement. Reopened owner ZIP; CRC clean, 38/38
+recorded expected zero exits, explicit pytest 1522 passed/4 skipped.
+Linux actual CPython 3.12 remains outstanding. Do not rerun the Windows
+baseline campaign just to refresh prose. No 3.12 interpreter in reviewer
+container (3.13.5 only); do not substitute. Linux isolated kit execution
+or separately authorized experimental hosted CI is next dependency gate.
+Keep original Candidate B lock bytes; no dependency adoption.
+
+Next: focused R4 correction and preserve proof scripts in parallel with
+Linux feasibility. No full new design rewrite; no implementation,
+migration, dependency adoption or merge authorized. Reviewer read exact
+base source and executed the small SQLite locking probe, not app tests.
+Main remains unchanged. All earlier register content retained.
