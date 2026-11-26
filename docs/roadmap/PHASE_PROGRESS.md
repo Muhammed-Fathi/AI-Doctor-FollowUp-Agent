@@ -1777,3 +1777,90 @@ New [GOLD run-backed acceptance design](../phase-reports/P4_RB4_RUN_BACKED_GOLD_
 - **Bounded acceptance recorded:** the owner accepts the bounded P5-S0 typed-state implementation and its test evidence, subject to final append-only closure documentation, exact-head CI verification and owner-controlled merge. No runtime policy activation, graph execution, tool adapters, checkpoints, LLM integration, clinical use, medical authorization, API/UI work, tasks, notifications or P5-S1 is authorized or claimed.
 - **Closure scope:** documentation-only and append-only in the S0 review, `PHASE_5_REPORT.md` and this roadmap; no code, test, dependency, migration, policy, workflow or P3-handoff change; all application and test blobs identical to `3433651`.
 - **Status:** P5-S0 **owner-accepted within the bounded scope**; PR #47 **OPEN / DRAFT / NOT MERGED** pending independent verification and owner-controlled merge. Issue #14 **OPEN**; P4 **`CONDITIONALLY_ACCEPTED_SYNTHETIC`**; GOLD-EX-11 **FAIL / NOT PROVEN**; RB3-75..77 **deferred / NOT EXECUTED**; DR-006 persistence **prohibited**; runtime demo policy **not activated / unapproved**. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
+
+## P5-S1 bounded read-only tool adapters (2026-11-24)
+
+- **Authorization channel (disclosed):** the repository owner authorized P5-S1 in this Arena working session on 2026-11-24, narrowing an earlier proposal to exactly **three** adapters and the exact D-15 tuple. It was given in reply to a direct question in the session; **no** new signed GitHub comment exists for it, and no P3/P4/S0 authorization was reused or widened. Recorded here and in `docs/phase-reports/P5_S1_TOOL_ADAPTERS_IMPLEMENTATION_REVIEW_20261124.md` §0 and §3.
+- **Workspace identity:** new clean worktree `/home/user/AI-Doctor-FollowUp-Agent-p5-s1` on branch `arena/a61b8893-p5-s1-tool-adapters`, created from exact `main` `4e92abbde1ad1c3a8e77e0a741617c19c8133413` (PR #47 mergeCommit, verified `MERGED`); `git diff --exit-code` against the base returned 0 before any edit; 0 commits ahead. The earlier Arena branch `arena/a61b8893-ai-doctor-followup-agent` @ `8f341b0` was left untouched and no PR is opened from it.
+- **Delivered:** `backend/app/agents/tools.py` with the three narrowed read-only adapters, a frozen six-field trusted `ToolContext`, a structural `NODE_TOOLS` pre-call guard, a discriminated `ToolResult[T]` envelope, a closed 5-code / 13-reason error vocabulary and bounded audit **metadata only**. Seven tools deferred with no stubs. No DB write, no audit row, no graph, no checkpoint, no LLM, no route, no task, no notification, no trust promotion, no medical decision, no review-item persistence.
+- **D-15 (new decision, not retroactive):** `AUTHORIZED_AGENT_MODULE_PATHS == ("__init__.py", "state.py", "tools.py")` exactly. The rejection test was extended to tool-adapter variants (`tool_adapters.py`, `agent_tools.py`, `tools_v2.py`, `tools_extra.py`), checkpoints, `runtime.py`, orchestrators, LLM modules and nested packages including `tools/adapters.py`. No directory-wide exemption and no other P2 guard changed.
+- **Tests:** new `backend/tests/p5/test_p5_s1_tools.py`, ASCII-only, **35 collected**, driving the genuine F0 → F1 → F2 chain. It covers every node×tool pair, unauthorized direct calls, forged identities and cross-patient scope, empty and unverified facts, selected-only plus explicit exclusions, self-reported trust, the exact F2 delta and the `no_baseline` incomparable case, rejection of caller baselines and lookbacks, missing/stale/drifted producer evidence, dirty and invalid context, envelope and audit invariants, and the absence of DB writes, sockets, runtime imports and deferred stubs.
+- **Executed (Linux CPython 3.11.2 — disclosed deviation from CI 3.12; Windows `test_all.ps1` not run, no Windows claim):** focused S1 **35 passed / 0 failed**; P5 **267**; P2 **284**; P3 **443**; **full backend 1506 passed / 1 failed** (~234 s); Ruff lint+format PASS (151 files); Alembic smoke PASS at `0008`; OpenAPI PASS (17/18/43); scan PASS (305 tracked files).
+- **Collection moved 1470 → 1507 (+35 S1, +1 D-15 test, +1 parametrized typing case for `agents/tools.py`); P3 unchanged at 443; P2 282 → 284; P5 232 → 267.** The P3 handoff `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md` was **not** edited and the guard was not weakened; **fresh D-09 authorization for `**1507 collected**, of which **443** are the P3 suite` is pending** and is the only red test.
+- **Status preserved:** P5 **IN_REVIEW / NOT ACCEPTED**; issue #14 **OPEN**; P4 **`CONDITIONALLY_ACCEPTED_SYNTHETIC`**; GOLD-EX-11 **FAIL / NOT PROVEN**; RB3-75..77 **deferred / NOT EXECUTED**; DR-006 persistence **prohibited**; runtime demo policy **not activated / unapproved**. No S2 work. Draft PR only; no merge, auto-merge, self-approval or main change. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
+- **D-09 closure (2026-11-24):** fresh owner authorization for exactly `**1507 collected**, of which **443** are the P3 suite` was obtained in the working session and recorded here before the edit. One append-only collection note was added to `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md`; the pairing guard was not modified and is green afterwards; the whole backend re-ran **1507 passed / 0 failed** (243 s). This supersedes the "pending" wording in the previous bullet. Changed paths are now six, all inside the authorized set.
+- **Exact-head CI (2026-11-24):** draft PR #48 at `08b457f`, run #45480318202 **SUCCESS** — Frontend (Node 22), Ruff lint/format, Backend tests (Python 3.12), Alembic smoke, OpenAPI and repository scan all green, read from the Actions API. No Windows execution or Windows claim; owner Windows acceptance outstanding. PR #48 **OPEN / DRAFT / NOT MERGED**; no merge, auto-merge, self-approval, main change or S2 work.
+
+## P5-S1 targeted corrections — S1-R1 and S1-R2 (2026-11-24)
+
+- **S1-R1 closed:** the adapters now end the read transaction their own post-bridge reconciliation opens, using `ROLLBACK` in a `finally` on success and on every error path. `COMMIT` is never a cleanup mechanism, the caller-owned session is never closed, and a session that was already dirty on entry is left untouched. Proven by a sequential same-context test over the two permitted `monitor_compare` adapters, an early-error test, a denied-call test, a `commit` spy and a strengthened dirty-session test.
+- **S1-R2 closed:** `compare_observations` reconciles the stored current row's value, measure type, unit, timestamp, source, trust label and fact lineage against F2 and takes both values from one stored read; the baseline is checked for patient scope, measure/unit comparability, strict temporal precedence, admissibility and the producer's trust-label derivation. `read_observations` re-applies the accepted admissibility predicate so a selected row that became `rejected` or exceeds the future-skew boundary is not returned as eligible. The F2 delta remains the output and is only cross-checked. The residual snapshot-gap authority limit is documented, not claimed away.
+- **D-09 closure (2026-11-24):** fresh owner authorization for exactly `**1524 collected**, of which **443** are the P3 suite` was obtained in the working session and recorded here before the edit. One append-only collection note was added to `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md`; the guard was not modified and is green afterwards. Collection **1524 / 443 / 284** (whole / P3 / P5), P2 unchanged at 284.
+- **Status preserved:** P5 **IN_REVIEW / NOT ACCEPTED**; issue #14 **OPEN**; P4 **`CONDITIONALLY_ACCEPTED_SYNTHETIC`**; GOLD-EX-11 **FAIL / NOT PROVEN**; RB3-75..77 **deferred / NOT EXECUTED**; DR-006 persistence **prohibited**; runtime demo policy **not activated / unapproved**. No S2 work, no runtime activation, no Windows acceptance claim. PR #48 **OPEN / DRAFT / NOT MERGED**; no merge, auto-merge, self-approval or main change. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
+- **Exact-head CI for the corrections (2026-11-24):** `8cb05d0` — push #45649051373 and PR #45649044112 both **SUCCESS** (Frontend, Ruff lint/format, Backend tests on Python 3.12, Alembic smoke, OpenAPI, repository scan), read from the Actions API. No Windows execution or Windows claim; owner Windows acceptance outstanding. PR #48 **OPEN / DRAFT / NOT MERGED**; no merge, auto-merge, self-approval, main change or S2 work.
+
+## P5-S1 S1-R3 baseline window drift closed (2026-11-24)
+
+- **Correction:** `compare_observations` re-validates the accepted F2 baseline window (`current - HISTORY_LOOKBACK_DAYS <= baseline < current`) against the reconciled stored timestamps, importing the accepted 365-day constant rather than adding a new period. An out-of-window baseline fails closed with `producer_evidence_inconsistent` and no payload; the F2 delta, baseline identity, trust basis and `no_baseline` semantics are preserved, and the rollback still runs on the rejection path.
+- **Proof:** genuine bridge plus a separate committed writer moving the baseline to `2025-06-01` → rejected with no open transaction; a baseline at exactly `current - 365 days` → accepted with the original `delta == -29` and the F2 history label intact; the exclusive upper bound is still rejected.
+- **D-09 closure (2026-11-24):** fresh owner authorization for exactly `**1526 collected**, of which **443** are the P3 suite` was obtained in the working session and recorded here before the edit. One append-only collection note was added to `docs/phase-reports/PHASE_3_WINDOWS_ACCEPTANCE.md`; the guard was not modified and is green afterwards. Collection **1526 / 443 / 286** (whole / P3 / P5), P2 unchanged at 284.
+- **Status preserved:** P5 **IN_REVIEW / NOT ACCEPTED**; issue #14 **OPEN**; P4 **`CONDITIONALLY_ACCEPTED_SYNTHETIC`**; GOLD-EX-11 **FAIL / NOT PROVEN**; RB3-75..77 **deferred / NOT EXECUTED**; DR-006 persistence **prohibited**; runtime demo policy **not activated / unapproved**. No S2 work, no runtime activation, no Windows acceptance claim. PR #48 **OPEN / DRAFT / NOT MERGED**; no merge, auto-merge, self-approval or main change. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
+- **Exact-head CI for S1-R3 (2026-11-24):** `c2e5949` — push #45663656115 and PR #45663636268 both **SUCCESS** (Frontend, Ruff lint/format, Backend tests on Python 3.12, Alembic smoke, OpenAPI, repository scan), read from the Actions API. No Windows execution or Windows claim; owner Windows acceptance outstanding. PR #48 **OPEN / DRAFT / NOT MERGED**; no merge, auto-merge, self-approval, main change or S2 work.
+
+## P5-S1 owner Windows quality gate recorded (2026-11-24)
+
+- **Tested head:** `0bbd715640afe931d4b726e42738f0590580a96b`; PR #48 re-verified **OPEN / DRAFT** at exactly this SHA before recording. Evidence is the repository owner's report in the working session (no transcript file in the workspace; the agent did not execute Windows).
+- **Result:** `P5-S1 WINDOWS QUALITY GATE: PASS` on Windows PowerShell 5.1 / Python 3.12.9 — **12 PASS, 0 FAIL, 1 SKIP**, 805.6 seconds. Setup, full `test_all.ps1`, backend pytest, frontend tests (13 passed), Ruff lint/format, Alembic smoke, OpenAPI, frontend typecheck/lint/build and security scan PASS; Playwright E2E **SKIPPED** (optional).
+- **Collected vs executed:** 1526 collected on this tree; Windows backend pytest passed with **four skipped test cases** and no failures (**1522 passed, 4 skipped on Windows — not all 1526**); skipped-case identities were not specified in the report.
+- **Bounded scope:** owner Windows gate recorded for the **bounded P5-S1 slice only**; it does not authorize merging and does not accept the entire Phase 5. P5 **IN_REVIEW / NOT ACCEPTED**; issue #14 **OPEN**; PR #48 **OPEN / DRAFT / NOT MERGED**; no merge, auto-merge, self-approval, main change, S2 work, runtime activation or clinical use. Historical P3/Windows/OCR evidence preserved; GOLD-EX-11 **FAIL / NOT PROVEN**; P4 **`CONDITIONALLY_ACCEPTED_SYNTHETIC`**; RB3-75..77 **deferred**; DR-006 **prohibited**; runtime demo policy **not activated**. **ACADEMIC / SYNTHETIC DATA ONLY — NOT FOR CLINICAL USE.**
+
+## P5-S1 written owner authorization (2026-11-26)
+
+- Owner decision: [OWNER-AUTHORIZE-P5-S1-DOCS-ONLY-CORRECTION](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/48#issuecomment-7185369709).
+- Author: `Muhammed-Fathi`; comment ID `7185369709`; timestamp `2026-11-26T07:21:32Z`.
+- Reviewed HEAD: `662c111c21ea8e0b37609eec7abf5f25e2a04822`; authorized branch: `arena/a61b8893-p5-s1-tool-adapters`.
+- The owner authorized append-only corrections to the S1 implementation review, PHASE_5_REPORT.md and this roadmap only.
+- The owner also confirmed the earlier in-session D-09 pairings 1507/443, 1524/443 and 1526/443, and D-15 exact-path authorization `("__init__.py", "state.py", "tools.py")`. These remain historical in-session decisions subsequently confirmed in writing, not retroactively dated GitHub approvals.
+- This decision is not final S1 acceptance, merge authorization or P5-S2 authorization.
+
+## P5-S1 Windows evidence correction (2026-11-26)
+
+This entry supersedes the preceding Windows quality-gate checkpoint's execution date and clarifies count provenance.
+
+The actual owner Windows quality-gate execution occurred on
+**2026-11-25**, from **23:10:13 to 23:25:30 local Windows time**,
+as recorded in the owner-supplied PowerShell transcript.
+
+Windows-tested HEAD: `0bbd715640afe931d4b726e42738f0590580a96b`.
+
+The earlier November 24 Windows execution date is superseded.
+No separate owner-report timestamp is inferred.
+
+The owner Windows result remains PASS: 12 mandatory gates passed,
+zero failed gates and one optional Playwright gate skipped.
+
+Independent review of the owner-supplied pytest progress output
+counted 1522 success-dot markers and four skip markers, with no
+failure or error markers. The count of 1522 passed and four skipped
+is derived from those progress markers, not from a separately
+printed pytest final summary. The skipped-test identities were
+not established.
+
+The whole-backend collection remains 1526, including 443 P3
+tests. The historical Linux result of 1526 passed and zero failed
+is a separate execution result. Neither the reviewer nor Arena
+executed the owner Windows run.
+
+Owner authorization: [comment 7185369709](https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/48#issuecomment-7185369709).
+
+This is an append-only evidence correction for the bounded
+P5-S1 slice. No application or test change is authorized.
+P5 remains IN_REVIEW / NOT ACCEPTED; issue #14 remains OPEN.
+P4 remains CONDITIONALLY_ACCEPTED_SYNTHETIC.
+GOLD-EX-11 remains FAIL / NOT PROVEN.
+RB3-75 through RB3-77 remain DEFERRED / NOT EXECUTED.
+DR-006 persistence remains PROHIBITED.
+The runtime demo policy remains unapproved and inactive.
+PR #48 remains OPEN / DRAFT / NOT MERGED.
+No owner acceptance, merge or P5-S2 work is authorized.
+ACADEMIC / SYNTHETIC DATA ONLY - NOT FOR CLINICAL USE.
