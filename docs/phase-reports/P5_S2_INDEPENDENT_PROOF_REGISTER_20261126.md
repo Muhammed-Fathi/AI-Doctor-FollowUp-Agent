@@ -507,3 +507,60 @@ draft. New session may start from the accepted main using recovered evidence
 as historical input. Preserve the old session without applying its patch.
 A0 remains PARTIALLY_VERIFIED_WITH_BLOCKERS. A1 dependency adoption,
 schema, graph, policy activation, LLM and merge remain unauthorized.
+
+
+## 11. Independent review of owner Windows Candidate B feasibility evidence — 2026-11-26
+
+The owner executed the separate verification kit on Windows x64, against the
+accepted base and recovered Candidate B inputs, not an adopted dependency
+commit. Received ZIP P5-S2-Windows-Evidence-20261126-145707.zip; SHA-256
+10154e427c84aea1df6cc96631afcd8f5d67dab1030043e870dd20806566a645.
+Reviewer checked ZIP CRC (clean), parsed result.json and all relevant logs,
+and compared installed inventories against original kit lock entries using
+normalized distribution names and Windows CPython 3.12.9 marker evaluation.
+
+- Recorded interpreter CPython 3.12.9 AMD64, Windows-11-10.0.22621-SP0,
+  SQLite 3.45.3. Recorded base/tree match section 1.
+- 38 recorded subprocess commands, all rc=0 and expected rc=0. The run
+  used isolated clones, removed remotes, and separate venvs; no adoption.
+- Reported candidate manifest and both lock hashes match the recovered
+  Candidate B identities. All 55 runtime and 66 Windows-applicable dev
+  pins match installed inventories exactly; pip 24.3.1 is additional
+  venv tooling in each. Universal dev lock has 67 entries; the Emscripten
+  only package does not apply to Windows. Both installs used binary-only,
+  hash-required, no-deps pip commands; pip checks report no broken requirements.
+- Original wheel 6 entries; corrected wheel 87 entries (no disposable
+  dummy runtime package in this comparison). Non-editable installation
+  succeeded into runtime venv. Isolated Python -I imports of app.main,
+  app.agents.state/tools, app.services.p5_run_gate/p5_evidence_bridge,
+  and app.db.models succeeded; app.main location is within venv site-packages.
+  Wheel entry inventories and hashes are recorded, not wheel bytes supplied
+  for independent rehash. This tests imports, not wheel-only application
+  deployment, path layout, or all resource packaging.
+- Clean and guarded two-node synthetic probes each returned counter 11
+  and trace [one, two], four root checkpoints, eight pending-write rows,
+  history steps [2,1,0,-1], zero recorded socket/DNS attempts and only
+  MainThread at observation. Positive control explicitly exercised the
+  socket trap. Legacy-reject probe exits before imports by construction;
+  it is not evidence of production wrapper enforcement. Clean and guarded
+  both disable tracing via tracing_context; no unguarded hostile case
+  rerun in this kit. No saver-failure injection or custom HMAC serializer
+  test in this Windows run. Prior host probe failure evidence remains
+  separate; no general network isolation guarantee.
+- Full pytest summary: 1522 passed, 4 skipped, 0 failed in 610.70 s.
+  Collection 1526; P2 284, P3 443, P4 379, P5 286, remaining 134.
+  Skip identities and reasons not printed; do not infer them from count.
+- Ruff lint PASS, format 151 files already formatted. Alembic upgrade,
+  downgrade, reupgrade and smoke PASS (0008_p4_rb3_review_persistence,
+  24 tables). OpenAPI PASS (17 paths, 18 operations, 43 schemas).
+  Scanner PASS (306 tracked files, 7 secret patterns, 4 claim patterns).
+  No frontend execution or newly implemented S2 behavior in this kit.
+
+Disposition: Windows CPython 3.12 Candidate B bounded feasibility evidence
+reviewed, successful for the executed checks. Linux CPython 3.12 remains
+outstanding; supply-chain/advisory independent verification and final
+design review remain open. No owner ratification, dependency adoption,
+scope/guard changes, or implementation authorization follows from this run.
+The reviewer parsed owner-provided evidence; did not rerun Windows commands.
+Arena reportedly completed its parallel design task; report not yet
+received/reviewed. Do not merge this draft or change main.
