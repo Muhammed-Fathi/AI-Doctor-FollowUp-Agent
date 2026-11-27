@@ -1068,3 +1068,60 @@ SHA-256 1b958fe1f2974eba57ce2617620adf5b035ca81c9a01e792be5b0da9782d62dc
 rehash matches previous handoff. No additional authorization,
 runtime change, implementation acceptance, merge or phase advancement.
 A1 remains a separate draft-PR implementation and review track.
+
+
+## 19. A1 exact-head independent review — 2026-11-27
+
+PR #50 OPEN / DRAFT / NOT MERGED / MERGEABLE. Head
+0644a26472a846cf8c9eca0d8b3b058394266f78, one commit ahead and zero
+behind exact main 96589dd35df7e8b9ecc690f19f51105a570e1b69.
+Owner authorization comment 7206403871 remains the scope authority.
+The Arena-assigned branch arena/14e106e4-ai-doctor-followup-agent
+satisfies the separate-branch requirement; the proposed feat name
+was not used. No rename or history rewrite recommended.
+
+Reviewer reopened original verification kit, computed SHA-256 and
+Git blob SHA-1 (blob header plus exact bytes) for the corrected
+manifest and both locks. All three exact blob IDs match GitHub at
+PR #50 head: pyproject.toml b6afe4b52c5c414678763aaa52736c3fb198e745;
+runtime lock 9b244d2df0af03d6f355b7dd45919c037e3dbc0f;
+dev lock 42f93837b65cfacaca2f35b912945133338c5ccb.
+SHA-256 targets in section 17 unchanged. Both locks preserve every
+baseline name/version/marker line (26->55 runtime; 39->67 universal
+dev). Exact five authorized paths, docs byte-prefix append-only
+by fetched text comparison, no source/tests/guard/migration/CI
+changes. Owner authorization recorded in roadmap. No runtime
+activation, phase acceptance or merge.
+
+GitHub Actions API confirms run 45918205563, pull_request event,
+head_sha 0644a26472a846cf8c9eca0d8b3b058394266f78, completed/success.
+Backend Python 3.12 all 14 steps success, frontend Node 22 all 11
+steps success. Workflow blob unchanged
+859029dbbed8b44bddd648e1ba1affd238d6a678. Reviewer inspected job
+metadata and actual workflow, not raw job logs or a fresh local
+execution. Arena reports 1526 passed on 3.11.2 supplementary only.
+A0 owner Windows 1522 passed/4 skips and Linux 1526 passed/0 skips
+are exact-artifact feasibility evidence, not new PR-head runs.
+
+Two narrow evidence wording corrections before owner acceptance:
+(1) 67 universal dev pins is not 67 installed on Linux. colorama
+is Windows-only and httpx2-jsfetch Emscripten-only, leaving 65
+applicable pins on ordinary Linux; report actual inventory only
+if preserved, otherwise label count derived from markers.
+(2) CI uses editable install, not a non-editable wheel build/import
+check. A0 supplies wheel/non-editable evidence for these exact
+three blobs with unchanged application source; no fresh non-editable
+run at A1 head. Arena's pip wheel attempt exited 1 on unsupported
+3.11, an environment blocker, not a regression assertion failure
+or a successful check. Append a concise correction to the two
+authorized docs and reconcile PR body; no dependency/source changes
+or new experiments needed for this correction. Verify refreshed CI
+at final head. Explicit owner decision needed whether to reuse
+same-artifact Windows A0 evidence for this bounded A1 acceptance
+rather than repeat Windows campaign (docs currently list owner
+Windows verification as pending); do not silently waive the gate.
+
+Disposition: exact implementation and hosted checks verified at
+0644a26; evidence wording correction and owner acceptance decision
+pending. All S2-B/C/D issues remain open. No merge recommendation
+until remaining evidence/owner conditions satisfied. P5 IN_REVIEW.
