@@ -913,3 +913,64 @@ by owner with temporary files on tmpfs, unchanged candidate locks
 and source, no SQLite safety settings weakened. Await actual JUnit
 and full log; migration/OpenAPI/scanner still outstanding. tmpfs
 is not a durability or hosted-runner proof. A1 still not authorized.
+
+
+## 16. Linux feasibility completion — independent archive review, 2026-11-27
+
+Owner supplied three archives. Reviewer reopened their actual bytes,
+recomputed SHA-256, checked ZIP CRC for every member and parsed logs,
+JSON and JUnit (no application rerun by reviewer).
+
+- Partial evidence (duplicate of section 14), 41325 bytes, 34 members:
+  855a27f1c00d4f13f18e5c1d77f1682818321cb2b59df2a1ecfab9c03c39831c
+- P5-S2-Linux-Regression-full-regression-mav5dToV.zip, 1142572 bytes,
+  12 members:
+  54cdf66f6d37b3be8b7326b3e5c1ef57a532c051a8b012a33cd9d853d8d893cb
+- P5-S2-Linux-Final-final-checks-6lbloAe1.zip, 3428 bytes, 10 members:
+  ecef079fffac7619a2f24f90f504f3cd3db0a238e61052ff627530ba737243e6
+
+Original partial report remains BLOCKED_OR_FAILED (1800s timeout).
+Supplementary tmpfs regression log explicitly reports 1526 passed in
+288.16s, exit 0; JUnit reports tests=1526, failures=0, errors=0,
+skipped=0, time=288.089s. All 1526 unique (classname,name) pairs match
+the original collected node IDs exactly. Counts: P2 284, P3 443,
+P4 379, P5 286, other 134. No frontend or new S2 implementation tested.
+Only 264 MiB /dev/shm usage reported after completion. Original timeout
+is retained; no rewritten result.json or single uninterrupted run claimed.
+The 31 successful initial steps plus regression plus six supplementary
+checks account for all 38 expected successful steps across executions.
+
+Final status.txt: 23_upgrade=0, 24_downgrade=0, 25_reupgrade=0,
+26_migration_smoke=0, 27_openapi=0, 28_scanner=0, FINAL_EXIT_CODE=0.
+Migration logs traverse all eight revisions in each direction as
+appropriate. Smoke reports head 0008_p4_rb3_review_persistence, 24
+tables; OpenAPI 17 paths/18 operations/43 schemas; scanner 306 tracked
+files/7 secret patterns/4 claim patterns. Before/after git status in
+both supplement archives identical (only pyproject.toml and two
+requirements locks modified, unstaged). Final integrity log all OK.
+Reviewer recomputed corrected manifest from original verification kit
+bytes using the exact inspect_candidate replacement:
+4ef491232430a1910c3ed87f67fe127f9be7d32469d276fdca389f73a0875976.
+Matches regression hash record. Both candidate lock hashes match kit
+and partial JSON (runtime bf28103ffcc633bc5f20ca406639519376c2f37984bebe1d2fc8a511a90a7fd1;
+dev bd77ba37b61fa37bf3c2d624f73aaa1c714ff384bbc5dd51d7bfe7c919efdc68).
+Runtime and Linux-applicable dev installed inventories independently
+compared again: 55/65 exact applicable pins; extra pip 26.3 in each.
+Reopened Windows original archive, CRC and hash match section 11,
+pytest summary 1522 passed, 4 skipped, 610.70s; skip identities
+remain unrecorded there, not inferred from Linux outcomes.
+
+Disposition: bounded Windows and Linux WSL2 CPython 3.12 feasibility
+execution evidence COMPLETE / REVIEWED for Candidate B and tested
+package-discovery correction. Not a durability proof (tmpfs), hosted
+CI proof, complete application deployment proof, or runtime safety
+authorization. Wheel byte artifacts not supplied. Original candidate
+manifest without packaging correction is not the tested adoption target.
+Independent current advisory lookup across all 67 universal candidate
+dev pins (which include all 55 runtime pins), pin/packaging authorization,
+exact A1 change scope, and owner decision still required. OSV or other
+public advisory results must be preserved; no assertion of zero
+vulnerabilities until a complete query succeeds. No dependency
+adoption, application source, guard, migration, implementation,
+merge, or Phase 5 acceptance authorized. Arena's new scratch proof
+transfer from section 15 still pending, separate from A1 feasibility.
