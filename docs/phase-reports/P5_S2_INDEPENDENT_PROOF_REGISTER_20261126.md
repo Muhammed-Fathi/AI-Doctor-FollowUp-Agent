@@ -1162,3 +1162,32 @@ acceptance in the PR thread and roadmap per governance before
 merge consideration. Keep reviewer register PR #49 draft and
 separate. S2-B/C/D not authorized. Verify any resulting
 documentation-only head and refreshed CI before owner merges.
+
+
+## 21. A1 owner acceptance and integration identity — 2026-11-27
+
+Owner acceptance comment 7207340642 on PR #50, author Muhammed-Fathi,
+2026-11-27T01:30:22Z, explicitly authorizes reuse of A0 Windows and
+non-editable packaging evidence for A1 only. Acceptance record appended
+to the two authorized docs, no implementation changes, at
+c8a5d7c0590dd03ab32ba8179b8ddfd509e50158. Exact-head PR CI 45923023056
+completed/success, backend 14/14 and frontend 11/11, independently
+checked job metadata, not raw logs. Owner merged PR #50 at
+2026-11-27T01:39:27Z. Main now 91bbca728273b676f9669e3c39c597c44257849b;
+parents 96589dd35df7e8b9ecc690f19f51105a570e1b69 and c8a5d7c0590dd03ab32ba8179b8ddfd509e50158.
+Root tree 7f6fc8c5952e6030d0cfea3fbf246843b48c97ec exactly matches the
+reviewed PR head tree; GitHub comparison contains zero file differences.
+Post-merge CI not yet returned by exact-main workflow lookup; pending,
+not failed or waived. A1 merged; final post-merge CI confirmation remains.
+PR #49 stays separate and draft. No new runtime import, schema, guard
+exception, collection pairing change or Phase 5 acceptance.
+
+Next bounded work: B decision packet only, read-only preparation pending
+main CI. Use existing proof obligations P01/P02/P04/P06/P08 and sections
+12–15,18; do not reopen A0 or request a wholesale design revision. Resolve
+typed F1 non-persistable refusal and historical replay, S0 issue
+representability boundary, transaction/ownership matrix, audit semantic
+identity, canonical schema/DDL parity and reset contract before B code.
+Owner must explicitly ratify concrete decisions and paths (including
+D-09 remeasurement permission if tests change). Preserve all C/D
+obligations and D-15 unchanged. No B implementation authorization yet.
