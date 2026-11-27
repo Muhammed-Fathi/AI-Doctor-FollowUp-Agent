@@ -1191,3 +1191,27 @@ identity, canonical schema/DDL parity and reset contract before B code.
 Owner must explicitly ratify concrete decisions and paths (including
 D-09 remeasurement permission if tests change). Preserve all C/D
 obligations and D-15 unchanged. No B implementation authorization yet.
+
+
+## 22. A1 post-merge verification and B preparation — 2026-11-27
+
+Direct GitHub Actions branch/main and head_sha queries confirm push run
+45923806071 completed/success on exact main
+91bbca728273b676f9669e3c39c597c44257849b, tree unchanged from accepted
+PR #50. Commit check-runs and job metadata agree. Backend Python 3.12
+14/14 steps successful; frontend Node 22 11/11 steps successful.
+The connector's commit-workflow convenience query returned an empty list;
+direct Actions API resolved that discrepancy. No fresh local execution
+or raw job logs inspected. A1 integration verification complete.
+Owner acceptance remains bounded to A1; P5 IN_REVIEW / NOT_ACCEPTED.
+
+B next: prepare only a focused decision packet using existing sections
+3–7,12–15,18 and current exact source. No repeat A0, full design revision,
+tracked changes, migration or runtime implementation until explicit
+owner authorization. Resolve P01/P02/P04/P06/P08 and distinguish S0
+issue-cardinality handling from deferred D execution. Preserve old F1
+1.0.0 replay, reject c1-prime, require typed non-persistable refusal;
+establish canonical schema, transaction and reset authority, semantic
+audit collision checks, bounded tests and exact allowed paths.
+D-09 remeasurement and D-15 scope are independent decisions, not waived.
+Keep PR #49 draft. S2-B/C/D implementation remains NOT_STARTED.
