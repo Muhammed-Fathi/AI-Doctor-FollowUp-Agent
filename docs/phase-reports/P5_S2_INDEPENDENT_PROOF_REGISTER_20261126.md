@@ -1018,3 +1018,53 @@ verification required before any owner merge consideration. Preserve
 P01/P02/P03/P04/P05/P06/P08/P09 and all deferred safety gates. Arena
 scratch evidence transfer pending, separate from A1. Owner may approve
 only this narrow implementation scope; B/C/D remain unapproved.
+
+
+## 18. R4C evidence transfer verified; A1 authorization recorded — 2026-11-27
+
+Owner supplied patch 01a217c9-367c-7625-a898-b360d5c008e5 (2).patch,
+566768 bytes, SHA-256
+7dd89d4ee980ce21b5a9ca737b5a8051ff4970d934531cb19fda2fe685eae1b3.
+Reviewer extracted the added Base64 text (525752 bytes, SHA-256
+d87c1064f80d50c0f406d36bb69da8d424eb830f32a41bd0dbd60ea1d2f2caef),
+decoded strictly, and recovered P5_S2_R4C_EVIDENCE_20261127.zip,
+389192 bytes, SHA-256
+ddfc635732c3b2e0449c6ef579a13ebb9339639b18da63bfcb11a9487d0d2401.
+All match Arena's reported values. ZIP CRC clean; 65 entries including
+18 directory entries, 47 regular files including SHA256SUMS.txt;
+46/46 unique manifest digests verified, no unlisted regular files.
+Original R4 Markdown inside archive matches section 15 hash exactly.
+
+Original R4C scratch bytes lost on sandbox reset. Archive contains
+as-reported record, regenerated baseline experiments on CPython
+3.11.2/SQLite 3.40.1, new scripts/logs/JSON/DBs, and reconstructed
+c1-prime diff explicitly NOT EXECUTED. Do not promote this to
+byte-exact original proof or new patched replay execution. The
+archive's stale Linux/A1 pending statements reflect its authoring
+context; sections 16-17 and owner authorization supersede them.
+
+Reviewer parsed both scripts with ast (syntax only), parsed JSONs,
+and queried all seven included R4C-01 SQLite DB copies read-only.
+PRAGMA integrity_check returned ok for each. Stored outcomes/counts:
+cap unavailable 37/3 blockers; missing bytes unavailable 37/3;
+inadmissible observation unavailable 40/3; excessive history
+unavailable 40/3; control halt 36/2; lowconf halt 39/42;
+exact40 zero evaluations/blockers and one audit row. Other six
+DBs each contain one evaluation and two audit rows. These are
+independent observations of delivered regenerated DBs, NOT
+independent execution of the application. Reset transaction and
+old/new patched replay results remain limited to reported evidence
+and exact-source analysis. No further regeneration needed for A1.
+Keep c1-prime rejected; B/C/D proof obligations remain open.
+
+Owner authorization verified on PR #49:
+https://github.com/Muhammed-Fathi/AI-Doctor-FollowUp-Agent/pull/49#issuecomment-7206403871
+author Muhammed-Fathi, id 209275999, 2026-11-27T00:22:17Z.
+Exact five-path scope in section 17 explicitly authorized; A1
+implementer must append the decision to PHASE_PROGRESS.md on its
+separate branch. Reviewer-prepared transfer patch
+P5_S2_A1_Exact_Candidate_B_Artifacts.patch, 189156 bytes,
+SHA-256 1b958fe1f2974eba57ce2617620adf5b035ca81c9a01e792be5b0da9782d62dc
+rehash matches previous handoff. No additional authorization,
+runtime change, implementation acceptance, merge or phase advancement.
+A1 remains a separate draft-PR implementation and review track.
