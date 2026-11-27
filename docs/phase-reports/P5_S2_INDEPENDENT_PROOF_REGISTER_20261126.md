@@ -1125,3 +1125,40 @@ Disposition: exact implementation and hosted checks verified at
 0644a26; evidence wording correction and owner acceptance decision
 pending. All S2-B/C/D issues remain open. No merge recommendation
 until remaining evidence/owner conditions satisfied. P5 IN_REVIEW.
+
+
+## 20. A1 documentation reconciliation and final technical review — 2026-11-27
+
+PR #50 at 2cf593d370008e3023e4a6c8f81e075c2620edb0, OPEN / DRAFT /
+NOT MERGED / MERGEABLE; two commits ahead, zero behind main
+96589dd35df7e8b9ecc690f19f51105a570e1b69. Delta from 0644a26 is
+exactly two authorized docs (+7/+5, zero deletions). Fetched prior
+and current texts independently; both append-only, corrections
+accurate in substance, PR body contains reconciliation. Earlier
+body head label refers to original implementation; authoritative
+current PR metadata and this section identify the reviewed head.
+All three dependency/manifest blob IDs and contents unchanged
+from section 19. Total scope remains five authorized paths.
+
+The 65 installed Linux pins are reported from Arena's preserved
+3.11 venv inventory, not independently rerun or supplied as a raw
+inventory in this turn; applicable count is independently supported
+by A0 and platform markers. Hosted CI editable install is distinct
+from wheel evidence. No fresh A1 wheel or Windows execution.
+GitHub job metadata confirms push run 45920018408 and PR run
+45920025737 each succeeded on 2cf593d: backend Python 3.12
+14/14 steps and frontend Node 22 11/11 steps. Raw CI logs not
+inspected and no reviewer-local tests rerun.
+
+Technical review complete for bounded A1, conditional on owner
+acceptance of reuse of the prior same-artifact Windows A0 evidence
+(1522 pass, 4 skips; skip identities not recorded) and A0
+non-editable packaging evidence. Reviewer recommends this reuse
+because exact three blobs and all application/test/CI paths remain
+unchanged; it is not a fresh PR-head Windows or wheel run. No
+claim of a full Phase 5 PASS, durability or clinical validation.
+Owner must explicitly record that decision and the A1-only
+acceptance in the PR thread and roadmap per governance before
+merge consideration. Keep reviewer register PR #49 draft and
+separate. S2-B/C/D not authorized. Verify any resulting
+documentation-only head and refreshed CI before owner merges.
