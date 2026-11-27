@@ -974,3 +974,47 @@ vulnerabilities until a complete query succeeds. No dependency
 adoption, application source, guard, migration, implementation,
 merge, or Phase 5 acceptance authorized. Arena's new scratch proof
 transfer from section 15 still pending, separate from A1 feasibility.
+
+
+## 17. Candidate B advisory evidence and proposed A1 authorization — 2026-11-27
+
+Owner executed the reviewer-supplied stdlib HTTPS OSV querybatch script.
+Evidence P5-S2-Candidate-B-Advisory-20261127-021958.json, 35512 bytes,
+SHA-256 e06e18897193c11f043ffde0f8b0e329b168f9fbd38d473da7a63a037a06a717.
+Timestamp 2026-11-27T00:19:58.751539+00:00.
+Reviewer parsed actual attachment and original verification kit ZIP:
+67 unique Candidate B name/version pairs match dev lock exactly; all
+55 runtime pairs included. Lock SHA-256 matches section 16. All queries
+PyPI; single raw response contains 68 ordered entries for 67 candidate
+queries plus requests==2.19.0 positive control. Findings agree with
+raw response, no next_page_token, zero candidate hits; control has 10
+advisory records (not necessarily 10 distinct vulnerabilities).
+This is owner-executed API evidence independently parsed by reviewer,
+not a second live query, not a malware audit or guarantee against
+unknown vulnerabilities. OSV does not certify the application or
+runtime. All bounded A0 execution evidence is now reviewed; owner
+adoption decision remains pending. No phase PASS, implementation,
+or merge authorization implied.
+
+Recommended narrow A1 owner decision: D-24 exact Candidate B plus
+the independently tested package discovery correction (not D-23
+runtime module approval). Exact byte targets from section 16:
+pyproject.toml 4ef491232430a1910c3ed87f67fe127f9be7d32469d276fdca389f73a0875976;
+requirements/requirements.lock bf28103ffcc633bc5f20ca406639519376c2f37984bebe1d2fc8a511a90a7fd1;
+requirements/requirements-dev.lock bd77ba37b61fa37bf3c2d624f73aaa1c714ff384bbc5dd51d7bfe7c919efdc68.
+The original verified kit ZIP is the transfer source; use inspect_candidate
+to obtain fixed manifest, do not re-resolve or manually reconstruct locks.
+Retain all baseline pins and markers. Proposed A1 exact allowlist:
+these three files plus append-only docs/phase-reports/PHASE_5_REPORT.md
+and docs/roadmap/PHASE_PROGRESS.md (record actual owner decision, sources,
+evidence and limitations). Separate new feat/p5-s2-a1-dependencies branch
+and draft PR from exact base 96589dd35df7e8b9ecc690f19f51105a570e1b69.
+AGENTS.md requires explicit owner decision in PR thread and roadmap
+for scope outside default phase paths. No other paths; no imports,
+application code, runtime package, guards, migrations, tests, CI
+changes, or collection pairing edits. Stop if a gate requires scope
+expansion. Exact-head CI plus fresh applicable checks and reviewer
+verification required before any owner merge consideration. Preserve
+P01/P02/P03/P04/P05/P06/P08/P09 and all deferred safety gates. Arena
+scratch evidence transfer pending, separate from A1. Owner may approve
+only this narrow implementation scope; B/C/D remain unapproved.
